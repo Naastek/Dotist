@@ -40,15 +40,17 @@ export interface SettingsView {
   auto_collapse: boolean;
   auto_collapse_secs: number;
   auto_check_updates: boolean;
+  auto_install_updates: boolean;
   skipped_update_version: string;
+  last_update_error: string;
   launch_at_login: boolean;
   mcp_path: string;
   db_path: string;
   version: string;
 }
-export type SettingsPatch = Partial<Omit<SettingsView, 'mcp_path' | 'db_path' | 'version'>>;
+export type SettingsPatch = Partial<Omit<SettingsView, 'mcp_path' | 'db_path' | 'version' | 'last_update_error'>>;
 
-export type UpdateResult = { status: 'unconfigured' | 'up_to_date' | 'available' | 'error'; version?: string; notes?: string; message?: string };
+export type UpdateResult = { status: 'unconfigured' | 'up_to_date' | 'available' | 'downloaded' | 'error'; version?: string; notes?: string; message?: string };
 export type UpdateProgress = { downloaded: number; total?: number | null };
 
 interface SettingsApi {
@@ -74,7 +76,7 @@ const localApi: SettingsApi = {
 };
 
 function createDemoApi(): SettingsApi {
-  let state: SettingsView = { theme: 'system', language: 'zh-CN', opacity: 56, frost: 35, toggle_shortcut: 'CommandOrControl+Alt+D', quick_add_shortcut: 'CommandOrControl+Alt+N', settings_shortcut: 'CommandOrControl+Alt+Comma', views_shortcut: '', tray_mode: 'icon', tray_rotate_secs: 4, tray_left_click: 'toggle', tray_right_click: 'menu', idle_fade: true, locked: false, idle_opacity: 55, idle_delay_secs: 5, idle_fade_secs: 2, tray_filter: 'all', tray_group: 'all', group_colors: 'dot', filters: [...ALL_FILTERS], default_filter: 'all', always_on_top: true, hover_expand: true, show_dock: true, show_menubar: true, auto_collapse: true, auto_collapse_secs: 20, auto_check_updates: true, skipped_update_version: '', launch_at_login: false,
+  let state: SettingsView = { theme: 'system', language: 'zh-CN', opacity: 56, frost: 35, toggle_shortcut: 'CommandOrControl+Alt+D', quick_add_shortcut: 'CommandOrControl+Alt+N', settings_shortcut: 'CommandOrControl+Alt+Comma', views_shortcut: '', tray_mode: 'icon', tray_rotate_secs: 4, tray_left_click: 'toggle', tray_right_click: 'menu', idle_fade: true, locked: false, idle_opacity: 55, idle_delay_secs: 5, idle_fade_secs: 2, tray_filter: 'all', tray_group: 'all', group_colors: 'dot', filters: [...ALL_FILTERS], default_filter: 'all', always_on_top: true, hover_expand: true, show_dock: true, show_menubar: true, auto_collapse: true, auto_collapse_secs: 20, auto_check_updates: true, auto_install_updates: false, skipped_update_version: '', last_update_error: '', launch_at_login: false,
     mcp_path: '/Applications/Dotist.app/Contents/MacOS/dotist-mcp', db_path: '~/Library/Application Support/com.dotist.app/tasks.sqlite', version: '0.1.0' };
   return { get: async () => ({ ...state }), update: async patch => { state = { ...state, ...patch }; return { ...state }; }, reveal: async () => {}, checkUpdate: async () => { const mode = new URLSearchParams(window.location.search).get('update'); return mode === 'available' ? { status: 'available', version: '0.2.0', notes: 'Bug fixes and improvements.' } : { status: mode === 'unconfigured' ? 'unconfigured' : 'up_to_date' }; }, installUpdate: async () => { throw new Error('Demo'); }, pendingUpdate: async () => { const mode = new URLSearchParams(window.location.search).get('update'); return mode === 'available' ? { status: 'available', version: '0.2.0', notes: 'Bug fixes and improvements.' } : mode === 'unconfigured' ? { status: 'unconfigured' } : null; }, onUpdate: async () => () => {}, onProgress: async () => () => {} };
 }

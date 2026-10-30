@@ -22,7 +22,7 @@ Mac 桌面上的本地待办小窗。React + TypeScript + Tauri 2，任务由本
 - 设置（独立窗口，主界面没有设置按钮；Dotist 在前台时按 ⌘,，或用菜单栏「设置…」、全局快捷键（默认 ⌘⌥,）打开。⌘, 由菜单栏项负责，不会被注册成全局快捷键，免得抢走所有应用的设置键）：左侧选项卡（全部 / 外观 / 通用 / 快捷键 / MCP / 数据与关于），「全部」可一页看完。主题（跟随系统/浅色/深色）、界面语言（跟随系统 / 简体中文 / 繁體中文 / English / 日本語）、玻璃预设与滑块、开机启动、悬停显示详情、窗口置顶、菜单栏数字，三个全局快捷键（显示/收起窗口，默认 ⌘⌥D；快速添加，默认 ⌘⌥N；打开设置，默认 ⌘⌥,；点击后按下新组合即可录入），以及 MCP 的路径、客户端配置复制和数据库位置。偏好保存在数据库同目录的 `settings.json`，不写入任务数据库。
 - 顶部筛选条可左右滑动，显示哪些筛选器、顺序、启动时打开哪个，都在设置的「筛选器」里管理。
 - 菜单栏图标：图标旁的文字可选仅图标、剩余数字、下一个任务、下一个任务与日期、轮播，并可限定统计的日期透视（今天、本周、已逾期、无日期等）和分组（每隔几秒切换，间隔可调；系统菜单栏文字不能做滚动动画）。左键和右键的行为可分别设置（显示/收起窗口、展开/收起悬浮球、快速添加、打开设置、显示窗口、打开菜单、无操作）；右键默认打开菜单（显示窗口、收起为悬浮球、快速添加、设置…、退出）。左右键完全独立：任何一个键都可以设为「打开菜单」，另一个键仍可设成别的操作。
-- 使用本机存储，不需要账号或联网。数据库位于 `~/Library/Application Support/com.dotist.app/tasks.sqlite`，同时包括 SQLite WAL 文件。首次运行新版会把数据库升级到版本 4（增加 `parent_id`、`due_date` 列和 `task_groups` 表，保留原有任务）。
+- 使用本机存储，不需要账号；检查和下载更新时需要联网。数据库位于 `~/Library/Application Support/com.dotist.app/tasks.sqlite`，同时包括 SQLite WAL 文件。首次运行新版会把数据库升级到版本 4（增加 `parent_id`、`due_date` 列和 `task_groups` 表，保留原有任务）。
 - 这是个人本地构建，使用临时 ad hoc 签名，没有开发者证书签名或公证；不更改 macOS 系统安全设置。透明窗口使用了 macOS 私有 API，因此不能上架 App Store。开机启动通过 macOS LaunchAgent 实现（Tauri 官方 autostart 插件），全局快捷键使用 Tauri 官方 global-shortcut 插件。
 
 ## 本地 MCP
@@ -59,13 +59,14 @@ cargo test --manifest-path crates/dotist-core/Cargo.toml
 
 `?demo` 是 Vite 浏览器预览的临时内存演示，数据不会存入真实数据库；`?demo&bubble` 直接预览悬浮球；release 应用使用本机数据库。设计系统在 `design-system/`（`tokens.css`、`dotist.css` 已复制到 `src/`），字体通过 `@fontsource` 离线打包。
 
-## 发布流程
+## 更新与发布
 
-1. 使用 `npm run tauri -- signer generate --write-keys <私钥路径>` 创建 updater 签名密钥，安全保存私钥和密码；将私钥内容和密码分别配置为 GitHub Actions secrets `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，并将生成的公钥文件内容配置为 secret `TAURI_UPDATER_PUBKEY`。
-2. 确保 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 的版本一致，创建并推送对应标签，例如 `git tag v0.1.0 && git push origin v0.1.0`。
-3. 工作流生成 GitHub Release 草稿。检查应用、sidecar、签名及更新产物后，手动发布草稿。应用从该仓库的最新正式 Release 读取 `latest.json`，使用内置公钥验证更新签名。
-4. 本地构建如需启用更新，在构建时设置 `DOTIST_UPDATER_PUBKEY` 和 `DOTIST_UPDATE_REPO`（格式 `owner/name`）；缺少任一变量时更新功能显示为未配置，应用仍可正常使用。
-5. 发布的应用使用 ad hoc 签名且未公证，首次安装若被 macOS 拦截，可在 Finder 中右键应用选择「打开」，再根据系统提示操作。
+- 在「设置 → 数据与关于」中可手动检查更新。自动检查默认开启：启动后检查，此后约每 24 小时检查一次；开启设置后也会尽快检查。跳过的版本不会自动安装，但仍可手动检查并安装。
+- 「自动安装更新」默认关闭。开启后，发现新版本会自动下载并验证签名，在正常退出 Dotist 时安装，下一次打开后生效；不会在输入过程中自动重启。关闭自动检查也会关闭自动安装。
+- 发布包和更新清单来自 [GitHub Releases](https://github.com/Naastek/Dotist/releases)。当前自动构建面向 Apple Silicon Mac（`aarch64`）；Intel Mac 尚无发布包。
+- `main` 每次推送都会触发测试和发布。工作流将 `src-tauri/tauri.conf.json` 的主版本和次版本与 GitHub Actions 运行编号组合，生成递增版本及标签；源码中的版本需以 `.0` 结尾。测试和更新包检查全部通过后才发布 Release，未完成的版本保留为草稿。只有发布成功后的提交才会出现在应用的检查更新中。
+- 更新包使用 Tauri 签名，公钥和更新地址配置在 `src-tauri/tauri.conf.json`。私钥和密码分别保存在 GitHub Actions secrets `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；维护者应安全备份签名私钥和密码。更换私钥后，旧应用无法验证新签名，需要重新分发应用。
+- 发布包使用 ad hoc 签名，尚未使用 Apple Developer ID 签名或公证，首次安装可能受到 macOS 安全检查。开发者签名、公证和应用更新签名是不同的机制。
 
 ## 菜单栏与悬浮球(最新一轮)
 

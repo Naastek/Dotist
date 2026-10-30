@@ -1,55 +1,88 @@
-name: Release
+name: Build and release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: dotist-release
+  cancel-in-progress: true
 
 jobs:
   release:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check tag version
-        shell: bash
-        run: |
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          const tag = process.env.GITHUB_REF_NAME.slice(1);
-          const packageVersion = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
-          const tauriVersion = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8')).version;
-          const cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8');
-          const cargoVersion = cargo.match(/^\[package\]\s*\n(?:(?!\[)[^\n]*\n)*?version\s*=\s*"([^"]+)"/m)?.[1];
-          for (const [file, version] of Object.entries({ 'package.json': packageVersion, 'tauri.conf.json': tauriVersion, 'Cargo.toml': cargoVersion })) {
-            if (!tag || version !== tag) {
-              console.error(`Version mismatch: tag=${tag}, ${file}=${version}`);
-              process.exitCode = 1;
-            }
-          }
-          NODE
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
-      - run: ./scripts/prepare-sidecar.sh aarch64-apple-darwin
-      - uses: tauri-apps/tauri-action@v0
+      - name: Set the build version
+        id: version
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path = 'src-tauri/tauri.conf.json';
+          const config = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const base = /^(\d+)\.(\d+)\.0$/.exec(config.version);
+          if (!base) throw new Error('The source version must use a zero patch number, e.g. 0.1.0');
+          const version = `${base[1]}.${base[2]}.${process.env.GITHUB_RUN_NUMBER}`;
+          config.version = version;
+          fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          NODE
+      - run: npm ci
+      - run: npm test
+      - run: cargo test --locked --manifest-path crates/dotist-core/Cargo.toml
+      - name: Build sidecars
+        run: |
+          ./scripts/prepare-sidecar.sh
+          ./scripts/prepare-sidecar.sh aarch64-apple-darwin
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - uses: tauri-apps/tauri-action@v0.5.24
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DOTIST_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
-          DOTIST_UPDATE_REPO: ${{ github.repository }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: '-'
         with:
           args: --target aarch64-apple-darwin --config src-tauri/tauri.release.conf.json --bundles app
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Dotist ${{ github.ref_name }}'
+          tagName: v${{ steps.version.outputs.version }}
+          releaseName: Dotist v${{ steps.version.outputs.version }}
+          releaseCommitish: ${{ github.sha }}
           releaseDraft: true
           includeUpdaterJson: true
+      - name: Verify and publish the complete release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          current=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [ "$current" != "$GITHUB_SHA" ]; then
+            echo 'A newer commit is on main; leaving this release as a draft.'
+            exit 0
+          fi
+          gh release view "$tag" --json assets > "$RUNNER_TEMP/dotist-assets.json"
+          gh release download "$tag" --pattern latest.json --dir "$RUNNER_TEMP"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const manifest = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'latest.json'), 'utf8'));
+          const assets = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'dotist-assets.json'), 'utf8')).assets.map(asset => asset.name);
+          const platform = manifest.platforms?.['darwin-aarch64'];
+          if (manifest.version !== process.env.VERSION || !platform?.signature || !platform?.url) throw new Error('Invalid updater manifest');
+          const file = decodeURIComponent(new URL(platform.url).pathname.split('/').at(-1));
+          if (!assets.includes(file) || !assets.includes(`${file}.sig`)) throw new Error('Updater package or signature is missing');
+          NODE
+          gh release edit "$tag" --draft=false --latest

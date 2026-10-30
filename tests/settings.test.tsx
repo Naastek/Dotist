@@ -344,3 +344,23 @@ it('reports installation failures and allows changing automatic checks', async (
   fireEvent.click(await screen.findByRole('button', { name: '立即更新' }));
   expect(await screen.findByText('安装更新失败：download failed')).toBeTruthy();
 });
+
+it('lets the user opt in to automatic installation and explains when it takes effect', async () => {
+  await openSettings();
+  const install = screen.getByRole('switch', { name: '自动安装更新' });
+  expect(install.getAttribute('aria-checked')).toBe('false');
+  expect(screen.getByText('新版本在退出 Dotist 时安装，重新打开后生效')).toBeTruthy();
+  fireEvent.click(install);
+  await waitFor(async () => expect(await settingsApi.get()).toMatchObject({ auto_install_updates: true, auto_check_updates: true }));
+  fireEvent.click(screen.getByRole('switch', { name: '自动检查更新' }));
+  await waitFor(async () => expect(await settingsApi.get()).toMatchObject({ auto_install_updates: false, auto_check_updates: false }));
+  fireEvent.click(screen.getByRole('switch', { name: '自动安装更新' }));
+  await waitFor(async () => expect(await settingsApi.get()).toMatchObject({ auto_install_updates: true, auto_check_updates: true }));
+});
+
+it('shows the previous automatic installation failure after reopening settings', async () => {
+  const saved = await settingsApi.get();
+  vi.spyOn(settingsApi, 'get').mockResolvedValue({ ...saved, last_update_error: 'disk full' });
+  await openSettings();
+  expect(screen.getByRole('alert').textContent).toBe('上次自动安装失败：disk full');
+});

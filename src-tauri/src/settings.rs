@@ -64,12 +64,14 @@ pub struct Settings {
     pub auto_collapse: bool,
     pub auto_collapse_secs: u16,
     pub auto_check_updates: bool,
+    pub auto_install_updates: bool,
     pub skipped_update_version: String,
+    pub last_update_error: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { theme: "system".into(), language: "system".into(), opacity: 56, frost: 35, toggle_shortcut: "CommandOrControl+Alt+D".into(), quick_add_shortcut: "CommandOrControl+Alt+N".into(), settings_shortcut: "CommandOrControl+Alt+Comma".into(), views_shortcut: String::new(), show_tray_count: false, tray_mode: "icon".into(), tray_rotate_secs: 4, tray_left_click: "toggle".into(), tray_right_click: "menu".into(), always_on_top: true, hover_expand: true, show_dock: true, show_menubar: true, idle_fade: true, locked: false, window_width: 0, window_height: 0, idle_opacity: 55, idle_delay_secs: 5, idle_fade_secs: 2, tray_filter: "all".into(), tray_group: "all".into(), group_colors: "dot".into(), filters: FILTER_IDS.iter().map(|id| id.to_string()).collect(), default_filter: "all".into(), auto_collapse: true, auto_collapse_secs: 20, auto_check_updates: true, skipped_update_version: String::new() }
+        Self { theme: "system".into(), language: "system".into(), opacity: 56, frost: 35, toggle_shortcut: "CommandOrControl+Alt+D".into(), quick_add_shortcut: "CommandOrControl+Alt+N".into(), settings_shortcut: "CommandOrControl+Alt+Comma".into(), views_shortcut: String::new(), show_tray_count: false, tray_mode: "icon".into(), tray_rotate_secs: 4, tray_left_click: "toggle".into(), tray_right_click: "menu".into(), always_on_top: true, hover_expand: true, show_dock: true, show_menubar: true, idle_fade: true, locked: false, window_width: 0, window_height: 0, idle_opacity: 55, idle_delay_secs: 5, idle_fade_secs: 2, tray_filter: "all".into(), tray_group: "all".into(), group_colors: "dot".into(), filters: FILTER_IDS.iter().map(|id| id.to_string()).collect(), default_filter: "all".into(), auto_collapse: true, auto_collapse_secs: 20, auto_check_updates: true, auto_install_updates: false, skipped_update_version: String::new(), last_update_error: String::new() }
     }
 }
 
@@ -117,6 +119,15 @@ impl SettingsStore {
         let tmp = self.path.with_extension("json.tmp");
         std::fs::write(&tmp, serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())
+    }
+
+    pub fn set_update_error(&self, error: String) -> Result<(), String> {
+        let mut current = self.current.lock().map_err(|e| e.to_string())?;
+        let mut next = current.clone();
+        next.last_update_error = error;
+        self.save(&next)?;
+        *current = next;
+        Ok(())
     }
 }
 
@@ -203,6 +214,19 @@ mod tests {
         next.toggle_shortcut = String::new();
         store.save(&next).unwrap();
         assert_eq!(*SettingsStore::load(path).current.lock().unwrap(), next);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn automatic_update_errors_survive_a_restart_and_can_be_cleared() {
+        let dir = std::env::temp_dir().join(format!("dotist-settings-update-error-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        let store = SettingsStore::load(path.clone());
+        store.set_update_error("disk full".into()).unwrap();
+        let reloaded = SettingsStore::load(path.clone());
+        assert_eq!(reloaded.current.lock().unwrap().last_update_error, "disk full");
+        reloaded.set_update_error(String::new()).unwrap();
+        assert!(SettingsStore::load(path).current.lock().unwrap().last_update_error.is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

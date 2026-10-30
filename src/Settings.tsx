@@ -301,13 +301,17 @@ export function SettingsWindow() {
         <Row label={t('任务数据库')}><button type="button" className="dt-link" onClick={() => void settingsApi.reveal(settings.db_path)}>{t('在 Finder 中显示')}</button></Row>
         <Row label={t('版本')}><span className="dt-set-value">{settings.version}</span></Row>
         <Row label={t('更新')}><button type="button" className="dt-link" disabled={updateBusy} onClick={() => void checkUpdate()}>{t('检查更新')}</button></Row>
-        <Row label={t('自动检查更新')}><Switch label={t('自动检查更新')} checked={settings.auto_check_updates} onChange={next => update({ auto_check_updates: next })} /></Row>
+        <Row label={t('自动检查更新')}><Switch label={t('自动检查更新')} checked={settings.auto_check_updates} onChange={next => update({ auto_check_updates: next, ...(!next && { auto_install_updates: false }) })} /></Row>
+        <Row label={t('自动安装更新')} hint={t('新版本在退出 Dotist 时安装，重新打开后生效')}><Switch label={t('自动安装更新')} checked={settings.auto_install_updates} onChange={next => update({ auto_install_updates: next, ...(next && { auto_check_updates: true }) })} /></Row>
+        {settings.last_update_error && <p className="dt-set-note" role="alert">{t('上次自动安装失败：{message}', { message: settings.last_update_error })}</p>}
         {updateBusy && !progress && <p className="dt-set-note" role="status">{t('正在处理更新…')}</p>}
         {updateResult?.status === 'unconfigured' && <p className="dt-set-note" role="status">{t('更新尚未配置。')}</p>}
         {updateResult?.status === 'up_to_date' && <p className="dt-set-note" role="status">{t('已是最新版本。')}</p>}
         {updateResult?.status === 'error' && <p className="dt-set-note" role="alert">{t('检查更新失败：{message}', { message: updateResult.message ?? '' })}</p>}
-        {updateResult?.status === 'available' && <div>
+        {(updateResult?.status === 'available' || updateResult?.status === 'downloaded') && <div>
           <p className="dt-set-note">{t('发现新版本 {version}', { version: updateResult.version ?? '' })}</p>
+          {updateResult.status === 'downloaded' && settings.auto_install_updates && <p className="dt-set-note">{t('更新已下载，退出 Dotist 时安装。')}</p>}
+          {updateResult.message && <p className="dt-set-note" role="alert">{t('自动安装失败：{message}', { message: updateResult.message })}</p>}
           {updateResult.notes && <p className="dt-set-note" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{updateResult.notes.slice(0, 500)}</p>}
           <button type="button" className="dt-link" disabled={updateBusy} onClick={() => void installUpdate()}>{t('立即更新')}</button>
           <button type="button" className="dt-link" disabled={updateBusy} onClick={() => { update({ skipped_update_version: updateResult.version ?? '' }); setUpdateResult(null); }}>{t('跳过此版本')}</button>

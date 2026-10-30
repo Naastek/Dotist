@@ -629,6 +629,7 @@ struct SettingsPatch {
     auto_collapse: Option<bool>,
     auto_collapse_secs: Option<u16>,
     auto_check_updates: Option<bool>,
+    auto_install_updates: Option<bool>,
     skipped_update_version: Option<String>,
     launch_at_login: Option<bool>,
 }
@@ -968,7 +969,8 @@ fn update_settings(app: AppHandle, patch: SettingsPatch) -> Result<SettingsView,
         if !FILTER_IDS.contains(&id.as_str()) { return Err("无效的筛选器".into()); }
         next.default_filter = id;
     }
-    if let Some(on) = patch.auto_check_updates { next.auto_check_updates = on; }
+    if let Some(on) = patch.auto_check_updates { next.auto_check_updates = on; if !on { next.auto_install_updates = false; } }
+    if let Some(on) = patch.auto_install_updates { next.auto_install_updates = on; if on { next.auto_check_updates = true; } }
     if let Some(version) = patch.skipped_update_version { next.skipped_update_version = version; }
     if let Some(on) = patch.auto_collapse { next.auto_collapse = on; }
     if let Some(secs) = patch.auto_collapse_secs { next.auto_collapse_secs = secs.clamp(1, 600); }
@@ -1031,13 +1033,8 @@ fn reveal_in_finder(path: String) -> Result<(), String> {
 }
 
 fn main() {
-    let mut context = tauri::generate_context!();
-    let mut builder = tauri::Builder::default();
-    if let Some((key, endpoint)) = updater::config() {
-        context.config_mut().plugins.0.insert("updater".into(), serde_json::json!({ "pubkey": key, "endpoints": [endpoint] }));
-        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
-    }
-    builder
+    tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .on_menu_event(|app, event| { match event.id().as_ref() { "app-settings" => open_settings_window(app), "app-views" => open_views_window(app), _ => {} } })
@@ -1221,9 +1218,10 @@ fn main() {
             create_shadow_window(app.handle());
             Ok(())
         })
-        .build(context)
+        .build(tauri::generate_context!())
         .expect("启动 Dotist 失败")
         .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) { updater::install_on_exit(app); }
             #[cfg(target_os = "macos")]
             // Clicking the Dock icon must not disturb what is already on screen (bubble, capsule, window, quick add);
             // it only brings the window back when it was hidden.
