@@ -1,0 +1,17 @@
+node_modules/
+dist/
+**/target/
+src-tauri/binaries/
+src-tauri/gen/
+.cache/
+.toolchain/
+.DS_Store
+Claude outputs/
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.sqlite
+*.sqlite-*
+*.db

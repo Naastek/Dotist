@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "views-window",
+  "description": "Task views can listen for task and settings changes.",
+  "windows": ["views"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "core:window:allow-start-dragging"]
+}

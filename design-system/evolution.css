@@ -1,0 +1,43 @@
+/* Dotist 设计系统 v3 · 演进补丁（叠加在 src/app.css 之后即可试用；确认后再并回正式样式） */
+
+/* 1 · 头部视图切换：所有标签同一字号，只靠颜色 + 下划线区分当前项 */
+.dt-tabs { gap: 16px !important; }
+.dt-tab { font: 600 14px/22px var(--font-serif) !important; letter-spacing: .04em; color: var(--ink-faint) !important; transform: none !important; }
+.dt-tab.is-on { color: var(--ink) !important; }
+.dt-tab:hover { color: var(--ink-muted) !important; }
+
+/* 2 · 图钉：开 / 关都是线性图标，只换颜色，不填充 */
+.dt-pin-svg.is-on { fill: none !important; }
+
+/* 3 · 悬停才出现的“添加任务 / 子任务”行不再预留高度 */
+.dt-add-row { height: 0 !important; overflow: hidden; transition: height var(--dur-fold) var(--ease-out), opacity var(--dur-fold) !important; }
+.dt-group:hover .dt-add-row, .dt-group:focus-within .dt-add-row { height: 28px !important; }
+
+/* 4 · 列表里的按钮不做缩放弹跳：密集列表里会显得发抖 */
+.dt-icon:hover:not(:disabled), .dt-cat-pick:hover, .dt-due-pick:hover, .dt-icon:active:not(:disabled), .dt-cat-pick:active, .dt-due-pick:active { transform: none !important; }
+
+/* 5 · 输入条的分组按钮：跟随“分组颜色”设置，不再额外铺底色块 */
+.dt-composer .dt-cat-pick { background: transparent !important; }
+.dt-composer .dt-cat-pick:hover { background: var(--surface) !important; }
+
+/* 6 · 设置里的开关：关闭时白色圆钮 + 浅灰轨道（与 macOS 一致），不再用深灰圆钮 */
+.dt-switch { background: color-mix(in srgb, var(--ink) 14%, transparent) !important; box-shadow: none !important; }
+.dt-switch span { background: #fff !important; box-shadow: 0 1px 2px rgba(0,0,0,.22), 0 0 0 .5px rgba(0,0,0,.06); }
+.dt-switch.is-on { background: var(--accent) !important; }
+
+/* 7 · 悬停操作只留三个：＋子任务 / 到期日 / 删除。上移下移交给右键菜单和 ⌥↑ / ⌥↓ */
+.dt-row:not(.is-sub) > .dt-actions > .dt-icon:nth-child(3), .dt-row:not(.is-sub) > .dt-actions > .dt-icon:nth-child(4),
+.dt-row.is-sub > .dt-actions > .dt-icon:nth-child(2), .dt-row.is-sub > .dt-actions > .dt-icon:nth-child(3) { display: none !important; }
+/* 行下方的「＋ 子任务」与行尾的 ＋ 重复，去掉，避免悬停时整列跳动 */
+.dt-add-sub { display: none !important; }
+
+/* 8 · 分组颜色用“彩色名称”时，输入条里的分组按钮也用分组色文字 */
+[data-group-colors="text"] .dt-composer .dt-cat-pick { color: var(--c, var(--ink-muted)) !important; font-weight: 500; }
+/* 今天视图的「已逾期」分段：在“彩色名称”模式下保持红色 */
+.dt-group-label.is-overdue { --c: var(--danger); }
+
+/* 9 · 多语言字体：同一角色里中英同类，日文、繁体各自用对应字形 */
+:lang(ja) { --font-serif: "Source Serif 4", "Noto Serif JP", "Hiragino Mincho ProN", serif; --font-sans: "Source Sans 3", "Noto Sans JP", "Hiragino Sans", sans-serif; }
+:lang(zh-TW) { --font-serif: "Source Serif 4", "Noto Serif TC", "Songti TC", serif; --font-sans: "Source Sans 3", "Noto Sans TC", "PingFang TC", sans-serif; }
+/* 英文界面：衬线标题不加中文那样的字距 */
+:lang(en) .dt-tab, :lang(en) .dt-group-label b, :lang(en) .dt-set-title { letter-spacing: 0 !important; }

@@ -1,0 +1,102 @@
+/* Dotist 设计系统 v3.1 · 演进补丁（叠加在 src/app.css、src/views.css 之后）
+   两件事：① 去黄 —— 全部改为不偏暖的中性色；② 选中 / 悬停不再出现圆角色块 —— 统一用“颜色 + 2px 竹青细线”。 */
+
+/* ========== ① 去黄：中性色 ========== */
+/* 浅色 */
+@media (prefers-color-scheme: light) { html:not([data-theme="dark"]) {
+  --ink: #1c1c1f !important; --ink-muted: #5b5b61 !important; --ink-faint: #76767c !important;
+  --accent: #3f6a56 !important; --accent-soft: rgba(63, 106, 86, 0.12) !important; --on-accent: #ffffff !important; --danger: #a63d2f !important;
+  --tint-rgb: 247, 247, 248 !important; --haze-rgb: 255, 255, 255 !important; --paper: #f5f5f6 !important;
+  --edge: rgba(0, 0, 0, 0.08) !important; --edge-line: rgba(0, 0, 0, 0.08) !important;
+  --rule: rgba(28, 28, 32, calc(0.08 + var(--lg, 0.3) * 0.14)) !important;
+  --surface: rgba(255, 255, 255, calc(0.58 + var(--lg, 0.3) * 0.32)) !important; --surface-float: rgba(251, 251, 252, calc(0.88 + var(--lg, 0.3) * 0.10)) !important;
+  --cat-work: #4f5f7d !important; --cat-life: #8c4a42 !important; --cat-study: #7a5470 !important; --cat-teal: #3f716d !important; --cat-rose: #9a4a5e !important; --cat-moss: #5a6672 !important;
+  --dt-window-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), inset 0 0 0 0.5px rgba(255, 255, 255, 0.55), inset 0 0 0 1px rgba(0, 0, 0, 0.04) !important; } }
+html[data-theme="light"] {
+  --ink: #1c1c1f !important; --ink-muted: #5b5b61 !important; --ink-faint: #76767c !important;
+  --accent: #3f6a56 !important; --accent-soft: rgba(63, 106, 86, 0.12) !important; --on-accent: #ffffff !important; --danger: #a63d2f !important;
+  --tint-rgb: 247, 247, 248 !important; --haze-rgb: 255, 255, 255 !important; --paper: #f5f5f6 !important;
+  --edge: rgba(0, 0, 0, 0.08) !important; --edge-line: rgba(0, 0, 0, 0.08) !important;
+  --rule: rgba(28, 28, 32, calc(0.08 + var(--lg, 0.3) * 0.14)) !important;
+  --surface: rgba(255, 255, 255, calc(0.58 + var(--lg, 0.3) * 0.32)) !important; --surface-float: rgba(251, 251, 252, calc(0.88 + var(--lg, 0.3) * 0.10)) !important;
+  --cat-work: #4f5f7d !important; --cat-life: #8c4a42 !important; --cat-study: #7a5470 !important; --cat-teal: #3f716d !important; --cat-rose: #9a4a5e !important; --cat-moss: #5a6672 !important;
+  --dt-window-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), inset 0 0 0 0.5px rgba(255, 255, 255, 0.55), inset 0 0 0 1px rgba(0, 0, 0, 0.04) !important; }
+@media (prefers-color-scheme: light) { html[data-lg="mid"]:not([data-theme="dark"]) { --ink-muted: #434348 !important; --ink-faint: #5a5a60 !important; } html[data-lg="high"]:not([data-theme="dark"]) { --ink-muted: #2d2d31 !important; --ink-faint: #444449 !important; } }
+html[data-theme="light"][data-lg="mid"] { --ink-muted: #434348 !important; --ink-faint: #5a5a60 !important; }
+html[data-theme="light"][data-lg="high"] { --ink-muted: #2d2d31 !important; --ink-faint: #444449 !important; }
+/* 深色 */
+@media (prefers-color-scheme: dark) { html:not([data-theme="light"]) {
+  --ink: #eeeef0 !important; --ink-muted: #a5a5ab !important; --ink-faint: #88888e !important;
+  --accent: #8dbaa2 !important; --accent-soft: rgba(141, 186, 162, 0.16) !important; --on-accent: #12201a !important; --danger: #e5826e !important;
+  --tint-rgb: 22, 22, 24 !important; --haze-rgb: 222, 224, 232 !important; --paper: #1c1c1e !important;
+  --edge: rgba(255, 255, 255, 0.10) !important; --edge-line: rgba(255, 255, 255, 0.10) !important;
+  --rule: rgba(255, 255, 255, calc(0.08 + var(--lg, 0.3) * 0.16)) !important;
+  --surface: rgba(255, 255, 255, calc(0.06 + var(--lg, 0.3) * 0.16)) !important; --surface-float: rgba(44, 44, 48, calc(0.88 + var(--lg, 0.3) * 0.10)) !important;
+  --cat-work: #96a3bd !important; --cat-life: #b8908a !important; --cat-study: #ab97a8 !important; --cat-teal: #8fb1ab !important; --cat-rose: #bb909c !important; --cat-moss: #a3adb8 !important; } }
+html[data-theme="dark"] {
+  --ink: #eeeef0 !important; --ink-muted: #a5a5ab !important; --ink-faint: #88888e !important;
+  --accent: #8dbaa2 !important; --accent-soft: rgba(141, 186, 162, 0.16) !important; --on-accent: #12201a !important; --danger: #e5826e !important;
+  --tint-rgb: 22, 22, 24 !important; --haze-rgb: 222, 224, 232 !important; --paper: #1c1c1e !important;
+  --edge: rgba(255, 255, 255, 0.10) !important; --edge-line: rgba(255, 255, 255, 0.10) !important;
+  --rule: rgba(255, 255, 255, calc(0.08 + var(--lg, 0.3) * 0.16)) !important;
+  --surface: rgba(255, 255, 255, calc(0.06 + var(--lg, 0.3) * 0.16)) !important; --surface-float: rgba(44, 44, 48, calc(0.88 + var(--lg, 0.3) * 0.10)) !important;
+  --cat-work: #96a3bd !important; --cat-life: #b8908a !important; --cat-study: #ab97a8 !important; --cat-teal: #8fb1ab !important; --cat-rose: #bb909c !important; --cat-moss: #a3adb8 !important; }
+@media (prefers-color-scheme: dark) { html[data-lg="mid"]:not([data-theme="light"]) { --ink-muted: #c4c4ca !important; --ink-faint: #a2a2a8 !important; } html[data-lg="high"]:not([data-theme="light"]) { --ink-muted: #dcdce0 !important; --ink-faint: #bdbdc2 !important; } }
+html[data-theme="dark"][data-lg="mid"] { --ink-muted: #c4c4ca !important; --ink-faint: #a2a2a8 !important; }
+html[data-theme="dark"][data-lg="high"] { --ink-muted: #dcdce0 !important; --ink-faint: #bdbdc2 !important; }
+/* 演示模式的“桌面”背景也换成冷灰（仅预览用） */
+@media (prefers-color-scheme: light) { html.is-demo:not([data-theme="dark"]) { background: radial-gradient(120% 90% at 0% 0%, #c9d3d6 0%, transparent 55%), radial-gradient(90% 80% at 100% 10%, #d5d8e0 0%, transparent 50%), radial-gradient(100% 90% at 60% 100%, #b5c2d3 0%, transparent 55%), #e6e7ea !important; } }
+html.is-demo[data-theme="light"] { background: radial-gradient(120% 90% at 0% 0%, #c9d3d6 0%, transparent 55%), radial-gradient(90% 80% at 100% 10%, #d5d8e0 0%, transparent 50%), radial-gradient(100% 90% at 60% 100%, #b5c2d3 0%, transparent 55%), #e6e7ea !important; }
+@media (prefers-color-scheme: dark) { html.is-demo:not([data-theme="light"]) { background: radial-gradient(120% 90% at 0% 0%, #26363a 0%, transparent 55%), radial-gradient(90% 80% at 100% 10%, #2c2f3a 0%, transparent 50%), radial-gradient(100% 90% at 60% 100%, #24324a 0%, transparent 55%), #161719 !important; } }
+html.is-demo[data-theme="dark"] { background: radial-gradient(120% 90% at 0% 0%, #26363a 0%, transparent 55%), radial-gradient(90% 80% at 100% 10%, #2c2f3a 0%, transparent 50%), radial-gradient(100% 90% at 60% 100%, #24324a 0%, transparent 55%), #161719 !important; }
+
+/* ========== ② 选中与悬停：不用圆角色块 ==========
+   规则：悬停 = 文字变深；选中 = 文字变深 / 变竹青 + 一道 2px 竹青细线（横向控件在下方，纵向列表在左侧）。
+   只有浮层本身（菜单、日历、提示条）可以有底和圆角，里面的选项没有。 */
+
+/* 任务行：悬停不铺底，勾选圈描边加深 */
+.dt-row::before { display: none !important; }
+.dt-row:hover .dt-check:not(.is-on) { border-color: var(--ink-muted); }
+/* 悬停操作：没有外框，用一段从透明渐入的底色压住文字末尾 */
+.dt-actions { background: linear-gradient(to right, rgba(var(--tint-rgb), 0), rgba(var(--tint-rgb), 0.94) 20px) !important; box-shadow: none !important; border-radius: 0 !important; padding-left: 22px !important; }
+/* 原地编辑：文字下方一条竹青细线，像在横线上写字 */
+.dt-row.is-editing::before { display: block !important; content: ""; position: absolute; left: calc(var(--column) + var(--space-2)); right: 0; top: auto; bottom: 2px; height: 1px; background: var(--accent) !important; box-shadow: none !important; border-radius: 0 !important; }
+/* 小按钮、到期日、分组按钮、链接：悬停只变色 */
+.dt-icon:hover, .dt-due:hover, .dt-cat-pick:hover, .dt-due-pick:hover, .dt-link:hover, .dt-toast button:hover, .dt-group-row:hover, .dt-chips button:hover, .dt-segment button:hover, .dt-set-tab:hover,
+.dt-composer .dt-cat-pick:hover, .dt-composer .dt-due-pick:hover, .dt-quick .dt-cat-pick:hover, .dt-quick .dt-quick-due:hover, .dt-select:hover { background: transparent !important; }
+.dt-icon:hover, .dt-due:hover, .dt-cat-pick:hover, .dt-due-pick:hover, .dt-chips button:hover, .dt-segment button:hover, .dt-set-tab:hover { color: var(--ink) !important; }
+/* 右键菜单：悬停项 = 竹青文字 + 左侧细线 */
+.dt-menu-item { border-radius: 0 !important; }
+.dt-menu-item:hover:not(:disabled), .dt-menu-item:focus-visible { background: transparent !important; color: var(--accent) !important; box-shadow: inset 2px 0 0 var(--accent) !important; }
+.dt-menu-item.is-danger:hover:not(:disabled) { color: var(--danger) !important; box-shadow: inset 2px 0 0 var(--danger) !important; }
+/* 快捷项（日历、到期日）：选中 = 墨色加粗 + 下划线 */
+.dt-chips button.is-on, .dt-due-pop button.is-on { background: transparent !important; color: var(--ink) !important; box-shadow: inset 0 -2px 0 var(--accent) !important; border-radius: 0 !important; }
+.dt-due-pop button:hover { background: transparent !important; color: var(--ink) !important; }
+/* 小日历：悬停与范围内不铺底；起止日是竹青实心圆，范围内的数字染成竹青 */
+.dt-cal-day:hover::before, .dt-cal-day.in-range::before { background: transparent !important; }
+.dt-cal-day.in-range:not(.is-edge) { color: var(--accent); }
+.dt-cal-day:hover:not(.is-edge) { color: var(--ink); text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 4px; }
+.dt-cal-day.is-edge::before { background: radial-gradient(circle 12px at 50% 50%, var(--accent) 98%, transparent) !important; }
+/* 设置：左侧导航选中 = 墨色 + 左侧细线（已有），悬停不铺底；分段控件、下拉只留下划线 */
+.dt-set-tab.is-on svg { color: var(--accent); }
+.dt-select { border-radius: 0 !important; background: transparent !important; box-shadow: inset 0 -1px 0 var(--rule) !important; padding-left: 2px !important; }
+.dt-select:hover { box-shadow: inset 0 -1px 0 var(--ink-faint) !important; }
+/* 菜单栏跳到某组时的闪烁：改为组名颜色短暂变成竹青，不再闪一块底 */
+.dt-group.is-flash .dt-group-label { animation: dt-flash-ink 1.6s var(--ease-smooth) !important; background: transparent !important; }
+@keyframes dt-flash-ink { from { color: var(--accent); } to { color: inherit; } }
+
+/* 视图窗口（日历 / 周）：同样的规则 */
+.dv-window button:hover, .dv-window summary:hover, .dv-day:hover { background: transparent !important; }
+.dv-window button:hover { color: var(--ink); }
+.dv-window button:active { transform: none !important; }
+.dv-segments { background: transparent !important; padding: 0 !important; gap: 16px !important; border-radius: 0 !important; }
+.dv-segments button { min-width: 0 !important; padding: 4px 0 !important; border-radius: 0 !important; color: var(--ink-faint); }
+.dv-segments button[aria-selected="true"] { background: transparent !important; color: var(--ink); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
+.dv-day { border-radius: 0 !important; }
+.dv-day[aria-selected="true"] { background: transparent !important; outline: 0 !important; box-shadow: inset 0 2px 0 var(--accent); }
+.dv-day[aria-selected="true"] .dv-day-number { color: var(--accent); font-weight: 600; }
+.dv-day[aria-current="date"] .dv-day-number { border-bottom-color: var(--accent) !important; }
+/* 输入条聚焦：不再出现带光晕的圆角框，只把上方分隔线变成竹青 */
+.dt-composer:focus-within { box-shadow: inset 0 1px 0 var(--accent) !important; }
+/* 图钉：开启时也保持线性，只变竹青（v3 第 2 条，代码里又改回了实心） */
+.dt-pin-svg.is-on { fill: none !important; }
