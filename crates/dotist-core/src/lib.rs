@@ -427,26 +427,31 @@ impl Store {
         Ok(updated)
     }
 
-    /// Reorders top-level tasks in a status column across groups. Normalization handles tied positions.
+    /// Reorders top-level tasks in a status column across groups.
     pub fn move_status_task(&mut self, id: &str, direction: i32) -> Result<()> {
         if direction != -1 && direction != 1 { bail!("排序方向无效"); }
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let task = find_task(&tx, id)?;
         if task.parent_id.is_some() { bail!("看板只展示一级任务"); }
         let mut stmt = tx.prepare(&format!("SELECT {COLUMNS} FROM tasks WHERE status=? AND parent_id IS NULL AND deleted_at IS NULL ORDER BY position,id"))?;
-        let mut peers = stmt.query_map([task.status.as_str()], task_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let peers = stmt.query_map([task.status.as_str()], task_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
         drop(stmt);
         let index = peers.iter().position(|peer| peer.id == id).context("找不到任务")?;
         let other = index as i64 + direction as i64;
         if other >= 0 && other < peers.len() as i64 {
-            peers.swap(index, other as usize);
-            let now = timestamp();
-            for (position, peer) in peers.iter().enumerate() {
-                if peer.position == position as i64 { continue; }
-                tx.execute("UPDATE tasks SET position=?,updated_at=?,revision=revision+1 WHERE id=?", params![position as i64, now, peer.id])?;
-                enqueue(&tx, &find_task(&tx, &peer.id)?, "reorder", Some(peer.revision))?;
-            }
+            reorder_in(&tx, &task, &peers[other as usize], direction > 0)?;
         }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Places a task relative to another within a sibling list or a cross-group perspective.
+    pub fn reorder_task(&mut self, id: &str, target_id: &str, after: bool, all_tasks: bool) -> Result<()> {
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let task = find_task(&tx, id)?;
+        let target = find_task(&tx, target_id)?;
+        if !all_tasks && (task.category != target.category || task.parent_id != target.parent_id) { bail!("只能调整同级任务的顺序"); }
+        reorder_in(&tx, &task, &target, after)?;
         tx.commit()?;
         Ok(())
     }
@@ -455,22 +460,58 @@ impl Store {
         if direction != -1 && direction != 1 { bail!("排序方向无效"); }
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let task = find_task(&tx, id)?;
-        let comparator = if direction == -1 { "<" } else { ">" };
-        let order = if direction == -1 { "DESC" } else { "ASC" };
-        let sql = format!("SELECT {COLUMNS} FROM tasks WHERE category=? AND parent_id IS ? AND deleted_at IS NULL AND position {comparator} ? ORDER BY position {order}, id {order} LIMIT 1");
-        let other = tx.query_row(&sql, params![task.category, task.parent_id, task.position], task_from_row).optional()?;
-        if let Some(other) = other {
-            let now = timestamp();
-            tx.execute("UPDATE tasks SET position=?,updated_at=?,revision=revision+1 WHERE id=?", params![other.position, now, task.id])?;
-            tx.execute("UPDATE tasks SET position=?,updated_at=?,revision=revision+1 WHERE id=?", params![task.position, now, other.id])?;
-            let a = find_task(&tx, &task.id)?;
-            let b = find_task(&tx, &other.id)?;
-            enqueue(&tx, &a, "reorder", Some(task.revision))?;
-            enqueue(&tx, &b, "reorder", Some(other.revision))?;
-        }
+        let mut stmt = tx.prepare(&format!("SELECT {COLUMNS} FROM tasks WHERE category=? AND parent_id IS ? AND deleted_at IS NULL ORDER BY position,id"))?;
+        let peers = stmt.query_map(params![task.category, task.parent_id], task_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+        let index = peers.iter().position(|peer| peer.id == id).context("找不到任务")?;
+        let other = index as i64 + direction as i64;
+        if other >= 0 && other < peers.len() as i64 { reorder_in(&tx, &task, &peers[other as usize], direction > 0)?; }
         tx.commit()?;
         Ok(())
     }
+}
+
+fn reorder_in(tx: &Transaction<'_>, task: &Task, target: &Task, after: bool) -> Result<()> {
+    if task.id == target.id { return Ok(()); }
+    let mut stmt = tx.prepare(&format!("SELECT {COLUMNS} FROM tasks WHERE deleted_at IS NULL ORDER BY position,id"))?;
+    let mut peers = stmt.query_map([], task_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+    let source_index = peers.iter().position(|peer| peer.id == task.id).context("找不到任务")?;
+    let source = peers.remove(source_index);
+    let target_index = peers.iter().position(|peer| peer.id == target.id).context("找不到任务")?;
+    let insert_at = target_index + usize::from(after);
+    if insert_at == source_index { return Ok(()); }
+    peers.insert(insert_at, source);
+    // Ties can exhaust the destination gap. Check both sides and change the fewest unrelated tasks.
+    let candidate = |prefer_left: bool| {
+        let (mut first, mut last) = (insert_at, insert_at);
+        loop {
+            let lower = if first == 0 { i64::MIN as i128 } else { peers[first - 1].position as i128 + 1 };
+            let upper = if last + 1 == peers.len() { i64::MAX as i128 } else { peers[last + 1].position as i128 - 1 };
+            let latest_start = upper - (last - first) as i128;
+            if lower <= latest_start {
+                let start = (peers[first].position as i128).clamp(lower, latest_start);
+                let changed = peers[first..=last].iter().enumerate().filter(|(index, peer)| peer.position as i128 != start + *index as i128).collect::<Vec<_>>();
+                let unrelated = changed.iter().filter(|(_, peer)| peer.id != task.id && peer.id != target.id).count();
+                return (unrelated, changed.len(), first, last, start);
+            }
+            if first > 0 && (last + 1 == peers.len() || prefer_left) { first -= 1; }
+            else { last += 1; }
+        }
+    };
+    let left = candidate(true);
+    let right = candidate(false);
+    let (_, _, first, last, start) = if (left.0, left.1) <= (right.0, right.1) { left } else { right };
+    let now = timestamp();
+    for (index, peer) in peers[first..=last].iter().enumerate() {
+        let position = (start + index as i128) as i64;
+        if peer.position == position { continue; }
+        // The today view uses completed tasks' updated_at as a completion-date proxy; outbox records the reorder time.
+        let updated_at = if peer.completed { &peer.updated_at } else { &now };
+        tx.execute("UPDATE tasks SET position=?,updated_at=?,revision=revision+1 WHERE id=?", params![position, updated_at, peer.id])?;
+        enqueue(tx, &find_task(tx, &peer.id)?, "reorder", Some(peer.revision))?;
+    }
+    Ok(())
 }
 
 fn backup_database(conn: &Connection, path: &Path, version: i64) -> Result<()> {

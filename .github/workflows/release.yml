@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,18 +22,15 @@ jobs:
           node-version: 22
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
       - name: Set the build version
         id: version
-        shell: bash
         run: |
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const path = 'src-tauri/tauri.conf.json';
           const config = JSON.parse(fs.readFileSync(path, 'utf8'));
           const base = /^(\d+)\.(\d+)\.0$/.exec(config.version);
-          if (!base) throw new Error('The source version must use a zero patch number, e.g. 0.1.0');
+          if (!base) throw new Error('The source version must use a zero patch number');
           const version = `${base[1]}.${base[2]}.${process.env.GITHUB_RUN_NUMBER}`;
           config.version = version;
           fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
@@ -42,47 +39,41 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: cargo test --locked --manifest-path crates/dotist-core/Cargo.toml
-      - name: Build sidecars
-        run: |
-          ./scripts/prepare-sidecar.sh
-          ./scripts/prepare-sidecar.sh aarch64-apple-darwin
-      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
-      - uses: tauri-apps/tauri-action@v0.5.24
+      - name: Test native bridge and build native application
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOTIST_CARGO_OFFLINE: '0'
+        run: |
+          test "$(uname -m)" = arm64
+          export DOTIST_MACOS_SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          bash native/scripts/test-bridge.sh
+          bash native/scripts/build-local.sh > "$RUNNER_TEMP/native-build.log"
+          cat "$RUNNER_TEMP/native-build.log"
+          app=$(sed -n 's/^Local application: //p' "$RUNNER_TEMP/native-build.log" | tail -n 1)
+          echo "DOTIST_RELEASE_APP=$app" >> "$GITHUB_ENV"
+      - name: Sign both native and legacy-compatible update metadata
+        env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: '-'
-        with:
-          args: --target aarch64-apple-darwin --config src-tauri/tauri.release.conf.json --bundles app
-          tagName: v${{ steps.version.outputs.version }}
-          releaseName: Dotist v${{ steps.version.outputs.version }}
-          releaseCommitish: ${{ github.sha }}
-          releaseDraft: true
-          includeUpdaterJson: true
-      - name: Verify and publish the complete release
-        shell: bash
+        run: |
+          CARGO_TARGET_DIR="$PWD/.cache/native-migration/release-tools-target" cargo build --locked --release --manifest-path native/release-tools/Cargo.toml
+          python3 native/scripts/package-update.py "$DOTIST_RELEASE_APP" --output .cache/native-release
+          python3 native/scripts/verify-update.py .cache/native-release
+      - name: Upload complete draft and publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           tag="v$VERSION"
+          gh release create "$tag" --draft --target "$GITHUB_SHA" --title "Dotist v$VERSION" --notes-file docs/release-notes.md \
+            .cache/native-release/Dotist_darwin_aarch64.app.tar.gz \
+            .cache/native-release/Dotist_darwin_aarch64.app.tar.gz.sig \
+            .cache/native-release/latest.json .cache/native-release/appcast.xml
           current=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
           if [ "$current" != "$GITHUB_SHA" ]; then
             echo 'A newer commit is on main; leaving this release as a draft.'
             exit 0
           fi
-          gh release view "$tag" --json assets > "$RUNNER_TEMP/dotist-assets.json"
-          gh release download "$tag" --pattern latest.json --dir "$RUNNER_TEMP"
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          import path from 'node:path';
-          const manifest = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'latest.json'), 'utf8'));
-          const assets = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'dotist-assets.json'), 'utf8')).assets.map(asset => asset.name);
-          const platform = manifest.platforms?.['darwin-aarch64'];
-          if (manifest.version !== process.env.VERSION || !platform?.signature || !platform?.url) throw new Error('Invalid updater manifest');
-          const file = decodeURIComponent(new URL(platform.url).pathname.split('/').at(-1));
-          if (!assets.includes(file) || !assets.includes(`${file}.sig`)) throw new Error('Updater package or signature is missing');
-          NODE
+          gh release download "$tag" --dir "$RUNNER_TEMP/published-assets"
+          python3 native/scripts/verify-update.py "$RUNNER_TEMP/published-assets"
           gh release edit "$tag" --draft=false --latest

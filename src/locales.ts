@@ -1,6 +1,12 @@
 // The Chinese source text is the key; each row is [简体中文, English, 繁體中文, 日本語].
 // tests/i18n.test.ts checks that every t('…') key in the source has a row here.
 const ROWS: [string, string, string, string][] = [
+  ['日历视图', 'Calendar view', '日曆檢視', 'カレンダー表示'],
+  ['日', 'Day', '日', '日'],
+  ['排序方式', 'Sort by', '排序方式', '並べ替え'],
+  ['手动排序', 'Manual', '手動排序', '手動'],
+  ['按分组', 'By group', '依分組', 'グループ順'],
+  ['拖动排序；按住 Option 并使用上下方向键调整。', 'Drag to reorder; hold Option and press Up or Down.', '拖動排序；按住 Option 並使用上下方向鍵調整。', 'ドラッグして並べ替え、または Option キーを押しながら上下矢印キーで調整できます。'],
   ['更新', 'Updates', '更新', 'アップデート'],
   ['检查更新', 'Check for updates', '檢查更新', 'アップデートを確認'],
   ['自动检查更新', 'Automatically check for updates', '自動檢查更新', '自動的にアップデートを確認'],
@@ -321,6 +327,7 @@ const ROWS: [string, string, string, string][] = [
   ['无效的语言', 'Unknown language', '無效的語言', '無効な言語です'],
   ['无效的主题', 'Unknown theme', '無效的主題', '無効なテーマです'],
   ['排序方向无效', 'Invalid direction', '排序方向無效', '無効な並べ替え方向です'],
+  ['只能调整同级任务的顺序', 'Only tasks at the same level can be reordered here', '只能調整同層級任務的順序', 'ここでは同じ階層のタスクのみ並べ替えられます'],
   ['不同的动作不能使用同一个快捷键', 'Different actions can’t share a shortcut', '不同的動作不能使用同一個快速鍵', '異なる操作に同じショートカットは使えません'],
   ['不能显示这个位置', 'Can’t show that location', '不能顯示這個位置', 'この場所は表示できません'],
   ['数据库版本较新，请升级 Dotist 后再打开', 'The database is newer; please update Dotist', '資料庫版本較新，請升級 Dotist 後再打開', 'データベースが新しい形式です。Dotist を更新してください'],
