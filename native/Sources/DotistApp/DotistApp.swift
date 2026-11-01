@@ -555,9 +555,9 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         mainState.groupID = task.category
         model.scope = "all"
         model.selectTag(nil)
-        if let parent = task.parentId {
-            mainState.expanded.insert(parent)
-            if model.tasks.first(where: { $0.id == parent })?.completed == true { mainState.folded.insert(task.category) }
+        for parent in TaskHierarchy(model.tasks).ancestors(of: task.id) {
+            mainState.expanded.insert(parent.id)
+            if parent.completed { mainState.folded.insert(task.category) }
         }
         if task.completed { mainState.folded.insert(task.category) }
         model.gotoGroup = task.category

@@ -25,9 +25,12 @@ public enum TaskTags {
 
     public static func filter(_ tasks: [DotistTask], tag: String, description: DotistTagDescription? = nil) -> [DotistTask] {
         let matches = Set((description ?? describe(tasks)).tasks.filter { $0.tags.contains(tag) }.map(\.id))
-        let parents = Set(tasks.filter { matches.contains($0.id) }.compactMap(\.parentId))
-        let family = matches.union(parents)
-        return tasks.filter { family.contains($0.id) || $0.parentId.map(family.contains) == true }
+        let hierarchy = TaskHierarchy(tasks)
+        var family = matches
+        for id in matches { family.formUnion(hierarchy.ancestors(of: id).map(\.id)) }
+        // Preserve family context from the two-level behavior at every depth.
+        for id in family { family.formUnion(hierarchy.descendants(of: id).map(\.id)) }
+        return tasks.filter { family.contains($0.id) }
     }
 }
 

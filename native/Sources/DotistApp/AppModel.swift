@@ -33,6 +33,7 @@ final class AppModel: ObservableObject {
     private var observation: (any DatabaseCancellable)?
     private var pendingSnapshot: TaskSnapshot?
     private var groupsByID: [String: DotistGroup] = [:]
+    private var hierarchy = TaskHierarchy([])
     private var childrenByParent: [String: [DotistTask]] = [:]
     private var tagsByID: [String: DotistTaskTags] = [:]
     private var roots: [DotistTask] = []
@@ -99,6 +100,15 @@ final class AppModel: ObservableObject {
     func group(for task: DotistTask) -> DotistGroup? { groupsByID[task.category] }
     func activeGroupNavigation(_ id: String) { gotoGroup = id; scopeNavigation += 1 }
     func children(of task: DotistTask) -> [DotistTask] { childrenByParent[task.id] ?? [] }
+    func depth(of task: DotistTask) -> Int { depth(of: task.id) }
+    func depth(of id: String) -> Int { hierarchy.depth(of: id) }
+    func descendants(of task: DotistTask) -> [DotistTask] { descendants(of: task.id) }
+    func descendants(of id: String) -> [DotistTask] { hierarchy.descendants(of: id) }
+    func subtreeHeight(of task: DotistTask) -> Int { hierarchy.subtreeHeight(of: task.id) }
+    func progress(of task: DotistTask) -> (done: Int, total: Int) {
+        let children = children(of: task)
+        return (children.filter(\.completed).count, children.count)
+    }
     var displayTasks: [DotistTask] { activeTag == nil ? tasks : taggedTasks }
     var tagCounts: [DotistTagCount] { sortedTags }
     func visibleChildren(of task: DotistTask) -> [DotistTask] { children(of: task) }
@@ -146,6 +156,7 @@ final class AppModel: ObservableObject {
     }
 
     private func rebuildIndexes() {
+        hierarchy = TaskHierarchy(tasks)
         groupsByID = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0) })
         childrenByParent = Dictionary(grouping: tasks.filter { $0.parentId != nil }, by: { $0.parentId! }).mapValues(ordered)
         tagsByID = Dictionary(uniqueKeysWithValues: tagDescription.tasks.map { ($0.id, $0) })
@@ -183,7 +194,7 @@ final class AppModel: ObservableObject {
                 DispatchQueue.main.async {
                     self?.pendingChanges -= 1
                     self?.busy = (self?.pendingChanges ?? 0) > 0
-                    self?.error = error.localizedDescription
+                    self?.error = self?.text(error.localizedDescription) ?? error.localizedDescription
                     failed?()
                 }
             }
@@ -215,11 +226,43 @@ final class AppModel: ObservableObject {
         change(completed: { [weak self] in
             // Publish the committed snapshot before the UI releases its frozen
             // drag. Database observation delivery may otherwise arrive later.
-            if let committedSnapshot { self?.apply(committedSnapshot) }
+            if let committedSnapshot {
+                self?.apply(committedSnapshot)
+                self?.expanded.formUnion(TaskHierarchy(committedSnapshot.tasks).ancestors(of: taskID).map(\.id))
+            }
             completed?()
         }, failed: failed) { store in
             try store.commitReorder(taskID, groupID: target.groupID, parentID: target.parentID, beforeID: target.beforeID)
             committedSnapshot = try store.snapshot()
+        }
+    }
+
+    func indent(ids: [String], completed: (() -> Void)? = nil, failed: (() -> Void)? = nil) {
+        changeHierarchy(completed: completed, failed: failed) { try $0.indent(ids: ids) }
+    }
+    func outdent(ids: [String], completed: (() -> Void)? = nil, failed: (() -> Void)? = nil) {
+        changeHierarchy(completed: completed, failed: failed) { try $0.outdent(ids: ids) }
+    }
+    func indent(_ task: DotistTask, completed: (() -> Void)? = nil, failed: (() -> Void)? = nil) {
+        indent(ids: [task.id], completed: completed, failed: failed)
+    }
+    func outdent(_ task: DotistTask, completed: (() -> Void)? = nil, failed: (() -> Void)? = nil) {
+        outdent(ids: [task.id], completed: completed, failed: failed)
+    }
+
+    private func changeHierarchy(completed: (() -> Void)?, failed: (() -> Void)?, _ operation: @escaping (TaskStore) throws -> [DotistTask]) {
+        var snapshot: TaskSnapshot?
+        var parents: Set<String> = []
+        change(completed: { [weak self] in
+            if let snapshot { self?.apply(snapshot) }
+            self?.expanded.formUnion(parents)
+            completed?()
+        }, failed: failed) { store in
+            let moved = try operation(store)
+            let committed = try store.snapshot()
+            snapshot = committed
+            let hierarchy = TaskHierarchy(committed.tasks)
+            for task in moved { parents.formUnion(hierarchy.ancestors(of: task.id).map(\.id)) }
         }
     }
 

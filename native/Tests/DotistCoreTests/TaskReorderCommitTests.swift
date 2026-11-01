@@ -14,7 +14,9 @@ final class TaskReorderCommitTests: XCTestCase {
         XCTAssertEqual(moved.count, 3)
         XCTAssertEqual(moved.first { $0.id == child.id }?.category, "life")
         XCTAssertEqual(moved.filter { $0.parentId == nil && $0.category == "life" }.sorted { ($0.position, $0.id) < ($1.position, $1.id) }.map(\.id), [a.id, b.id])
-        XCTAssertThrowsError(try store.commitReorder(a.id, groupID: "life", parentID: b.id, beforeID: nil))
+        // The parent can now carry its child under another task; a descendant
+        // remains an invalid destination at every supported depth.
+        XCTAssertThrowsError(try store.commitReorder(a.id, groupID: "life", parentID: child.id, beforeID: nil))
         XCTAssertEqual(try store.listTasks(), moved)
         XCTAssertThrowsError(try store.commitReorder(b.id, groupID: "work", parentID: nil, beforeID: "stale"))
         XCTAssertEqual(try store.listTasks(), moved)

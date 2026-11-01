@@ -1,23 +1,5 @@
-面板的两行导航：第一行是“标题即分组”的标题菜单和四个工具图标，第二行是日期范围，有标签时再加一行标签。
+顶部不显示分组标题或下拉箭头；分组切换用面板左缘外的便签标签，静止时露出窄边，指针靠近时整体滑出显示全称（见 TitleMenu 卡片）。
 
-**SwiftUI**：`MainWindow.header`、`dateFilters`、`tagBar`。`DraggableFilterButton` 改为 `ScopeButton`。
+右上工具栏仅“收起”常驻，其余工具悬停显示；设置里可配置顺序与可见性，按住 ⌘ 可左右拖动排序。图标 14pt / 28×28，muted，悬停 ink。悬停提示使用系统 tooltip（`.help`），不显示底部提示行。
 
-**第一行（高 44，padding 左 16 / 右 10）**
-- 标题：Serif 18/24 Semibold，后接 9pt `chevron.down`（ink-faint）。整体是原生 `Menu`，见 TitleMenu。
-- 工具图标依次为搜索、视图、更多（⋯）、收起，规格是 14pt / 28×28，颜色 ink-muted，悬停 ink。
-- 图钉、锁定收进“更多”菜单，不再是悬停才出现的按钮。
-- Logo 不再兼任搜索按钮，搜索使用 `magnifyingglass`。
-
-**第二行（高 30，padding 左 16 / 右 11，底 4）**
-- 范围间距 16，全部用 Sans 13/20。
-- 选中：ink + Medium；未选中：ink-faint + Regular；悬停：ink-muted。
-- 每个槽位的宽度按 Medium 字重量好后固定，切换时不抖动。
-- 取消按距离衰减的字号和透明度。
-- 最右侧是日历按钮，13pt / 24×24。设了自定义区间时，日历图标变为 accent。
-
-**标签行（有标签时出现，高 24）**
-- Sans 12，间距 14。
-- 选中：ink + Medium，未选中：ink-faint。
-- 最右侧放“管理…”。
-
-**禁用**：选中项下划线、胶囊底、字号放大。
+日期范围行高 30，Sans 13/20；选中 ink + Medium，其他 faint，悬停 muted。槽宽按 Medium 预量；日历按钮 13pt / 24×24。有标签时另有高 24 的标签行。

@@ -28,6 +28,11 @@ struct TaskEditor: NSViewRepresentable {
         editor.textContainer?.lineFragmentPadding = 0
         editor.textContainer?.widthTracksTextView = true
         editor.font = font
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.minimumLineHeight = 20
+        paragraph.maximumLineHeight = 20
+        editor.defaultParagraphStyle = paragraph
+        editor.typingAttributes = [.font: font, .paragraphStyle: paragraph]
         editor.insertionPointColor = NSColor(DotistDesign.accent)
         editor.textColor = NSColor(DotistDesign.ink)
         editor.string = text
@@ -48,6 +53,11 @@ struct TaskEditor: NSViewRepresentable {
         editor.commit = commit; editor.cancel = cancel; editor.indent = indent; editor.blur = blur
         if editor.string != text && !editor.hasMarkedText() { editor.string = text }
         context.coordinator.measure(editor)
+    }
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        guard let editor = scroll.documentView as? TaskTextView else { return }
+        editor.blur = {}; editor.commit = {}; editor.cancel = {}; editor.indent = { _ in }
+        editor.delegate = nil
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: TaskEditor
@@ -79,8 +89,11 @@ final class TaskTextView: NSTextView {
         super.keyDown(with: event)
     }
     override func resignFirstResponder() -> Bool {
+        // Capture this editor session's action. Reading self.blur on the next
+        // run loop can execute a new row's callback after representable reuse.
+        let action = blur
         let result = super.resignFirstResponder()
-        if result { DispatchQueue.main.async { self.blur() } }
+        if result { DispatchQueue.main.async(execute: action) }
         return result
     }
 }

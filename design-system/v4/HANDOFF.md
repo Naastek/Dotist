@@ -12,8 +12,7 @@
    - 选中项左侧的竖线
    - 用圆角矩形或胶囊底板表示选中、悬停或焦点
    - 编辑时放大字号并加下划线
-   - 勾选圆上的进度弧或进度环
-   - 悬浮球的进度环
+   - 悬浮球上的任何进度环或弧（任务勾选圆允许子任务分段进度）
    - 分组色点
    - 面板内再嵌一层玻璃按钮或玻璃标签
 2. **唯一的选中表达是颜色加字重**：
@@ -21,7 +20,7 @@
    - 未选中：ink-faint + Regular
    - 悬停：ink-muted，或从 muted 变为 ink
    - 键盘焦点：图标和文字变 accent，勾选圆的描边变 accent
-3. **对齐只有四条竖线**：16 / 42 / 64 / 348，详见“Alignment”卡片。图标按字形边缘对齐，不按点击区。
+3. **对齐线**：16 / 42 / 64 / 86 / 108 / 130 / 348，详见“Alignment”卡片。图标按字形边缘对齐，不按点击区。
 
 ## 1. 约束
 
@@ -32,8 +31,8 @@
   - `ConcentricRectangle`
 - 字体：沿用 `DotistDesign.font(_:weight:serif:language:)`。Serif 只用于“名字”：标题、组名、菜单里的组名、输入栏组名。其余一律 Sans。
 - 颜色只使用 `DotistDesign` 已有的动态色。只有一处需要修改，见 §2.1。
-- 不改数据模型和 `AppModel` 的行为；改动只在视图层。
-- 保持现有的可访问性标签、`accessibilityIdentifier`、键盘行为（↑↓、⌥↑↓、Tab 缩进、Return、Esc）不变。删除的 UI 如果带有 identifier（例如 `group-tab:*`），需要把对应的 UI 测试一起迁移到新的标题菜单上。
+- 按本交接实现多选、层级和拖放行为；涉及模型时保持数据一致。
+- 保持可访问性标签和 `accessibilityIdentifier`；按 §2.5 更新键盘行为及相关测试。
 
 ## 2. 任务清单（按建议顺序）
 
@@ -85,27 +84,10 @@
 **2.3 顶部两行**
 
 - [ ] 删除 `groupTabs`（约第 166–183 行）和 `FolderGroupTab`（约第 695–719 行），并从 `body` 中移除调用。
-- [ ] `header` 改为以下结构：
-  - 左侧：标题 `Menu`。label 为当前分组名，“全部”时显示“全部”；Serif 18 Semibold，后接 9pt `chevron.down`（faint）。
-  - 右侧：工具图标，依次为搜索、视图、更多（`ellipsis`）、收起；面板为独立面板时再加关闭。
-  - padding：左 16，右 10，高 44。
-- [ ] 标题 `Menu` 的菜单项：
-  - 全部分组（总数）
-  - Divider
-  - 各组（未完成数）
-  - Divider
-  - 在独立面板中打开（子菜单，列出各组）
-  - 管理分组…
-  - 管理标签…
-  - 当前项用系统勾选标出，例如 `Button { } label: { Label(name, systemImage: selected ? "checkmark" : "") }`，或用 `Picker(.inline)`。
-- [ ] “更多”菜单：
-  - 置顶窗口（勾选态）
-  - 固定窗口（勾选态）
-  - 键盘快捷键…（新增：弹出说明；或暂时只放一个 `Text` 列表）
-  - 任务视图
-  - 收起为悬浮球
-  - 同时删除 `headerHovered` 控制的透明度逻辑。
-- [ ] 删除 Logo 兼任搜索按钮的写法（约第 144–151 行），搜索改用 `magnifyingglass`。
+- [ ] 顶部不显示分组标题或下拉箭头；分组切换用面板左缘外的便签标签，静止露窄边，指针靠近时整体滑出显示全称。
+- [ ] 右上角仅“收起”常驻，其余工具悬停显示；设置中配置顺序和可见性，按住 ⌘ 可左右拖动排序。工具悬停提示使用系统 `.help`，不显示底部提示行。
+- [ ] 搜索使用 `magnifyingglass`，不使用 Logo。
+
 - [ ] 日期范围行 `dateFilters`：
   - 高 30，padding：左 16，右 11，底 4；`HStack(spacing: 16)`。
   - `DraggableFilterButton` 改为统一 Sans 13：选中 `.medium` + ink，其他 `.regular` + faint，悬停 muted。
@@ -122,7 +104,7 @@
 - [ ] 组头：
   - 改为 `HStack(alignment: .firstTextBaseline, spacing: 6)`。
   - 组名 Serif **15** Semibold，颜色 **ink**（原来是 14、muted）；空组用 faint。
-  - 数量 `Text` 移到组名后面（Sans 12，faint），删除前面的 `Spacer`。
+  - 组头不显示数量。
   - 操作按钮放进右对齐的 overlay，悬停时出现，规格 11pt / 22×22，颜色 faint。
   - 高 30，`.padding(.top, 4)`。
 - [ ] 空组：删除“还没有任务”和“先放进 Inbox，稍后再整理”这两个 `Text`。
@@ -134,22 +116,16 @@
   - 文字 Sans 12，颜色 faint（原来是 muted），行高 28。
   - `todayList` 里的“接下来 7 天”“已完成”使用同样的样式。
 - [ ] `todaySection`：
-  - 与组头使用同一个组件：Serif 15 + 紧跟的数量。
+  - 与组头使用同一个组件：Serif 15，不显示数量。
   - “已逾期”用 danger，“今天”用 ink（原来是 muted）。
 
 **2.5 任务行 `taskRow`**
 
-- [ ] `HStack(alignment: .firstTextBaseline, spacing: 6)` 改为 `spacing: 8`。
-- [ ] 勾选圆：
-  - **删除整个分段弧分支**（`children.count > 1` 的 `ForEach … trim`），以及单子任务的叠圈。
-  - 未完成：`Circle().strokeBorder(DotistDesign.checkStroke, lineWidth: 1.25)`。
-  - 完成：`Circle().fill(accent)` + `checkmark`，字号 `sub ? 7.5 : 9`，`.heavy`，颜色 on-accent（深色用 paper）。
-  - 尺寸：圆为 `sub ? 13 : 16`；frame 为 `width: sub ? 14 : 18, height: 20`。
-  - 对齐：用 `.alignmentGuide(.firstTextBaseline)` 让圆心落在 20pt 行盒中心。
-  - 键盘焦点时（`focusedTask == task.id`），描边改为 accent。
-- [ ] 正文：
-  - 完成态删除 `.strikethrough(task.completed)`，颜色改为 faint（原来是 muted）。
-  - 行内标签：选中改为 ink + Medium（原来是 accent），其余 faint。
+- [ ] 层级为 0..4：`textX(d)=42+22d`（42 / 64 / 86 / 108 / 130），`circleX(0)=16`，`circleX(d≥1)=textX(d-1)`；换行续行对齐 textX，圆心与整个文字块垂直居中。
+- [ ] 勾选圆：顶层直径 16，子层 13，描边 1.25pt。有 N 个直接子任务时分 N 段，间隔约 8°，N=1 为整圆；已完成段 accent，未完成段 checkStroke。任务自身完成为 accent 实心圆加对勾；保留行尾 `1/3 ⌄`。
+- [ ] Shift+点击范围选择，⌘+点击增减，Shift+↑/↓ 扩展；选中圆描边 accent、正文 Medium、不加底。Tab 将选中任务全部归为选中集合之前最近的未选中同级任务的子任务；⇧Tab 提升一级；Esc 清除选择；Return 在行上新建同级任务。
+- [ ] 正文完成态为 faint，无删除线；行内标签选中为 ink + Medium。
+
 - [ ] 元信息：
   - 跨组视图的组名改为 Serif 12 Semibold + faint（原来是 11 medium + muted）。
   - 子任务计数的箭头由 10pt 改为 8pt semibold。
@@ -160,20 +136,18 @@
 - [ ] 编辑态：
   - 删除提示 `Text("Return 保存 · ⇧Return 换行 · Tab 缩进")`。
   - 删除 `.opacity(editing != nil && editing != task.id ? 0.45 : 1)`。
+  - 输入区使用 rule 18% 浅色底，圆角 6，左右各外扩 6，文字不位移。
   - `TaskEditor` 的光标色设为 accent：`editor.insertionPointColor = NSColor(DotistDesign.accent)`。
-- [ ] 落点线：
-  - 删除 `Circle().fill(accent).frame(5,5)`。
-  - 改为 `Capsule().fill(accent).frame(height: 1.5).padding(.leading, sub ? 22 : 26)`。（taskRow 自身已在缩进内，所以子任务用 22 即可落在 64；请实测。）
-- [ ] 行高保持 `minHeight: sub ? 28 : 32`；子任务 `.padding(.leading, 26)`（在 `taskTree` 中）不变。
+- [ ] 拖动：行块浮起，只沿垂直方向跟随光标；其余行约 0.18s 平移让开。目标处显示同高 ghost，圆描边与文字透明度 35%。水平拖动超过 22pt 的 70% 才改变层级，ghost 缩进同步变化，目标父任务的圆描边变 accent。松手一次提交，Esc 取消；多选整组拖；距列表上下边缘 24pt 自动滚动。
 
 **2.6 输入栏 `composerBar` / `ComposerLayout`**
 
 - [ ] padding 由 `h 20 / v 12` 改为：左 16，右 11，高 52；顶部加 0.5pt `rule` 线，用 `Divider` 或 overlay 均可。
 - [ ] 组名：
-  - Serif 13 Semibold + muted（原来是 12 + ink），后接 9pt `chevron.down`。
+  - Serif 13 Semibold + muted（原来是 12 + ink），不显示下箭头。
   - 选择器由 popover + `GroupPickerRow` 改为原生 `Menu`（系统 ✓）。“管理分组…”“管理标签…”放在菜单末尾。
 - [ ] 到期按钮移到最右侧，顺序变为“组名 → 正文 → [日期文字] + calendar 13pt / 24×24”。
-  - 日期文字：Sans 12，accent；没有日期时只显示图标（muted）。
+  - 日期文字仅在显式设置日期时显示（Sans 12，accent）；日历图标仅悬停显示。
   - 同步修改 `ComposerLayout` 中 `subviews` 的顺序和测量。
 - [ ] `ComposerInput` 加 `.tint(DotistDesign.accent)`，或设置 `insertionPointColor`。
 - [ ] 标签补全：
@@ -203,7 +177,7 @@
 **2.9 `PanelMotion.swift` · `FloatingBubble`**
 
 - [ ] 删除两个 `Circle`：track（`rule` 2.5）和 trim（accent 3）。
-- [ ] 分组面板：组名前两字改为 Serif 15 Semibold（原来是 Sans 12）。
+- [ ] 球体只显示剩余数字，完成时显示 0；不显示组名或对勾。
 - [ ] 数字由 Sans 20 `.bold` 改为 `.semibold`，加 `.monospacedDigit()`。
 - [ ] 横条：
   - 文字改为两行：下一件任务（13 Medium）+“组 · 到期”（12 muted）。
@@ -255,7 +229,7 @@
   - `cornerRadius(` + `surface`
   - `Capsule().fill(`
   - `Circle().fill(` 用作标记的情况
-  - `.trim(`
+  - `.trim(`（任务勾选圆分段进度除外；悬浮球禁止）
   - `strikethrough`
   - `opacity(0.45`
 - [ ] 浅色和深色两种模式下，日期范围的选中项都一眼可辨（深色 faint 已改为 `0x8e8e96`）。
@@ -263,12 +237,12 @@
   - 面板变为 paper 实色。
   - 文字层级仍然成立。
   - 动效只剩淡入淡出。
-- [ ] 截图叠加网格检查：标题、日期、组名、勾选圆左缘落在 16；正文落在 42；子任务正文落在 64；元信息和最右图标的字形右缘落在 348。
+- [ ] 截图叠加网格检查：日期、组名、顶层勾选圆左缘落在 16；五层正文落在 42 / 64 / 86 / 108 / 130；元信息和最右图标的字形右缘落在 348。
 - [ ] 编辑一条任务时，文字不发生任何位移（可叠图对比）。
-- [ ] 有 1 个、3 个、13 个子任务的父任务，勾选圆完全一样，进度只在“1/3 ⌄”里体现。
+- [ ] 有 1 个、3 个、13 个直接子任务时，分别检查整圆或对应数量的分段及完成色，并保留行尾计数。
 - [ ] 悬浮球在剩余 0、5、99 件时显示正确，没有环。
 - [ ] 键盘：Tab / ↑↓ 移动焦点时能看清当前项（accent 描边或文字），并且没有灰底。
-- [ ] 中、英、日、繁四种界面语言下，标题菜单、日期行、输入栏都不截断，也不换行。截断时使用省略号。
+- [ ] 中、英、日、繁四种界面语言下，便签标签、日期行、输入栏都不截断，也不换行。截断时使用省略号。
 
 ## 4. 不在本次范围
 
@@ -276,3 +250,13 @@
 - 设置窗口的视觉调整：保留系统 `Picker(.segmented)`，它是系统控件。
 - App 图标、菜单栏图标（已定稿，见 Logo 卡片）。
 - 数据、同步、MCP 相关的任何改动。
+
+## v4.1 变更记录(2026-11-01)
+
+- 任务勾选圆按直接子任务分段显示进度，行尾计数保留；悬浮球禁止任何进度环或弧。
+- 层级扩展为 0..4，正文 42 / 64 / 86 / 108 / 130，圆与文字块居中，续行对齐正文。
+- 更新多选、Tab / ⇧Tab、Esc 和 Return 行为；选中以 accent 描边和 Medium 表达。
+- 拖动改为垂直浮起、其他行平移、同高 ghost、水平阈值和父任务提示，并支持整组拖动、取消和边缘滚动。
+- 分组切换改为面板左缘便签；工具栏仅收起常驻，其余悬停显示，可配置及按 ⌘ 拖动排序；提示使用系统 tooltip。
+- 输入栏组名无下箭头，日历图标仅悬停显示，日期仅显式设置时显示；组头不显示数量。
+- 编辑输入区使用 rule 18% 浅色底，圆角 6，左右外扩 6，文字不位移。

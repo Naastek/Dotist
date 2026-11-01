@@ -118,7 +118,9 @@ final class NativeStoreTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(store.listTasks().first { $0.id == child.id }).category, "life")
         XCTAssertThrowsError(try store.patchTask(id: child.id, category: "study"))
         XCTAssertThrowsError(try store.reparent(parent.id, parentId: child.id))
-        XCTAssertThrowsError(try store.addTask(title: "第三级", category: "work", parentId: child.id))
+        let grandchild = try store.addTask(title: "第三级", category: "work", parentId: child.id)
+        XCTAssertEqual(grandchild.category, "life")
+        XCTAssertEqual(try store.depth(of: grandchild.id), 2)
     }
 
     func testRestoreOnlyRestoresTheSameDeletionBatch() throws {

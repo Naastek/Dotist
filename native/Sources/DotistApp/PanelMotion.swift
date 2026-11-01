@@ -312,13 +312,7 @@ private struct FloatingBubble: View {
                     .frame(width: width, height: 48, alignment: motion.bubbleOnRight ? .leading : .trailing)
                     .accessibilityHidden(true)
                 ZStack {
-                    if let groupName {
-                        Text(String(groupName.prefix(2))).font(DotistDesign.font(15, weight: .semibold, serif: true, language: model.language)).foregroundColor(DotistDesign.ink)
-                    } else if remaining == 0 && total > 0 {
-                        Image(systemName: "checkmark").font(.system(size: 20, weight: .semibold)).foregroundColor(DotistDesign.accent)
-                    } else {
-                        Text("\(remaining)").font(DotistDesign.font(20, weight: .semibold, language: model.language)).monospacedDigit().foregroundColor(DotistDesign.ink)
-                    }
+                    Text("\(remaining)").font(DotistDesign.font(20, weight: .semibold, language: model.language)).monospacedDigit().foregroundColor(DotistDesign.ink)
                 }.frame(width: 48, height: 48).contentShape(Circle())
             }.frame(width: width, height: 48, alignment: motion.bubbleOnRight ? .trailing : .leading)
                 .contentShape(Rectangle())

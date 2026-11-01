@@ -1,6 +1,6 @@
 @import url("https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500&family=Noto+Serif+SC:wght@600&family=Source+Sans+3:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,600&display=swap");
 /* Dotist v4 — 预览用样式。每个类都对应一个 SwiftUI 视图（见各组件 README）。
-   禁用：下划线指示、前置小圆点、左侧竖线、圆角底板选中、编辑放大+下划线、进度环。 */
+   禁用：下划线指示、前置小圆点、左侧竖线、圆角底板选中、编辑放大+下划线、悬浮球进度环或弧。 */
 *{box-sizing:border-box}
 body{margin:0;font-family:var(--font-sans);color:var(--ink);-webkit-font-smoothing:antialiased}
 .dt-desk{position:relative;overflow:hidden;padding:24px;background:radial-gradient(60% 50% at 15% 20%,#9fc3d8 0%,transparent 70%),radial-gradient(50% 45% at 90% 15%,#c9b8e6 0%,transparent 70%),radial-gradient(60% 50% at 70% 95%,#8fb9b0 0%,transparent 70%),linear-gradient(160deg,#dfe6ee,#cfd8e3)}
@@ -91,3 +91,8 @@ body{margin:0;font-family:var(--font-sans);color:var(--ink);-webkit-font-smoothi
 .dt-spec td .dt-ic{display:inline-grid}
 .dt-guide{position:absolute;top:0;bottom:0;width:0;border-left:1px dashed #d0342c;opacity:.8;pointer-events:none}
 .dt-guide i{position:absolute;top:-16px;left:-14px;width:28px;text-align:center;font:600 10px var(--font-sans);color:#d0342c;font-style:normal}
+
+/* v4.1：编辑底仅作用于输入区；收起以外的顶栏工具及输入栏日历悬停显示。 */
+.dt-head .dt-ic:not(:last-child){opacity:0}.dt-head:hover .dt-ic{opacity:1}
+.dt-composer .dt-ic{opacity:0}.dt-composer:hover .dt-ic{opacity:1}
+.dt-gh em{display:none}

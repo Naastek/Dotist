@@ -124,7 +124,9 @@ public final class TaskStore: @unchecked Sendable {
                 try Self.validateDate(value.dueDate)
                 let group = try Self.resolveGroup(db, value.category)
                 let parent = try value.parentId.map { try Self.task(db, $0) }
-                guard parent?.parentId == nil else { throw TaskStoreError("子任务下不能再添加子任务") }
+                if let parent, TaskHierarchy(try Self.tasks(db)).depth(of: parent.id) >= DotistTask.maxDepth {
+                    throw TaskStoreError("最多支持 5 层任务")
+                }
                 let category = parent?.category ?? group
                 let position = try Int64.fetchOne(db, sql: "SELECT COALESCE(MAX(position),-1)+1 FROM tasks WHERE category=? AND parent_id IS ? AND deleted_at IS NULL",
                                                  arguments: [category, value.parentId]) ?? 0
@@ -157,7 +159,7 @@ public final class TaskStore: @unchecked Sendable {
             try Self.record(db, updated, kind: "update", base: old.revision)
             let completeChildren = status == .done && !old.completed
             if completeChildren || category != old.category {
-                for child in try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE parent_id=? AND deleted_at IS NULL", arguments: [id]) {
+                for child in TaskHierarchy(try Self.tasks(db)).descendants(of: id) {
                     // The Today view uses updatedAt as completion history; keep unchanged completed children intact.
                     if child.completed && category == old.category { continue }
                     try db.execute(sql: "UPDATE tasks SET category=?,status=?,completed=?,updated_at=?,revision=revision+1 WHERE id=?",
@@ -181,9 +183,9 @@ public final class TaskStore: @unchecked Sendable {
 
     public func deleteTask(_ id: String) throws {
         try database.write { db in
-            _ = try Self.task(db, id)
             let now = Self.timestamp()
-            for task in try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE (id=? OR parent_id=?) AND deleted_at IS NULL", arguments: [id, id]) {
+            let root = try Self.task(db, id)
+            for task in [root] + TaskHierarchy(try Self.tasks(db)).descendants(of: id) {
                 try db.execute(sql: "UPDATE tasks SET deleted_at=?,updated_at=?,revision=revision+1 WHERE id=?", arguments: [now, now, task.id])
                 try Self.record(db, Self.task(db, task.id, deleted: true), kind: "delete", base: task.revision)
             }
@@ -194,12 +196,16 @@ public final class TaskStore: @unchecked Sendable {
         try database.write { db in
             let old = try Self.task(db, id, deleted: true)
             guard let stamp = old.deletedAt else { throw TaskStoreError("任务没有被删除") }
-            if let parent = old.parentId { _ = try Self.task(db, parent) }
-            guard try String.fetchOne(db, sql: "SELECT id FROM task_groups WHERE id=? AND deleted_at IS NULL", arguments: [old.category]) != nil else {
+            let parent = try old.parentId.map { try Self.task(db, $0) }
+            let category = parent?.category ?? old.category
+            guard try String.fetchOne(db, sql: "SELECT id FROM task_groups WHERE id=? AND deleted_at IS NULL", arguments: [category]) != nil else {
                 throw TaskStoreError("所属分组已删除，请先恢复分组")
             }
-            for task in try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE (id=? OR parent_id=?) AND deleted_at=?", arguments: [id, id, stamp]) {
-                try db.execute(sql: "UPDATE tasks SET deleted_at=NULL,updated_at=?,revision=revision+1 WHERE id=?", arguments: [Self.timestamp(), task.id])
+            let deleted = try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE deleted_at=?", arguments: [stamp])
+            let family = [old] + TaskHierarchy(deleted).descendants(of: id)
+            try Self.validateParent(TaskHierarchy(try Self.tasks(db) + family), id: id, parent: parent)
+            for task in family {
+                try db.execute(sql: "UPDATE tasks SET deleted_at=NULL,category=?,updated_at=?,revision=revision+1 WHERE id=?", arguments: [category, Self.timestamp(), task.id])
                 try Self.record(db, Self.task(db, task.id), kind: "restore", base: task.revision)
             }
             return try Self.task(db, id)
@@ -277,63 +283,121 @@ public final class TaskStore: @unchecked Sendable {
         }
     }
 
+    /// Snapshot queries include all active descendants, independently of UI expansion.
+    public func children(of id: String) throws -> [DotistTask] {
+        try database.read { TaskHierarchy(try Self.tasks($0)).children(of: id) }
+    }
+    public func depth(of id: String) throws -> Int {
+        try database.read { TaskHierarchy(try Self.tasks($0)).depth(of: id) }
+    }
+    public func descendants(of id: String) throws -> [DotistTask] {
+        try database.read { TaskHierarchy(try Self.tasks($0)).descendants(of: id) }
+    }
+    public func subtreeHeight(of id: String) throws -> Int {
+        try database.read { TaskHierarchy(try Self.tasks($0)).subtreeHeight(of: id) }
+    }
+
     @discardableResult public func reparent(_ id: String, parentId: String?) throws -> DotistTask {
         try database.write { db in
             let old = try Self.task(db, id)
-            let now = Self.timestamp()
             if let parentId {
-                guard parentId != id else { throw TaskStoreError("不能缩进到自己下面") }
                 let parent = try Self.task(db, parentId)
-                guard parent.parentId == nil else { throw TaskStoreError("只支持一级子任务") }
-                guard try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM tasks WHERE parent_id=? AND deleted_at IS NULL", arguments: [id]) == 0 else { throw TaskStoreError("有子任务的任务不能再缩进") }
+                try Self.validateParent(TaskHierarchy(try Self.tasks(db)), id: id, parent: parent)
                 if old.parentId == parentId { return old }
-                let position = try Int64.fetchOne(db, sql: "SELECT COALESCE(MAX(position),-1)+1 FROM tasks WHERE parent_id=? AND deleted_at IS NULL", arguments: [parentId]) ?? 0
-                try db.execute(sql: "UPDATE tasks SET parent_id=?,category=?,position=?,updated_at=?,revision=revision+1 WHERE id=?", arguments: [parentId, parent.category, position, now, id])
+                try Self.commitReorder(db, id, groupID: parent.category, parentID: parentId, beforeID: nil)
             } else {
-                guard let parentId = old.parentId else { throw TaskStoreError("这已经是一级任务") }
-                let parent = try Self.task(db, parentId)
-                for shifted in try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE category=? AND parent_id IS NULL AND deleted_at IS NULL AND position>?", arguments: [parent.category, parent.position]) {
-                    try db.execute(sql: "UPDATE tasks SET position=position+1,updated_at=?,revision=revision+1 WHERE id=?", arguments: [shifted.completed ? shifted.updatedAt : now, shifted.id])
-                    try Self.record(db, Self.task(db, shifted.id), kind: "reorder", base: shifted.revision)
-                }
-                try db.execute(sql: "UPDATE tasks SET parent_id=NULL,position=?,updated_at=?,revision=revision+1 WHERE id=?", arguments: [parent.position + 1, now, id])
+                guard old.parentId != nil else { throw TaskStoreError("这已经是一级任务") }
+                try Self.outdent(db, ids: [id])
             }
-            let task = try Self.task(db, id)
-            try Self.record(db, task, kind: "update", base: old.revision)
-            return task
+            return try Self.task(db, id)
         }
     }
 
-    /// Moves one task and its children atomically. `beforeID` is a destination
-    /// sibling; nil appends. Invalid or stale anchors roll the entire move back.
-    public func commitReorder(_ id: String, groupID: String, parentID: String?, beforeID: String?) throws {
+    /// Selected descendants travel with their selected ancestor. All validation
+    /// and writes (including outbox records) belong to this single transaction.
+    @discardableResult public func indent(ids: [String]) throws -> [DotistTask] {
         try database.write { db in
-            let old = try Self.task(db, id)
-            guard try Self.groups(db).contains(where: { $0.id == groupID }) else { throw TaskStoreError("找不到分组") }
-            let children = try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE parent_id=? AND deleted_at IS NULL", arguments: [id])
-            if let parentID {
-                guard parentID != id, children.isEmpty else { throw TaskStoreError("有子任务的任务不能再缩进") }
-                let parent = try Self.task(db, parentID)
-                guard parent.parentId == nil, parent.category == groupID else { throw TaskStoreError("只支持一级子任务") }
+            let hierarchy = TaskHierarchy(try Self.tasks(db))
+            for id in Set(ids) { _ = try Self.task(db, id) }
+            let selected = hierarchy.selectionRoots(ids: ids, groupIDs: try Self.groups(db).map(\.id))
+            guard let first = selected.first else { return [] }
+            let siblings = first.parentId.map { hierarchy.children(of: $0) }
+                ?? hierarchy.outline().filter { $0.parentId == nil && $0.category == first.category }
+            let selectedIDs = Set(ids)
+            guard let index = siblings.firstIndex(where: { $0.id == first.id }),
+                  let parent = siblings.prefix(index).last(where: { !selectedIDs.contains($0.id) }) else {
+                throw TaskStoreError("前面没有可以作为父任务的任务")
             }
-            let peers = try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE category=? AND parent_id IS ? AND deleted_at IS NULL AND id<>? ORDER BY position,id", arguments: [groupID, parentID, id])
-            let anchor: DotistTask?
-            if let beforeID {
-                guard let found = peers.first(where: { $0.id == beforeID }) else { throw TaskStoreError("找不到任务") }
-                anchor = found
-            } else { anchor = peers.last }
-            let now = Self.timestamp()
-            try db.execute(sql: "UPDATE tasks SET category=?,parent_id=?,updated_at=?,revision=revision+1 WHERE id=?", arguments: [groupID, parentID, old.completed ? old.updatedAt : now, id])
-            let moved = try Self.task(db, id)
-            try Self.record(db, moved, kind: "update", base: old.revision)
-            if let anchor {
-                try Self.reorder(db, task: moved, target: anchor, after: beforeID == nil)
+            for task in selected { try Self.validateParent(hierarchy, id: task.id, parent: parent) }
+            for task in selected {
+                try Self.commitReorder(db, task.id, groupID: parent.category, parentID: parent.id, beforeID: nil)
             }
-            if old.category != groupID {
-                for child in children {
-                    try db.execute(sql: "UPDATE tasks SET category=?,updated_at=?,revision=revision+1 WHERE id=?", arguments: [groupID, child.completed ? child.updatedAt : now, child.id])
-                    try Self.record(db, Self.task(db, child.id), kind: "update", base: child.revision)
-                }
+            return try selected.map { try Self.task(db, $0.id) }
+        }
+    }
+
+    @discardableResult public func outdent(ids: [String]) throws -> [DotistTask] {
+        try database.write { try Self.outdent($0, ids: ids) }
+    }
+
+    @discardableResult private static func outdent(_ db: Database, ids: [String]) throws -> [DotistTask] {
+        let hierarchy = TaskHierarchy(try tasks(db))
+        for id in Set(ids) { _ = try task(db, id) }
+        let selected = hierarchy.selectionRoots(ids: ids, groupIDs: try groups(db).map(\.id))
+        var lastAfterParent: [String: String] = [:]
+        for old in selected {
+            guard let parentID = old.parentId else { continue }
+            let parent = try task(db, parentID)
+            let anchorID = lastAfterParent[parentID] ?? parentID
+            let peers = try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE category=? AND parent_id IS ? AND deleted_at IS NULL ORDER BY position,id", arguments: [parent.category, parent.parentId])
+            guard let index = peers.firstIndex(where: { $0.id == anchorID }) else { throw TaskStoreError("找不到任务") }
+            let beforeID = peers.dropFirst(index + 1).first?.id
+            try commitReorder(db, old.id, groupID: parent.category, parentID: parent.parentId, beforeID: beforeID)
+            lastAfterParent[parentID] = old.id
+        }
+        return try selected.map { try task(db, $0.id) }
+    }
+
+    private static func validateParent(_ hierarchy: TaskHierarchy, id: String, parent: DotistTask?) throws {
+        if let parent {
+            guard parent.id != id, !hierarchy.descendants(of: id).contains(where: { $0.id == parent.id }) else {
+                throw TaskStoreError("不能将任务移到自己或自己的后代下面")
+            }
+        }
+        let depth = parent.map { hierarchy.depth(of: $0.id) + 1 } ?? 0
+        guard depth + hierarchy.subtreeHeight(of: id) <= DotistTask.maxDepth else {
+            throw TaskStoreError("最多支持 5 层任务")
+        }
+    }
+
+    /// Moves an entire subtree atomically. `beforeID` must be a destination
+    /// sibling; nil appends. A stale anchor rolls back every write.
+    public func commitReorder(_ id: String, groupID: String, parentID: String?, beforeID: String?) throws {
+        try database.write { try Self.commitReorder($0, id, groupID: groupID, parentID: parentID, beforeID: beforeID) }
+    }
+
+    private static func commitReorder(_ db: Database, _ id: String, groupID: String, parentID: String?, beforeID: String?) throws {
+        let old = try task(db, id)
+        guard try groups(db).contains(where: { $0.id == groupID }) else { throw TaskStoreError("找不到分组") }
+        let hierarchy = TaskHierarchy(try tasks(db))
+        let parent = try parentID.map { try task(db, $0) }
+        try validateParent(hierarchy, id: id, parent: parent)
+        guard parent == nil || parent?.category == groupID else { throw TaskStoreError("子任务的分类跟随父任务") }
+        let peers = try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE category=? AND parent_id IS ? AND deleted_at IS NULL AND id<>? ORDER BY position,id", arguments: [groupID, parentID, id])
+        let anchor: DotistTask?
+        if let beforeID {
+            guard let found = peers.first(where: { $0.id == beforeID }) else { throw TaskStoreError("找不到任务") }
+            anchor = found
+        } else { anchor = peers.last }
+        let now = timestamp()
+        try db.execute(sql: "UPDATE tasks SET category=?,parent_id=?,updated_at=?,revision=revision+1 WHERE id=?", arguments: [groupID, parentID, old.completed ? old.updatedAt : now, id])
+        let moved = try task(db, id)
+        try record(db, moved, kind: "update", base: old.revision)
+        if let anchor { try reorder(db, task: moved, target: anchor, after: beforeID == nil) }
+        if old.category != groupID {
+            for child in hierarchy.descendants(of: id) {
+                try db.execute(sql: "UPDATE tasks SET category=?,updated_at=?,revision=revision+1 WHERE id=?", arguments: [groupID, child.completed ? child.updatedAt : now, child.id])
+                try record(db, task(db, child.id), kind: "update", base: child.revision)
             }
         }
     }

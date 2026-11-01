@@ -24,13 +24,9 @@ struct MainWindow: View {
     @State private var selectedSuggestion = -1
     @State private var category = DotistGroup.inboxID
     @State private var dueDate: Date?
-    @State private var addingChild: String?
     @State private var addingToGroup: String?
     @State private var groupTitles: [String: String] = [:]
-    @State private var childTitles: [String: String] = [:]
     @State private var groupSubmitting = false
-    @State private var childSubmitting = false
-    @State private var groupIndented: Set<String> = []
     @State private var editing: String?
     @State private var draftAfter: String?
     @State private var draftTitle = ""
@@ -48,7 +44,6 @@ struct MainWindow: View {
     @State private var pickingTask: String?
     @State private var hoveredTask: String?
     @State private var hoveredGroup: String?
-    @FocusState private var focusedTask: String?
     @State private var customStart: String?
     @State private var customEnd: String?
     @State private var upcomingOpen = false
@@ -62,6 +57,10 @@ struct MainWindow: View {
     @State private var dragCancelled = false
     @GestureState private var reorderGestureActive = false
     @StateObject private var reorderRuntime = TaskReorderRuntime()
+    @State var dragMotion = TaskDragMotion()
+    @StateObject var selection = TaskSelectionController()
+    @State private var notice: String?
+    @State private var noticeToken = UUID()
 
     private var textColor: Color { DotistDesign.ink }
     private var panelTasks: [DotistTask] {
@@ -95,8 +94,9 @@ struct MainWindow: View {
         .coordinateSpace(name: Self.listSpace)
         .overlay(alignment: .topLeading) { liftedTaskBlock }
         .background(TaskReorderInteractionGuard(rowFrames: rowFrames.map(\.frame), dragging: drag != nil, cancel: cancelReorder))
-        .onPreferenceChange(TaskListRowFrame.Key.self) { rowFrames = $0 }
-        .onPreferenceChange(TaskListGroupFrame.Key.self) { groupFrames = $0 }
+        .onPreferenceChange(TaskListRowFrame.Key.self) { if rowFrames != $0 { rowFrames = $0 } }
+        .onPreferenceChange(TaskListGroupFrame.Key.self) { if groupFrames != $0 { groupFrames = $0 } }
+        .onPreferenceChange(TaskGhostFrameKey.self) { reorderRuntime.ghostFrame = $0 }
         .onPreferenceChange(TaskShelfFrameKey.self) { shelfFrames = $0 }
         .onChange(of: reorderGestureActive) { active in
             if !active {
@@ -105,16 +105,15 @@ struct MainWindow: View {
             }
         }
         .onReceive(Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect()) { _ in autoScrollReorder() }
-        .onDisappear { cancelReorder() }
+        .onDisappear { cancelReorder(); leaveInputs(); selection.update { $0.clear() } }
         .onHover { panelHovered = $0 }
         .foregroundColor(textColor)
         .onAppear { category = state.groupID ?? DotistGroup.inboxID }
         .onChange(of: state.groupID) { id in
             cancelReorder()
             category = id ?? DotistGroup.inboxID
-            if addingToGroup != id { addingToGroup = nil }
-            addingChild = nil
-            if let id = editing, let task = model.tasks.first(where: { $0.id == id }) { saveEditing(task) }
+            leaveInputs()
+            selection.update { $0.clear() }
         }
         .onChange(of: model.groups) { groups in
             if let id = state.groupID, !groups.contains(where: { $0.id == id }) { state.groupID = DotistGroup.inboxID }
@@ -124,7 +123,7 @@ struct MainWindow: View {
             if let tag = state.activeTag, !model.tagCounts.contains(where: { $0.tag == tag && $0.open > 0 }) { state.activeTag = nil }
         }
         .onChange(of: model.scope) { scope in if primary { state.scope = scope } }
-        .onChange(of: state.scope) { scope in cancelReorder(); if primary { model.scope = scope } }
+        .onChange(of: state.scope) { scope in cancelReorder(); leaveInputs(); selection.update { $0.clear() }; if primary { model.scope = scope } }
         .onChange(of: model.scopeNavigation) { _ in
             guard primary else { return }
             state.activeTag = nil
@@ -133,8 +132,15 @@ struct MainWindow: View {
         }
     }
 
+    #if DEBUG
+    static var taskListRenders = 0
+    #endif
+
     private var taskList: some View {
-        ScrollViewReader { proxy in
+        #if DEBUG
+        Self.taskListRenders += 1
+        #endif
+        return ScrollViewReader { proxy in
             GeometryReader { space in
                 ScrollView {
                     // An eager stack keeps the gesture source alive while auto-scrolling
@@ -158,6 +164,7 @@ struct MainWindow: View {
                     withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration: 0.22)) { proxy.scrollTo(id, anchor: .top) }
                     model.gotoGroup = nil
                 }
+                .onReceive(selection.navigation) { id in proxy.scrollTo(id, anchor: .center) }
                 .onChange(of: model.focusNavigation) { _ in
                     guard primary, let id = model.focusId else { return }
                     proxy.scrollTo(id, anchor: .center)
@@ -189,7 +196,12 @@ struct MainWindow: View {
         GlassEffectContainer(spacing: 12) {
             Group {
                 if drag != nil && state.groupID != nil { groupShelf } else { composerBar }
-            }.overlay(alignment: .top) { undoToast }
+            }.overlay(alignment: .top) {
+                if let notice {
+                    Text(model.text(notice)).font(font(13)).foregroundStyle(DotistDesign.muted)
+                        .padding(.horizontal, 16).frame(height: 36).glassEffect(.regular, in: .capsule).fixedSize().offset(y: -48)
+                } else { undoToast }
+            }
         }
     }
 
@@ -247,43 +259,41 @@ struct MainWindow: View {
         if let drag, let target = drag.target {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(drag.visibleBlock, id: \.task.id) { row in
-                    let level = row.task.id == drag.taskID ? target.level : 1
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Circle().strokeBorder(DotistDesign.checkStroke, lineWidth: 1.25)
-                            .frame(width: level == 1 ? 13 : 16, height: level == 1 ? 13 : 16)
-                            .frame(width: level == 1 ? 14 : 18, height: 20, alignment: .leading)
-                            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-                        Text(row.task.title).font(font(13)).foregroundColor(DotistDesign.ink)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }.padding(.leading, level == 1 ? 26 : 0)
-                        .frame(height: row.frame.height)
+                    let depth = ghostDepth(row, drag: drag, target: target)
+                    TaskRowLayout(depth: depth) {
+                        TaskCheckmark(depth: depth, completed: false, children: [], emphasized: false)
+                        Text(row.task.title).font(font(13)).foregroundStyle(DotistDesign.ink).fixedSize(horizontal: false, vertical: true)
+                        Color.clear.frame(width: 0, height: 0)
+                    }.frame(height: row.frame.height)
                 }
-            }.opacity(0.35).padding(.leading, -compensatingIndent)
-                .allowsHitTesting(false).accessibilityHidden(true)
+            }.opacity(0.35).allowsHitTesting(false).accessibilityHidden(true)
+                .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.12), value: target.level)
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: TaskGhostFrameKey.self, value: geometry.frame(in: .named(Self.listSpace)))
+                })
         }
+    }
+
+    private func ghostDepth(_ row: TaskListRowFrame, drag: TaskListDrag, target: TaskReorderEngine.Target) -> Int {
+        let hierarchy = TaskHierarchy(model.tasks)
+        let root = ([row.task] + hierarchy.ancestors(of: row.task.id)).first { drag.rootIDs.contains($0.id) }
+        return min(4, target.level + model.depth(of: row.task) - (root.map { model.depth(of: $0) } ?? drag.sourceDepth))
     }
 
     @ViewBuilder private var liftedTaskBlock: some View {
         if let drag {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(drag.visibleBlock, id: \.task.id) { row in
-                    liftedRow(row, headFrame: drag.startFrame)
-                }
-            }.frame(width: drag.startFrame.width, alignment: .leading)
-                .background(DotistDesign.paper.opacity(0.96))
-                .overlay { Rectangle().strokeBorder(DotistDesign.rule, lineWidth: 0.5) }
-                .shadow(color: .black.opacity(0.07), radius: 3, y: 2)
-                .opacity(0.96)
-                .offset(x: drag.startFrame.minX, y: drag.startFrame.minY + drag.location.y - drag.startLocation.y)
-                .allowsHitTesting(false).accessibilityHidden(true)
+            TaskLiftedLayer(motion: dragMotion, origin: drag.startFrame.origin, start: drag.startLocation, content:
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(drag.visibleBlock, id: \.task.id) { row in
+                        rowContent(row.task, children: model.children(of: row.task), sub: row.sub, allTasks: row.allTasks, previous: nil, hideDue: row.hideDue, titleParts: model.tags(for: row.task), actionsVisible: false, selected: selection.value.ids.contains(row.task.id))
+                            .frame(width: row.frame.width, height: row.frame.height)
+                    }
+                }.frame(width: drag.startFrame.width, alignment: .leading)
+                    .background(DotistDesign.paper.opacity(0.96))
+                    .overlay { Rectangle().strokeBorder(DotistDesign.rule, lineWidth: 0.5) }
+                    .shadow(color: .black.opacity(0.07), radius: 3, y: 2)
+            ).allowsHitTesting(false).accessibilityHidden(true)
         }
-    }
-
-    private func liftedRow(_ row: TaskListRowFrame, headFrame: CGRect) -> some View {
-        let task = row.task
-        return rowContent(task, children: row.allTasks ? [] : model.visibleChildren(of: task), sub: row.sub, allTasks: row.allTasks, previous: nil, hideDue: row.hideDue, titleParts: model.tags(for: task), actionsVisible: false)
-            .frame(width: row.frame.width, height: row.frame.height)
-            .padding(.leading, max(0, row.frame.minX - headFrame.minX))
     }
 
     private func reorderGesture(_ task: DotistTask) -> some Gesture {
@@ -293,12 +303,12 @@ struct MainWindow: View {
                 guard !dragCancelled, editing == nil, draftAfter == nil else { return }
                 if drag == nil { beginReorder(task, at: value.startLocation) }
                 guard drag?.taskID == task.id, drag?.committing == false else { return }
-                drag?.location = value.location
+                dragMotion.location = value.location
                 retargetReorder()
             }
             .onEnded { value in
                 guard !dragCancelled, drag?.taskID == task.id, drag?.committing == false else { return }
-                drag?.location = value.location
+                dragMotion.location = value.location
                 retargetReorder()
                 finishReorder()
             }
@@ -306,48 +316,81 @@ struct MainWindow: View {
 
     private func beginReorder(_ task: DotistTask, at start: CGPoint) {
         guard let head = rowFrames.first(where: { $0.task.id == task.id }) else { return }
-        let ids = Set([task.id] + model.tasks.filter { $0.parentId == task.id }.map(\.id))
-        let block = rowFrames.filter { ids.contains($0.task.id) }.sorted { $0.frame.minY < $1.frame.minY }
-        drag = TaskListDrag(taskID: task.id, blockIDs: ids, visibleBlock: block, startFrame: head.frame, startLocation: start, location: start)
+        let hierarchy = TaskHierarchy(model.tasks)
+        let selectedIDs = selection.value.ids.contains(task.id) ? Array(selection.value.ids) : [task.id]
+        let roots = hierarchy.selectionRoots(ids: selectedIDs, groupIDs: model.groups.map(\.id))
+            .sorted { a, b in (displayOrder.firstIndex(of: a.id) ?? 0) < (displayOrder.firstIndex(of: b.id) ?? 0) }
+        let ids = Set(roots.flatMap { [$0.id] + model.descendants(of: $0).map(\.id) })
+        let block = rowFrames.filter { ids.contains($0.task.id) && $0.frame.height > 0 }.sorted { $0.frame.minY < $1.frame.minY }
+        guard let first = block.first else { return }
+        dragMotion.location = start
+        reorderRuntime.ghostFrame = .zero
+        drag = TaskListDrag(taskID: task.id, blockIDs: ids, visibleBlock: block, startFrame: CGRect(x: head.frame.minX, y: first.frame.minY, width: head.frame.width, height: block.reduce(0) { $0 + $1.frame.height }), startLocation: start,
+                            rootIDs: roots.map(\.id), sourceDepth: roots.first.map { model.depth(of: $0) } ?? model.depth(of: task), subtreeHeight: roots.map { model.subtreeHeight(of: $0) }.max() ?? 0)
         model.beginDrag(task.id, scope: "list:\(state.scope)")
         model.focusId = task.id
+        retargetReorder()
     }
 
     private func retargetReorder() {
-        guard let drag, !drag.committing else { return }
-        if state.groupID != nil, let shelf = shelfFrames.first(where: { $0.value.contains(drag.location) })?.key {
-            shelfTarget = shelf
-            self.drag?.target = .init(groupID: shelf, slot: Int.max, level: 0, parentID: nil, beforeID: nil)
+        guard var next = drag, !next.committing else { return }
+        let location = dragMotion.location
+        let shelf = state.groupID != nil ? shelfFrames.first(where: { $0.value.contains(location) })?.key : nil
+        if shelfTarget != shelf { shelfTarget = shelf }
+        if let shelf {
+            let target = TaskReorderEngine.Target(groupID: shelf, slot: Int.max, level: 0, parentID: nil, beforeID: nil)
+            if next.target != target { next.target = target; drag = next }
             return
         }
-        shelfTarget = nil
         let groups = groupFrames.sorted { $0.frame.minY < $1.frame.minY }
         let engineGroups = groups.map { TaskReorderEngine.Group(id: $0.id, minY: $0.frame.minY, maxY: $0.frame.maxY) }
         let rows = rowFrames.sorted { $0.frame.midY < $1.frame.midY }.map { row in
-            TaskReorderEngine.Row(id: row.task.id, level: row.task.parentId == nil ? 0 : 1, groupID: row.task.category, parentID: row.task.parentId, midY: row.frame.midY)
+            TaskReorderEngine.Row(id: row.task.id, depth: model.depth(of: row.task), groupID: row.task.category, parentID: row.task.parentId, midY: row.frame.midY)
         }
-        let target = TaskReorderEngine.target(rows: rows, groups: engineGroups, draggedID: drag.taskID, blockIDs: drag.blockIDs, startY: drag.startLocation.y, offsetY: drag.location.y - drag.startLocation.y, offsetX: drag.location.x - drag.startLocation.x, indentStep: 26)
-        if target != drag.target { self.drag?.target = target }
-        let rest = rows.filter { $0.groupID == target?.groupID && !drag.blockIDs.contains($0.id) }
+        let target = TaskReorderEngine.target(rows: rows, groups: engineGroups, draggedID: next.rootIDs.first ?? next.taskID, blockIDs: next.blockIDs, startY: next.startLocation.y, offsetY: location.y - next.startLocation.y, offsetX: location.x - next.startLocation.x, indentStep: 22, subtreeHeight: next.subtreeHeight)
+        let region = groups.first { $0.id == target?.groupID && location.y >= $0.frame.minY && location.y < $0.frame.maxY }
+            ?? groups.filter { $0.id == target?.groupID }.min { abs($0.frame.midY - location.y) < abs($1.frame.midY - location.y) }
+        // Pointer movement is published ONLY to TaskLiftedLayer. The outline
+        // changes once per slot/level/region transition, never per mouse event.
+        guard target != next.target || region?.region != next.region else { return }
+        let rest = rows.filter { $0.groupID == target?.groupID && !next.blockIDs.contains($0.id) }
         let slot = target?.slot ?? 0
-        self.drag?.ghostBeforeID = rest.indices.contains(slot) ? rest[slot].id : nil
-        self.drag?.ghostAfterID = slot >= rest.count ? rest.last?.id : nil
-        self.drag?.targetIsEmpty = rest.isEmpty
-        let region = groups.first { $0.id == target?.groupID && drag.location.y >= $0.frame.minY && drag.location.y < $0.frame.maxY }
-            ?? groups.filter { $0.id == target?.groupID }.min { abs($0.frame.midY - drag.location.y) < abs($1.frame.midY - drag.location.y) }
-        if region?.region != drag.region { self.drag?.region = region?.region }
+        next.target = target
+        next.ghostBeforeID = rest.indices.contains(slot) ? rest[slot].id : nil
+        next.ghostAfterID = slot >= rest.count ? rest.last?.id : nil
+        next.targetIsEmpty = rest.isEmpty
+        next.region = region?.region
+        withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.16)) { drag = next }
     }
 
     private func finishReorder() {
         guard let drag, !drag.committing else { return }
-        // A release outside the list or shelf abandons the move.
-        guard let target = drag.target, listViewport.contains(drag.location) || shelfTarget != nil else { cancelReorder(); return }
+        guard let target = drag.target, listViewport.contains(dragMotion.location) || shelfTarget != nil else { cancelReorder(); return }
         self.drag?.committing = true
-        model.commitReorder(taskID: drag.taskID, to: target, completed: {
-            if let parent = target.parentID { state.expanded.insert(parent) }
-            if let moved = model.tasks.first(where: { $0.id == drag.taskID }), moved.completed { state.folded.insert(target.groupID) }
-            clearReorder()
-        }, failed: { clearReorder() })
+        let reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if reorderRuntime.ghostFrame != .zero && shelfTarget == nil {
+            withAnimation(reduced ? nil : .easeOut(duration: 0.14)) {
+                dragMotion.location.y = drag.startLocation.y + reorderRuntime.ghostFrame.minY - drag.startFrame.minY
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (reduced ? 0 : 0.14)) {
+            let complete = {
+                if let parent = target.parentID {
+                    state.expanded.insert(parent)
+                    state.expanded.formUnion(TaskHierarchy(model.tasks).ancestors(of: parent).map(\.id))
+                }
+                clearReorder()
+            }
+            if drag.rootIDs.count == 1 {
+                model.commitReorder(taskID: drag.rootIDs[0], to: target, completed: complete, failed: { clearReorder() })
+            } else {
+                // Preflight every root before applying the gesture. Core owns
+                // each subtree move and the model freezes observation until done.
+                model.change(completed: complete, failed: { clearReorder() }) { store in
+                    try TaskDragBatch.commit(ids: drag.rootIDs, target: target, store: store)
+                }
+            }
+        }
     }
 
     private func cancelReorder() {
@@ -364,8 +407,8 @@ struct MainWindow: View {
 
     private func autoScrollReorder() {
         guard let drag, !drag.committing, shelfTarget == nil,
-              drag.location.x >= listViewport.minX, drag.location.x <= listViewport.maxX else { return }
-        let y = drag.location.y
+              dragMotion.location.x >= listViewport.minX, dragMotion.location.x <= listViewport.maxX else { return }
+        let y = dragMotion.location.y
         let delta: CGFloat
         if y >= listViewport.minY - 24 && y < listViewport.minY + 24 {
             delta = -max(2, min(14, (listViewport.minY + 24 - y) * 0.45))
@@ -502,31 +545,25 @@ struct MainWindow: View {
                         HStack(spacing: 2) {
                             Button { showGroupPanel(group.id) } label: { Image(systemName: "arrow.up.right.square").frame(width: 22, height: 22) }
                                 .accessibilityLabel(Text(model.text("独立面板 {name}").replacingOccurrences(of: "{name}", with: group.name)))
-                            Button { groupIndented.remove(group.id); addingToGroup = group.id } label: { Image(systemName: "plus").frame(width: 22, height: 22) }
+                            Button { beginGroupDraft(group, after: open.last) } label: { Image(systemName: "plus").frame(width: 22, height: 22) }
                                 .accessibilityLabel(Text(model.text("添加任务（{name}）").replacingOccurrences(of: "{name}", with: group.name)))
                         }.buttonStyle(.plain).font(.system(size: 11)).foregroundColor(DotistDesign.faint)
                             .opacity(hoveredGroup == group.id || addingToGroup == group.id ? 1 : 0)
                     }
                     .contextMenu {
-                        Button(model.text("添加任务")) { groupIndented.remove(group.id); addingToGroup = group.id }
+                        Button(model.text("添加任务")) { beginGroupDraft(group, after: open.last) }
                         Button(model.text("在独立面板中打开")) { showGroupPanel(group.id) }
                     }
                 ForEach(Array(open.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? open[index - 1].id : nil, next: index + 1 < open.count ? open[index + 1].id : nil) }
                 emptyGroupGhost(group.id, region: group.id)
                 if addingToGroup == group.id {
-                    QuickInput(text: Binding(get: { groupTitles[group.id] ?? "" }, set: { groupTitles[group.id] = $0 }), placeholder: model.text(groupIndented.contains(group.id) ? "子任务" : "写下一件小事"), label: model.text("新任务（{name}）").replacingOccurrences(of: "{name}", with: group.name), font: DotistDesign.nativeFont(13, language: model.language), commit: {
-                        let title = (groupTitles[group.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !title.isEmpty, !groupSubmitting else { return }
-                        let parent = groupIndented.contains(group.id) ? open.last?.id : nil
-                        groupSubmitting = true
-                        model.change(completed: {
-                            groupSubmitting = false
-                            if (groupTitles[group.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == title { groupTitles[group.id] = "" }
-                            if let parent { state.expanded.insert(parent) }
-                        }, failed: { groupSubmitting = false }) { _ = try $0.addTask(title: title, category: group.id, parentId: parent) }
-                    }, cancel: { addingToGroup = nil }, cycle: { step in
-                        if step > 0 && !open.isEmpty { groupIndented.insert(group.id) } else { groupIndented.remove(group.id) }
-                    }).padding(.leading, groupIndented.contains(group.id) ? 48 : 26).frame(height: groupIndented.contains(group.id) ? 28 : 32)
+                    TaskRowLayout(depth: 0) {
+                        TaskCheckmark(depth: 0, completed: false, children: [], emphasized: false)
+                        TaskEditor(text: Binding(get: { groupTitles[group.id] ?? "" }, set: { groupTitles[group.id] = $0 }), height: $draftHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("新任务（{name}）").replacingOccurrences(of: "{name}", with: group.name), commit: { saveGroupDraft(group, continuing: true) }, cancel: { clearInputs() }, indent: { _ in }, blur: { saveGroupDraft(group, continuing: false) })
+                            .id("group:\(group.id)").frame(height: draftHeight)
+                        Color.clear.frame(width: 0, height: 0)
+                    }
+
                 }
                 if !completed.isEmpty {
                     Button {
@@ -544,35 +581,17 @@ struct MainWindow: View {
                 .background(groupGeometry(group.id, region: group.id))
     }
 
-    @ViewBuilder private func taskTree(_ task: DotistTask, previous: String?, next: String?) -> some View {
-        let children = model.visibleChildren(of: task)
-        taskRow(task, children: children, sub: false, allTasks: false, previous: previous, next: next)
-        if state.expanded.contains(task.id) {
-            ForEach(Array(children.enumerated()), id: \.element.id) { index, child in
-                taskRow(child, children: [], sub: true, allTasks: false, previous: index > 0 ? children[index - 1].id : nil, next: index + 1 < children.count ? children[index + 1].id : nil).padding(.leading, 26)
-                draftRow(after: child, sub: true).padding(.leading, 26)
+    private func taskTree(_ task: DotistTask, previous: String?, next: String?) -> AnyView {
+        let children = model.visibleChildren(of: task).filter { child in panelTasks.contains { $0.id == child.id } }
+        return AnyView(VStack(alignment: .leading, spacing: 0) {
+            taskRow(task, children: model.children(of: task), sub: model.depth(of: task) > 0, allTasks: false, previous: previous, next: next)
+            if state.expanded.contains(task.id) && model.depth(of: task) < DotistTask.maxDepth {
+                ForEach(Array(children.enumerated()), id: \.element.id) { index, child in
+                    taskTree(child, previous: index > 0 ? children[index - 1].id : nil, next: index + 1 < children.count ? children[index + 1].id : nil)
+                }
             }
-            if addingChild == task.id {
-                QuickInput(text: Binding(get: { childTitles[task.id] ?? "" }, set: { childTitles[task.id] = $0 }), placeholder: model.text("子任务"), label: model.text("新子任务"), font: DotistDesign.nativeFont(13, language: model.language), commit: {
-                    let title = (childTitles[task.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !title.isEmpty, !childSubmitting else { return }
-                    childSubmitting = true
-                    model.change(completed: { childSubmitting = false; if (childTitles[task.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == title { childTitles[task.id] = "" } }, failed: { childSubmitting = false }) { _ = try $0.addTask(title: title, category: task.category, parentId: task.id) }
-                }, cancel: { addingChild = nil }, cycle: { step in
-                    guard step < 0 else { return }
-                    let title = (childTitles[task.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    if title.isEmpty { addingChild = nil; return }
-                    guard !childSubmitting else { return }
-                    childSubmitting = true
-                    model.change(completed: {
-                        childSubmitting = false
-                        if (childTitles[task.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == title { childTitles[task.id] = "" }
-                        addingChild = nil
-                    }, failed: { childSubmitting = false }) { _ = try $0.addTask(title: title, category: task.category) }
-                }).padding(.leading, 48).frame(height: 28)
-            }
-        }
-        draftRow(after: task, sub: false)
+            draftRow(after: task, sub: model.depth(of: task) > 0)
+        })
     }
 
     @ViewBuilder private var filteredTasks: some View {
@@ -682,16 +701,19 @@ struct MainWindow: View {
         let ids = Set(items.map(\.id))
         let children = Dictionary(grouping: items.filter { $0.parentId != nil }, by: { $0.parentId! })
         let heads = items.filter { $0.parentId == nil || !ids.contains($0.parentId!) }
-        let outlined = heads.flatMap { [$0] + (children[$0.id] ?? []) }
+        func outline(_ task: DotistTask) -> [DotistTask] {
+            [task] + (children[task.id] ?? []).flatMap(outline)
+        }
+        let outlined = heads.flatMap(outline)
         return VStack(alignment: .leading, spacing: 0) {
             if state.groupID == nil {
                 Text(group.name).font(font(12, .semibold, serif: true)).foregroundColor(DotistDesign.faint).frame(height: 26)
             }
             ForEach(Array(outlined.enumerated()), id: \.element.id) { index, task in
-                taskRow(task, children: [], sub: task.parentId != nil, allTasks: true, previous: index > 0 ? outlined[index - 1].id : nil, next: index + 1 < outlined.count ? outlined[index + 1].id : nil, hideDue: hideDue)
-                    .padding(.leading, task.parentId != nil ? 26 : 0)
+                taskRow(task, children: model.children(of: task), sub: task.parentId != nil, allTasks: true, previous: index > 0 ? outlined[index - 1].id : nil, next: index + 1 < outlined.count ? outlined[index + 1].id : nil, hideDue: hideDue)
+
                 draftRow(after: task, sub: task.parentId != nil)
-                    .padding(.leading, task.parentId != nil ? 26 : 0)
+
             }
             emptyGroupGhost(group.id, region: region)
         }.background(groupGeometry(group.id, region: region))
@@ -699,31 +721,27 @@ struct MainWindow: View {
 
     private func taskRow(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, next: String?, hideDue: Bool = false) -> some View {
         let titleParts = model.tags(for: task)
-        let actionsVisible = hoveredTask == task.id || focusedTask == task.id || pickingTask == task.id
+        let actionsVisible = hoveredTask == task.id || pickingTask == task.id
         return VStack(alignment: .leading, spacing: 0) {
-            if ghostBeforeID == task.id { taskGhost(compensatingIndent: sub ? 26 : 0) }
+            if ghostBeforeID == task.id { taskGhost(compensatingIndent: 0) }
             interactiveTaskRow(task, children: children, sub: sub, allTasks: allTasks, previous: previous, next: next, hideDue: hideDue, titleParts: titleParts, actionsVisible: actionsVisible)
-            if ghostAfterID == task.id { taskGhost(compensatingIndent: sub ? 26 : 0) }
+            if ghostAfterID == task.id { taskGhost(compensatingIndent: 0) }
         }
     }
 
     private func interactiveTaskRow(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, next: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool) -> some View {
         let carried = drag?.blockIDs.contains(task.id) == true
-        return rowContent(task, children: children, sub: sub, allTasks: allTasks, previous: previous, hideDue: hideDue, titleParts: titleParts, actionsVisible: actionsVisible)
-        .overlay(alignment: .trailing) { rowActions(task, sub: sub, allTasks: allTasks, hideDue: hideDue, visible: actionsVisible) }
+        return TaskSelectableContent(selection: selection.row(task.id)) { selected, focused in
+            rowContent(task, children: children, sub: sub, allTasks: allTasks, previous: previous, hideDue: hideDue, titleParts: titleParts, actionsVisible: actionsVisible || focused, selected: selected, focused: focused)
+                .overlay(alignment: .trailing) { rowActions(task, sub: sub, allTasks: allTasks, hideDue: hideDue, visible: actionsVisible || focused) }
+        }
         .frame(minHeight: sub ? 28 : 32)
         .background { if editing == task.id { RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(0.18)).padding(.horizontal, -6) } }
         .contentShape(Rectangle())
-        .focusable(true).focused($focusedTask, equals: task.id).focusEffectDisabled()
-        .onKeyPress(keys: [.return, .space, .tab], phases: .down) { press in
+        .onKeyPress(keys: [.return, .space, .tab, .escape, .upArrow, .downArrow], phases: .down) { press in
             handleRowKey(press, task: task, previous: previous, allTasks: allTasks)
         }
-        .onMoveCommand { direction in
-            guard NSEvent.modifierFlags.contains(.option) else { return }
-            if direction == .up, let previous { model.reorder(task.id, relativeTo: previous, after: false, allTasks: allTasks) }
-            if direction == .down, let next { model.reorder(task.id, relativeTo: next, after: true, allTasks: allTasks) }
-        }
-        .onTapGesture { model.focusId = task.id }
+        .onTapGesture { clickRow(task) }
         .gesture(reorderGesture(task), including: editing == nil && draftAfter == nil ? .all : .subviews)
         .onHover { over in if over { hoveredTask = task.id } else if hoveredTask == task.id { hoveredTask = nil } }
         .popover(isPresented: Binding(get: { pickingTask == task.id }, set: { if !$0 && pickingTask == task.id { pickingTask = nil } })) {
@@ -746,11 +764,11 @@ struct MainWindow: View {
 
     @ViewBuilder private func rowMenu(_ task: DotistTask, sub: Bool, allTasks: Bool, previous: String?, next: String?) -> some View {
             Button(model.text("编辑 {title}").replacingOccurrences(of: "{title}", with: task.title)) { beginEditing(task) }
-            if task.parentId == nil { Button(model.text("添加子任务")) { state.expanded.insert(task.id); addingChild = task.id } }
-            if task.parentId != nil { Button(model.text("取消缩进")) { model.change { _ = try $0.reparent(task.id, parentId: nil) } } }
-            if !sub && !allTasks, let previous {
+            if model.depth(of: task) < 4 { Button(model.text("添加子任务")) { startDraft(after: task, asChild: true) } }
+            if task.parentId != nil { Button(model.text("取消缩进")) { changeIndent(ids: [task.id], reverse: true) } }
+            if previous != nil {
                 Button(model.text("缩进为上一条的子任务")) {
-                    model.change(completed: { state.expanded.insert(previous) }) { _ = try $0.reparent(task.id, parentId: previous) }
+                    changeIndent(ids: [task.id], reverse: false)
                 }
             }
             if let previous { Button(model.text("上移")) { model.reorder(task.id, relativeTo: previous, after: false, allTasks: allTasks) } }
@@ -770,50 +788,44 @@ struct MainWindow: View {
             Button(model.text("删除")) { model.delete(task) }
     }
 
-    private func rowContent(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Button { model.complete(task) } label: {
-                ZStack {
-                    if task.completed {
-                        Circle().fill(DotistDesign.accent)
-                        Image(systemName: "checkmark").font(.system(size: sub ? 7.5 : 9, weight: .heavy)).foregroundColor(DotistDesign.paper)
-                    } else {
-                        Circle().strokeBorder(focusedTask == task.id ? DotistDesign.accent : DotistDesign.checkStroke, lineWidth: 1.25)
-                    }
-                }.frame(width: sub ? 13 : 16, height: sub ? 13 : 16).frame(width: sub ? 14 : 18, height: 20, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).focusEffectDisabled().accessibilityLabel(Text(model.text(task.completed ? "恢复 {title}" : "完成 {title}").replacingOccurrences(of: "{title}", with: task.title)))
-                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-
+    private func rowContent(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool, selected: Bool = false, focused: Bool = false) -> some View {
+        let depth = model.depth(of: task)
+        return TaskRowLayout(depth: depth) {
+            Button { selection.update { $0.clear() }; model.complete(task) } label: {
+                TaskCheckmark(depth: depth, completed: task.completed, children: children.map(\.completed), emphasized: selected || focused || drag?.target?.parentID == task.id)
+            }.buttonStyle(.plain).focusEffectDisabled()
+                .accessibilityLabel(Text(model.text(task.completed ? "恢复 {title}" : "完成 {title}").replacingOccurrences(of: "{title}", with: task.title)))
             if editing == task.id {
-                VStack(alignment: .leading, spacing: 3) {
                 TaskEditor(text: $editedTitle, height: $editHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("任务内容"), commit: {
-                    if editedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { editing = nil }
-                    else { saveEditing(task) { startDraft(after: task) } }
-                }, cancel: { editing = nil }, indent: { reverse in
-                    if reverse && task.parentId != nil { saveEditing(task) { model.change { _ = try $0.reparent(task.id, parentId: nil) } } }
-                    if !reverse && task.parentId == nil, let previous, model.tasks.contains(where: { $0.id == previous && $0.parentId == nil && $0.category == task.category }) { saveEditing(task) { model.change(completed: { state.expanded.insert(previous) }) { _ = try $0.reparent(task.id, parentId: previous) } } }
-                }, blur: { saveEditing(task) }).frame(height: editHeight).alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.top] + 14 }
-                }
+                    saveEditing(task) { startDraft(after: task) }
+                }, cancel: { clearEditing() }, indent: { reverse in
+                    saveEditing(task) { changeIndent(ids: [task.id], reverse: reverse); selection.row(task.id).focusRequest.send() }
+                }, blur: { saveEditing(task) }).id("edit:\(task.id)").frame(height: editHeight)
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(titleParts?.tags.isEmpty == false ? (titleParts?.text ?? task.title) : task.title).font(font(13)).foregroundColor(task.completed ? DotistDesign.faint : DotistDesign.ink)
-                        .contentShape(Rectangle()).onTapGesture { beginEditing(task) }
-
+                    Text(titleParts?.tags.isEmpty == false ? (titleParts?.text ?? task.title) : task.title)
+                        .font(font(13, selected ? .medium : .regular)).lineSpacing(4)
+                        .foregroundColor(task.completed ? DotistDesign.faint : focused ? DotistDesign.accent : DotistDesign.ink)
+                        .fixedSize(horizontal: false, vertical: true)
                     ForEach(titleParts?.tags ?? [], id: \.self) { tag in
-                        Button("#" + tag) { state.activeTag = state.activeTag == tag ? nil : tag }.buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12, state.activeTag == tag ? .medium : .regular)).foregroundColor(state.activeTag == tag ? DotistDesign.ink : DotistDesign.faint)
+                        Button("#" + tag) {
+                            if NSEvent.modifierFlags.intersection([.shift, .command]).isEmpty { state.activeTag = state.activeTag == tag ? nil : tag }
+                            else { clickRow(task, edit: false) }
+                        }.buttonStyle(.plain).modifier(DotistFocusRing())
+                            .font(font(12, state.activeTag == tag ? .medium : .regular)).foregroundColor(state.activeTag == tag ? DotistDesign.ink : DotistDesign.faint)
                     }
-                    Color.clear.frame(maxWidth: .infinity).frame(height: 20)
-                        .contentShape(Rectangle()).onTapGesture { beginEditing(task) }
+                    Spacer(minLength: 0)
+                }.frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
 
-                }.frame(maxWidth: .infinity, alignment: .leading)
             }
             rowMetadata(task, children: children, allTasks: allTasks, hideDue: hideDue, visible: actionsVisible)
+                .opacity(editing == task.id ? 0 : 1)
         }
     }
 
     private func rowMetadata(_ task: DotistTask, children: [DotistTask], allTasks: Bool, hideDue: Bool, visible: Bool) -> some View {
             HStack(spacing: 8) {
-            if let due = task.dueDate, !hideDue, editing != task.id {
+            if let due = task.dueDate, !hideDue {
                 Button(model.dueLabel(due)) { pickingTask = task.id }.buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12))
                     .foregroundColor(due < Date().dotistDay && !task.completed ? DotistDesign.danger : due == Date().dotistDay ? DotistDesign.accent : DotistDesign.muted)
                     .accessibilityLabel(Text(model.text("到期日 {date}，点击修改").replacingOccurrences(of: "{date}", with: model.dueLabel(due))))
@@ -836,8 +848,8 @@ struct MainWindow: View {
     @ViewBuilder private func rowActions(_ task: DotistTask, sub: Bool, allTasks: Bool, hideDue: Bool, visible: Bool) -> some View {
             if editing != task.id {
                 HStack(spacing: 1) {
-                    if !sub && !allTasks {
-                        Button { state.expanded.insert(task.id); addingChild = task.id } label: { Image(systemName: "plus").frame(width: 22, height: 22) }
+                    if model.depth(of: task) < 4 {
+                        Button { startDraft(after: task, asChild: true) } label: { Image(systemName: "plus").frame(width: 22, height: 22) }
                             .help(model.text("添加子任务"))
                             .accessibilityLabel(Text(model.text("添加子任务 {title}").replacingOccurrences(of: "{title}", with: task.title)))
                     }
@@ -855,67 +867,144 @@ struct MainWindow: View {
             }
     }
 
+    private var displayOrder: [String] {
+        var seen: Set<String> = []
+        return rowFrames.filter { $0.frame.height > 0 }.sorted { $0.frame.minY < $1.frame.minY }.compactMap { seen.insert($0.task.id).inserted ? $0.task.id : nil }
+    }
+
+    private func clickRow(_ task: DotistTask, edit: Bool = true) {
+        let flags = NSEvent.modifierFlags
+        selection.update { $0.click(task.id, order: displayOrder, shift: flags.contains(.shift), command: flags.contains(.command)) }
+        selection.row(task.id).focusRequest.send()
+        if flags.intersection([.shift, .command]).isEmpty && edit { beginEditing(task) }
+    }
+
+    private func changeIndent(ids: [String], reverse: Bool) {
+        let complete = {
+            let hierarchy = TaskHierarchy(model.tasks)
+            for id in ids { state.expanded.formUnion(hierarchy.ancestors(of: id).map(\.id)) }
+        }
+        let failed = { showNotice(model.error ?? model.text("无法更改任务层级")); model.error = nil }
+        if reverse { model.outdent(ids: ids, completed: complete, failed: failed) }
+        else { model.indent(ids: ids, completed: complete, failed: failed) }
+    }
+
+    private func showNotice(_ message: String) {
+        let token = UUID(); noticeToken = token; notice = message
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { if noticeToken == token { notice = nil } }
+    }
+
     private func handleRowKey(_ press: KeyPress, task: DotistTask, previous: String?, allTasks: Bool) -> KeyPress.Result {
         guard editing == nil else { return .ignored }
+        let order = displayOrder
+        if press.key == .escape { selection.update { $0.clear() }; clearInputs(); return .handled }
+        if press.key == .upArrow || press.key == .downArrow {
+            let direction = press.key == .upArrow ? -1 : 1
+            if press.modifiers.contains(.option) {
+                let siblings = model.ordered(model.tasks.filter { $0.parentId == task.parentId && $0.category == task.category && $0.completed == task.completed })
+                if let i = siblings.firstIndex(where: { $0.id == task.id }), siblings.indices.contains(i + direction) { model.reorder(task.id, relativeTo: siblings[i + direction].id, after: direction > 0, allTasks: false) }
+            } else if let i = order.firstIndex(of: task.id), order.indices.contains(i + direction) {
+                let id = order[i + direction]
+                selection.update {
+                    if press.modifiers.contains(.shift) {
+                        if $0.anchor == nil { $0.anchor = task.id }
+                        $0.click(id, order: order, shift: true, command: false)
+                    } else { $0.clear() }
+                }
+                selection.row(id).focusRequest.send(); selection.navigation.send(id)
+            }
+            return .handled
+        }
         if press.key == .return {
-            if press.modifiers.contains(.command) { model.complete(task) } else { startDraft(after: task) }
+            if press.modifiers.contains(.command) { model.complete(task) }
+            else {
+                let last = selection.value.last(in: order).flatMap { id in model.tasks.first { $0.id == id } } ?? task
+                selection.update { $0.clear() }; startDraft(after: last)
+            }
             return .handled
         }
         if press.key == .space { model.complete(task); return .handled }
         if press.key == .tab {
-            if press.modifiers.contains(.shift), task.parentId != nil {
-                model.change { _ = try $0.reparent(task.id, parentId: nil) }; return .handled
-            }
-            if task.parentId == nil, let previous, model.tasks.contains(where: { $0.id == previous && $0.parentId == nil && $0.category == task.category }) {
-                model.change(completed: { state.expanded.insert(previous) }) { _ = try $0.reparent(task.id, parentId: previous) }; return .handled
-            }
+            let ids = selection.value.ids.isEmpty ? [task.id] : order.filter { selection.value.ids.contains($0) }
+            clearInputs()
+            changeIndent(ids: ids, reverse: press.modifiers.contains(.shift))
+            return .handled
         }
         return .ignored
     }
 
-    private func startDraft(after task: DotistTask) {
-        draftTitle = ""; draftHeight = 20; draftAfter = task.id; draftParent = task.parentId
-        if let parent = task.parentId { state.expanded.insert(parent) }
+    private func beginGroupDraft(_ group: DotistGroup, after task: DotistTask?) {
+        if let task { startDraft(after: task) }
+        else { clearInputs(); addingToGroup = group.id; groupTitles[group.id] = "" }
+    }
+
+    private func saveGroupDraft(_ group: DotistGroup, continuing: Bool) {
+        guard addingToGroup == group.id, !groupSubmitting else { return }
+        guard let title = TaskDraftFlow.titleToSave(groupTitles[group.id] ?? "") else { clearInputs(); return }
+        groupSubmitting = true
+        var created: DotistTask?
+        model.change(completed: {
+            groupSubmitting = false
+            guard addingToGroup == group.id else { return }
+            clearInputs()
+            if continuing, let created { startDraft(after: created) }
+        }, failed: { groupSubmitting = false }) { created = try $0.addTask(title: title, category: group.id) }
+    }
+
+    private func leaveInputs() {
+        if let id = editing, let task = model.tasks.first(where: { $0.id == id }) {
+            saveEditing(task) { clearInputs() }
+        } else if let id = draftAfter, let task = model.tasks.first(where: { $0.id == id }) {
+            saveDraft(after: task, continueEditing: false)
+        } else if let id = addingToGroup, let group = model.groups.first(where: { $0.id == id }) {
+            saveGroupDraft(group, continuing: false)
+        } else { clearInputs() }
+    }
+
+    private func clearEditing() { editing = nil; editedTitle = ""; editHeight = 20; pendingEdit = nil }
+    private func clearDraft() { draftAfter = nil; draftTitle = ""; draftParent = nil; draftHeight = 20 }
+    private func clearInputs() {
+        clearDraft(); clearEditing(); addingToGroup = nil; groupTitles.removeAll()
+    }
+
+    private func startDraft(after task: DotistTask, asChild: Bool = false) {
+        clearInputs()
+        draftAfter = task.id; draftParent = asChild && model.depth(of: task) < 4 ? task.id : task.parentId
+        if let parent = draftParent { state.expanded.insert(parent) }
     }
 
     @ViewBuilder private func draftRow(after task: DotistTask, sub: Bool) -> some View {
         if draftAfter == task.id {
-            let indented = draftParent != nil
-            HStack(alignment: .top, spacing: 8) {
-                Circle().strokeBorder(DotistDesign.checkStroke, lineWidth: 1.25)
-                    .frame(width: indented ? 13 : 16, height: indented ? 13 : 16)
-                    .frame(width: indented ? 14 : 18, height: 20, alignment: .leading)
+            let depth = draftParent.flatMap { id in model.tasks.first { $0.id == id } }.map { model.depth(of: $0) + 1 } ?? 0
+            TaskRowLayout(depth: depth) {
+                TaskCheckmark(depth: depth, completed: false, children: [], emphasized: false)
                 TaskEditor(text: $draftTitle, height: $draftHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("任务内容"), commit: {
                     saveDraft(after: task, continueEditing: true)
-                }, cancel: { draftAfter = nil }, indent: { reverse in
-                    if reverse { draftParent = nil }
-                    else if task.parentId == nil { draftParent = task.id; state.expanded.insert(task.id) }
-                }, blur: {
-                    saveDraft(after: task, continueEditing: false)
-                }).frame(height: draftHeight)
-            }.frame(minHeight: indented ? 28 : 32)
-                .padding(.leading, !sub && indented ? 26 : 0)
-                .offset(x: sub && !indented ? -26 : 0)
-                .background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(0.18)).padding(.horizontal, -6))
+                }, cancel: { clearDraft() }, indent: { reverse in
+                    draftParent = TaskDraftFlow.parent(reverse: reverse, current: draftParent, after: task, tasks: model.tasks)
+                }, blur: { saveDraft(after: task, continueEditing: false) })
+                    .id("draft:\(task.id)").frame(height: draftHeight)
+                Color.clear.frame(width: 0, height: 0)
+            }.background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(0.18)).padding(.horizontal, -6))
         }
     }
 
     private func saveDraft(after task: DotistTask, continueEditing: Bool) {
         guard draftAfter == task.id, !draftSaving else { return }
-        let title = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty else { draftAfter = nil; return }
+        guard let title = TaskDraftFlow.titleToSave(draftTitle) else { clearDraft(); return }
         draftSaving = true
         let parent = draftParent
         var created: DotistTask?
         model.change(completed: {
             draftSaving = false
             guard draftAfter == task.id else { return }
+            clearDraft()
             if continueEditing, let created { startDraft(after: created) }
-            else { draftAfter = nil }
-        }, failed: { draftSaving = false }) { store in
+        }, failed: { draftSaving = false; showNotice(model.error ?? model.text("无法保存任务")); model.error = nil }) { store in
             let newTask = try store.addTask(title: title, category: task.category, parentId: parent, dueDate: task.dueDate)
-            if parent == task.parentId { try store.reorder(newTask.id, relativeTo: task.id, after: true, allTasks: false) }
-            else if parent == nil, let formerParent = task.parentId { try store.reorder(newTask.id, relativeTo: formerParent, after: true, allTasks: false) }
+            let hierarchy = TaskHierarchy(try store.listTasks())
+            let anchor = ([task] + hierarchy.ancestors(of: task.id)).first { $0.parentId == parent }
+            if let anchor { try store.reorder(newTask.id, relativeTo: anchor.id, after: true, allTasks: false) }
             created = newTask
         }
     }
@@ -923,21 +1012,26 @@ struct MainWindow: View {
     private func beginEditing(_ task: DotistTask) {
         guard editing != task.id else { return }
         if editSaving { pendingEdit = task; return }
-        let start = { editHeight = 20; editing = task.id; editedTitle = task.title }
-        if let id = editing, let current = model.tasks.first(where: { $0.id == id }) {
-            saveEditing(current, then: start)
+        let start = { clearInputs(); editing = task.id; editedTitle = task.title }
+        if let id = editing, let current = model.tasks.first(where: { $0.id == id }) { saveEditing(current, then: start) }
+        else if let after = draftAfter, let current = model.tasks.first(where: { $0.id == after }), TaskDraftFlow.titleToSave(draftTitle) != nil {
+            saveDraft(after: current, continueEditing: false)
+            // The old draft callback is identity-guarded, so switching editor
+            // cannot make a delayed blur save a different row's buffer.
+            start()
         } else { start() }
     }
+
     private func saveEditing(_ task: DotistTask, then: @escaping () -> Void = {}) {
         guard editing == task.id, !editSaving else { return }
-        let title = editedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty && title != task.title else { editing = nil; then(); return }
+        guard let title = TaskDraftFlow.titleToSave(editedTitle), title != task.title else { clearEditing(); then(); return }
         editSaving = true
         model.change(completed: {
             editSaving = false
             if editing == task.id {
-                editing = nil
-                if let pending = pendingEdit { pendingEdit = nil; editing = pending.id; editedTitle = pending.title } else { then() }
+                let pending = pendingEdit
+                clearEditing()
+                if let pending { beginEditing(pending) } else { then() }
             }
         }, failed: { editSaving = false; pendingEdit = nil }) { _ = try $0.patchTask(id: task.id, title: title) }
     }

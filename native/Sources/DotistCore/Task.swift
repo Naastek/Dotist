@@ -5,6 +5,8 @@ public enum TaskStatus: String, Codable, Sendable {
 }
 
 public struct DotistTask: Codable, Identifiable, Equatable, Sendable {
+    /// Root tasks have depth zero; five levels are supported without a schema change.
+    public static let maxDepth = 4
     public let id: String
     public let title: String
     public let category: String
