@@ -2,9 +2,15 @@
 import Foundation
 import PackageDescription
 
-let project = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-let rustLibrary = ProcessInfo.processInfo.environment["DOTIST_RUST_LIB_DIR"]
-    ?? project.appendingPathComponent(".cache/native-migration/rust-target/debug").path
+struct BuildConfiguration: Decodable {
+    let minimumMacOS: String
+}
+
+let configuration = try JSONDecoder().decode(
+    BuildConfiguration.self,
+    from: Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("app.json"))
+)
+
 let sparkle = ProcessInfo.processInfo.environment["DOTIST_SPARKLE_XCFRAMEWORK"].map {
     Target.binaryTarget(name: "Sparkle", path: $0)
 } ?? .binaryTarget(
@@ -15,16 +21,19 @@ let sparkle = ProcessInfo.processInfo.environment["DOTIST_SPARKLE_XCFRAMEWORK"].
 
 let package = Package(
     name: "DotistNative",
-    platforms: [.macOS(.v11)],
+    platforms: [.macOS(configuration.minimumMacOS)],
     products: [
         .library(name: "DotistCore", targets: ["DotistCore"]),
         .executable(name: "DotistNative", targets: ["DotistApp"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/groue/GRDB.swift", exact: "7.11.1"),
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", exact: "0.12.1"),
+    ],
     targets: [
-        .systemLibrary(name: "DotistCoreFFI", path: "Bridge"),
-        .target(name: "DotistCore", dependencies: ["DotistCoreFFI"], linkerSettings: [.unsafeFlags(["-L", rustLibrary])]),
+        .target(name: "DotistCore", dependencies: [.product(name: "GRDB", package: "GRDB.swift")]),
         sparkle,
-        .executableTarget(name: "DotistApp", dependencies: ["DotistCore", "Sparkle"], resources: [.process("Resources")], linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
+        .executableTarget(name: "DotistApp", dependencies: ["DotistCore", "Sparkle", .product(name: "GRDB", package: "GRDB.swift"), .product(name: "MCP", package: "swift-sdk")], resources: [.process("Resources")], linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
         .testTarget(name: "DotistCoreTests", dependencies: ["DotistCore"]),
         .testTarget(name: "DotistAppTests", dependencies: ["DotistApp"]),
     ]

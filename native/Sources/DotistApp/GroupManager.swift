@@ -12,7 +12,6 @@ struct GroupManager: View {
     @State private var name = ""
     @State private var renameSaving = false
     @State private var pendingRename: DotistGroup?
-    private let colors = ["work", "life", "study", "teal", "rose", "moss"]
     private func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular, serif: Bool = false) -> Font {
         DotistDesign.font(size, weight: weight, serif: serif, language: model.language)
     }
@@ -29,21 +28,16 @@ struct GroupManager: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(model.groups.enumerated()), id: \.element.id) { index, group in
                         HStack(spacing: 8) {
-                            Button {
-                                let next = colors[(colors.firstIndex(of: group.color).map { $0 + 1 } ?? 0) % colors.count]
-                                model.change { _ = try $0.updateGroup(group.id, color: next) }
-                            } label: { RoundedRectangle(cornerRadius: 3, style: .continuous).fill(DotistDesign.category(group.color)).frame(width: 12, height: 12).frame(width: 24, height: 24) }
-                                .buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("更改「{name}」的颜色").replacingOccurrences(of: "{name}", with: group.name)))
                             if renaming == group.id {
                                 TextField(model.text("分组名称"), text: $name, onEditingChanged: { active in if !active { save(group) } }, onCommit: { save(group) })
                                     .textFieldStyle(.plain).modifier(DotistFocusRing()).font(font(14, .semibold, serif: true))
                             } else {
-                                Button { begin(group) } label: { Text(group.name).font(font(14, .semibold, serif: true)).frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain).modifier(DotistFocusRing())
+                                Button { begin(group) } label: { Text(group.name).font(font(14, .semibold, serif: true)).frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain).modifier(DotistFocusRing()).disabled(group.id == DotistGroup.inboxID)
                             }
                             Text("\(model.tasks.filter { $0.category == group.id && $0.parentId == nil && !$0.completed }.count)").font(font(12)).foregroundColor(DotistDesign.faint)
-                            Button { model.change { try $0.moveGroup(group.id, direction: -1) } } label: { Image(systemName: "chevron.up").frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).disabled(index == 0)
-                            Button { model.change { try $0.moveGroup(group.id, direction: 1) } } label: { Image(systemName: "chevron.down").frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).disabled(index == model.groups.count - 1)
-                            Button { model.deleteGroup(group) } label: { Image(systemName: "trash").frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).disabled(model.groups.count <= 1)
+                            Button { model.change { try $0.moveGroup(group.id, direction: -1) } } label: { Image(systemName: "chevron.up").frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).disabled(index <= 1)
+                            Button { model.change { try $0.moveGroup(group.id, direction: 1) } } label: { Image(systemName: "chevron.down").frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).disabled(group.id == DotistGroup.inboxID || index == model.groups.count - 1)
+                            Button { model.deleteGroup(group) } label: { Image(systemName: "xmark").font(.system(size: 11)).frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).disabled(group.id == DotistGroup.inboxID)
                         }.frame(minHeight: 40)
                     }
                     TextField(model.text("新分组，回车添加"), text: $adding, onCommit: {
@@ -51,8 +45,8 @@ struct GroupManager: View {
                         guard !value.isEmpty, !addingGroup else { return }
                         addingGroup = true
                         model.change(completed: { addingGroup = false; if adding.trimmingCharacters(in: .whitespacesAndNewlines) == value { adding = "" } }, failed: { addingGroup = false }) { _ = try $0.addGroup(name: value) }
-                    }).textFieldStyle(.plain).modifier(DotistFocusRing()).font(font(13)).padding(10).background(DotistDesign.surface).cornerRadius(8).padding(.top, 12)
-                    Text(model.text("删除分组会连同其中的任务一起删除，底部提示里可以撤销。点色块换颜色，点名字重命名。"))
+                    }).textFieldStyle(.plain).modifier(DotistFocusRing()).font(font(13)).padding(.leading, 26).frame(height: 32).padding(.top, 12)
+                    Text(model.text("删除分组会连同其中的任务一起删除，底部提示里可以撤销。点名字重命名。"))
                         .font(font(12)).foregroundColor(DotistDesign.muted).padding(.top, 10)
                 }.padding(.horizontal, 16)
             }

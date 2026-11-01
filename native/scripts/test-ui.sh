@@ -2,12 +2,12 @@
 set -euo pipefail
 project_dir="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$project_dir"
-if [[ $# != 1 ]]; then
-  echo 'Usage: native/scripts/test-ui.sh <fresh QA build directory>' >&2
+if [[ $# -lt 1 ]]; then
+  echo 'Usage: native/scripts/test-ui.sh <fresh QA build directory> [xcodebuild test filters]' >&2
   exit 2
 fi
 qa_dir="$(python3 - "$project_dir" "$1" <<'PY'
-import plistlib, sys
+import json, plistlib, sys
 from pathlib import Path
 root = Path(sys.argv[1]).resolve()
 qa = Path(sys.argv[2]).resolve(strict=True)
@@ -20,9 +20,12 @@ if app.is_symlink() or data.is_symlink() or not data.is_dir() or (data / 'tasks.
 with (app / 'Contents/Info.plist').open('rb') as f: info = plistlib.load(f)
 if info.get('CFBundleIdentifier') != 'dev.codex.dotist-native-qa':
     raise SystemExit('The application is not a Dotist QA bundle')
+if info.get('LSMinimumSystemVersion') != json.loads((root / 'native/app.json').read_text())['minimumMacOS']:
+    raise SystemExit('The QA minimum macOS is outdated; rebuild the QA application')
 print(qa)
 PY
 )"
+shift
 run_dir="$(mktemp -d "$project_dir/.cache/native-migration/ui-tests-XXXXXXXX")"
 derived="$run_dir/DerivedData"
 xcodebuild build-for-testing -project native/UITests/DotistUI.xcodeproj -scheme DotistUI \
@@ -45,6 +48,6 @@ print(path)
 PY
 )"
 xcodebuild test-without-building -xctestrun "$xctestrun" -destination 'platform=macOS,arch=arm64' \
-  -resultBundlePath "$run_dir/results.xcresult" > "$run_dir/test.log" 2>&1 || { tail -n 100 "$run_dir/test.log"; exit 1; }
+  -resultBundlePath "$run_dir/results.xcresult" "$@" > "$run_dir/test.log" 2>&1 || { tail -n 100 "$run_dir/test.log"; exit 1; }
 tail -n 25 "$run_dir/test.log"
 printf 'UI test results: %s\nQA sample data: %s\n' "$run_dir/results.xcresult" "$qa_dir/data"

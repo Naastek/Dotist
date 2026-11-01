@@ -3,24 +3,14 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$project_dir"
 cache_dir="$project_dir/.cache/native-migration"
-sdk_path="${DOTIST_MACOS_SDK:-/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk}"
+scratch_dir="$project_dir/.cache/native-consolidation/swift-build"
+sdk_path="${DOTIST_MACOS_SDK:-$(xcrun --sdk macosx --show-sdk-path)}"
 profile="${DOTIST_NATIVE_PROFILE:-release}"
 if [[ "$profile" != release && "$profile" != debug ]]; then echo 'DOTIST_NATIVE_PROFILE must be release or debug' >&2; exit 1; fi
-if [[ ! -d "$sdk_path" ]]; then echo "SDK not found: $sdk_path" >&2; exit 1; fi
-mkdir -p "$cache_dir/fonts" "$cache_dir/clang-module-cache" "$cache_dir/swift-module-cache"
-export MACOSX_DEPLOYMENT_TARGET=11.0
-export CARGO_TARGET_DIR="$cache_dir/rust-target"
-export CLANG_MODULE_CACHE_PATH="$cache_dir/clang-module-cache"
-export SWIFTPM_MODULECACHE_OVERRIDE="$cache_dir/swift-module-cache"
-if [[ -x "$project_dir/.toolchain/cargo/bin/cargo" ]]; then
-  export RUSTUP_HOME="$project_dir/.toolchain/rustup" CARGO_HOME="$project_dir/.toolchain/cargo"
-  export PATH="$project_dir/.toolchain/cargo/bin:$PATH"
-fi
-cargo_flags=(--locked)
-if [[ "${DOTIST_CARGO_OFFLINE:-1}" == 1 ]]; then cargo_flags+=(--offline); fi
-if [[ "$profile" == release ]]; then cargo_flags+=(--release); fi
-cargo build "${cargo_flags[@]}" --manifest-path crates/dotist-core/Cargo.toml --bin dotist-mcp
-cargo build "${cargo_flags[@]}" --manifest-path crates/dotist-native/Cargo.toml --lib
+minimum="$(python3 -c 'import json; print(json.load(open("native/app.json"))["minimumMacOS"])')"
+mkdir -p "$cache_dir/fonts" "$scratch_dir" "$project_dir/.cache/native-consolidation/clang" "$project_dir/.cache/native-consolidation/swift-modules"
+export CLANG_MODULE_CACHE_PATH="$project_dir/.cache/native-consolidation/clang"
+export SWIFTPM_MODULECACHE_OVERRIDE="$project_dir/.cache/native-consolidation/swift-modules"
 font_version=6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec
 while read -r name checksum path; do
   file="$cache_dir/fonts/$name.ttf"
@@ -29,44 +19,34 @@ while read -r name checksum path; do
   license="$cache_dir/fonts/$name-OFL.txt"
   if [[ ! -f "$license" ]]; then curl --fail --location --silent --show-error "https://raw.githubusercontent.com/google/fonts/$font_version/ofl/${path%%/*}/OFL.txt" --output "$license"; fi
 done < native/scripts/fonts.tsv
-node --input-type=module -e 'import { dictionaries } from "./src/locales.ts"; import { writeFileSync } from "node:fs"; writeFileSync("native/Sources/DotistApp/Resources/locales.json", JSON.stringify(dictionaries));'
-export DOTIST_RUST_LIB_DIR="$CARGO_TARGET_DIR/$profile"
 sparkle_framework="$(bash native/scripts/prepare-sparkle.sh)"
 export DOTIST_SPARKLE_XCFRAMEWORK='../.cache/native-migration/deps/Sparkle-2.9.6/Sparkle.xcframework'
-swift build --build-system native --triple arm64-apple-macosx11.0 --sdk "$sdk_path" -Xswiftc -target -Xswiftc arm64-apple-macosx11.0 --configuration "$profile" --package-path native --scratch-path "$cache_dir/swift-qa-$profile"
-product="$cache_dir/swift-qa-$profile/arm64-apple-macosx/$profile"
+swift build --disable-sandbox --build-system native --triple "arm64-apple-macosx$minimum" --sdk "$sdk_path" --configuration "$profile" --package-path native --scratch-path "$scratch_dir" --disable-automatic-resolution
+product="$scratch_dir/arm64-apple-macosx/$profile"
 qa_dir="$(mktemp -d "$cache_dir/qa-build-XXXXXXXX")"
 app="$qa_dir/Dotist-Native-QA.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/Fonts" "$app/Contents/Resources/Licenses" "$app/Contents/Frameworks" "$qa_dir/data"
 ditto "$sparkle_framework/macos-arm64_x86_64/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"
 cp "$cache_dir/deps/Sparkle-2.9.6/LICENSE" "$app/Contents/Resources/Licenses/Sparkle-LICENSE.txt"
 cp "$product/DotistNative" "$app/Contents/MacOS/dotist"
-cp "$CARGO_TARGET_DIR/$profile/dotist-mcp" "$app/Contents/MacOS/dotist-mcp-real"
-cat > "$app/Contents/MacOS/dotist-mcp" <<'WRAPPER'
-#!/bin/sh
-set -eu
-binary_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-qa_dir=$(CDPATH= cd -- "$binary_dir/../../.." && pwd)
-if [ "${DOTIST_DATA_DIR:-}" != "$qa_dir/data" ]; then
-  echo "QA MCP requires DOTIST_DATA_DIR=$qa_dir/data" >&2
-  exit 1
-fi
-exec "$binary_dir/dotist-mcp-real"
-WRAPPER
-chmod +x "$app/Contents/MacOS/dotist-mcp"
-cp native/Sources/DotistApp/Resources/locales.json "$app/Contents/Resources/locales.json"
-cp native/Sources/DotistApp/Resources/native-locales.json "$app/Contents/Resources/native-locales.json"
-cp src-tauri/icons/tray/menubar@2x.png "$app/Contents/Resources/menubar.png"
-cp src-tauri/icons/icon.icns "$app/Contents/Resources/icon.icns"
+cp native/Sources/DotistApp/Resources/*.json "$app/Contents/Resources/"
+cp native/Assets/menubar.png "$app/Contents/Resources/menubar.png"
+cp native/Assets/icon.icns "$app/Contents/Resources/icon.icns"
 for font in "$cache_dir"/fonts/*.ttf; do cp "$font" "$app/Contents/Resources/Fonts/"; done
 for license in "$cache_dir"/fonts/*-OFL.txt; do cp "$license" "$app/Contents/Resources/Licenses/"; done
+for dependency in "$scratch_dir"/checkouts/*; do
+  for license in "$dependency"/LICENSE "$dependency"/LICENSE.txt "$dependency"/LICENSE.md "$dependency"/NOTICE "$dependency"/NOTICE.txt; do
+    if [[ -f "$license" ]]; then cp "$license" "$app/Contents/Resources/Licenses/$(basename "$dependency")-$(basename "$license")"; fi
+  done
+done
 python3 - "$app" "$qa_dir" <<'PY'
 import json, plistlib, sys
 from pathlib import Path
 app, qa = map(Path, sys.argv[1:])
-info = {'CFBundleExecutable':'dotist','CFBundleIdentifier':'dev.codex.dotist-native-qa','CFBundleName':'Dotist Native QA','CFBundlePackageType':'APPL','CFBundleIconFile':'icon','CFBundleShortVersionString':'0.1.2','CFBundleVersion':'1','LSMinimumSystemVersion':'11.0','NSHighResolutionCapable':True}
+config = json.loads(Path('native/app.json').read_text())
+info = {'CFBundleExecutable':'dotist','CFBundleIdentifier':'dev.codex.dotist-native-qa','CFBundleName':'Dotist Native QA','CFBundlePackageType':'APPL','CFBundleIconFile':'icon','CFBundleShortVersionString':config['version'],'CFBundleVersion':'1','LSMinimumSystemVersion':config['minimumMacOS'],'NSHighResolutionCapable':True,'DotistNative':True}
 with (app/'Contents/Info.plist').open('wb') as f: plistlib.dump(info, f)
-settings = {'theme':'light','language':'zh-CN','show_menubar':False,'toggle_shortcut':'','quick_add_shortcut':'','settings_shortcut':'','views_shortcut':'','auto_check_updates':False,'auto_install_updates':False,'auto_collapse':False,'idle_fade':False}
+settings = {'theme':'light','language':'zh-CN','show_menubar':False,'toggle_shortcut':'','quick_add_shortcut':'','settings_shortcut':'','views_shortcut':'','auto_check_updates':False,'auto_install_updates':False,'auto_collapse':False,'idle_fade':False,'mcp_enabled':True}
 (qa/'data/settings.json').write_text(json.dumps(settings, ensure_ascii=False, indent=2))
 PY
 xcrun swift-stdlib-tool --copy --scan-executable "$app/Contents/MacOS/dotist" --platform macosx --destination "$app/Contents/Frameworks"

@@ -12,7 +12,8 @@ struct SettingsWindow: View {
     private let sections: [(String, String, String)] = [
         ("appearance", "外观", "paintpalette"), ("general", "通用", "slider.horizontal.3"),
         ("filters", "筛选器", "list.bullet"), ("menubar", "菜单栏", "eye"),
-        ("shortcuts", "快捷键", "keyboard"), ("mcp", "MCP", "cable.connector"), ("about", "数据与关于", "info.circle"),
+        ("shortcuts", "快捷键", "keyboard"), ("mcp", "MCP", "cable.connector"),
+        ("data", "数据", "externaldrive"), ("about", "关于", "info.circle"),
     ]
     private func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular, serif: Bool = false) -> Font {
         DotistDesign.font(size, weight: weight, serif: serif, language: model.language)
@@ -25,13 +26,12 @@ struct SettingsWindow: View {
     var body: some View {
         VStack(spacing: 0) {
         if let error = model.error { Text(model.text(error)).font(font(12)).foregroundColor(DotistDesign.danger).frame(maxWidth: .infinity, alignment: .leading).padding(10) }
-        ScrollViewReader { proxy in
+        Group {
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(sections, id: \.0) { id, title, icon in
                         Button {
                             active = id
-                            withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration: 0.22)) { proxy.scrollTo(id, anchor: .top) }
                         } label: {
                             HStack(spacing: 8) {
                                 Image(systemName: icon).frame(width: 16).foregroundColor(active == id ? DotistDesign.accent : DotistDesign.muted)
@@ -39,6 +39,7 @@ struct SettingsWindow: View {
                                 Spacer()
                             }.padding(.horizontal, 10).frame(height: 32).contentShape(Rectangle())
                         }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(active == id ? DotistDesign.ink : DotistDesign.muted)
+                            .accessibilityAddTraits(active == id ? .isSelected : [])
                     }
                     Spacer()
                 }.padding(.horizontal, 10).padding(.top, 44).frame(width: 184).overlay(Rectangle().fill(DotistDesign.rule).frame(width: 1), alignment: .trailing)
@@ -46,16 +47,17 @@ struct SettingsWindow: View {
                     VStack(alignment: .leading, spacing: 28) {
                         section("appearance", "外观") {
                             settingRow("主题") {
-                                DotistGlassTabs(selection: Binding(get: { model.settings.theme }, set: { value in update { $0.theme = value } }), options: [("system", model.text("跟随系统")), ("light", model.text("浅色")), ("dark", model.text("深色"))], language: model.language)
-                                    .accessibilityLabel(Text(model.text("主题")))
+                                NativeSegmentedPicker(selection: Binding(get: { model.settings.theme }, set: { value in update { $0.theme = value } }),
+                                                      options: [("system", model.text("跟随系统")), ("light", model.text("浅色")), ("dark", model.text("深色"))],
+                                                      label: model.text("主题")).frame(width: 244, height: 24)
                             }
 
                             settingRow("玻璃预设") {
-                                DotistGlassTabs(selection: Binding(get: { glassPreset }, set: { value in
+                                NativeSegmentedPicker(selection: Binding(get: { glassPreset }, set: { value in
                                     let preset = value == "clear" ? (UInt8(38), UInt8(22)) : value == "ultra" ? (UInt8(8), UInt8(4)) : (UInt8(60), UInt8(40))
                                     update { $0.opacity = preset.0; $0.frost = preset.1 }
-                                }), options: [("standard", model.text("标准")), ("clear", model.text("透明玻璃")), ("ultra", model.text("极致通透"))], language: model.language)
-                                    .accessibilityLabel(Text(model.text("玻璃预设")))
+                                }), options: [("standard", model.text("标准")), ("clear", model.text("透明玻璃")), ("ultra", model.text("极致通透"))],
+                                    label: model.text("玻璃预设")).frame(width: 244, height: 24)
                             }
                             settingRow("透明程度") {
                                 Slider(value: Binding(get: { transparency }, set: { value in update { $0.opacity = UInt8((95 - 91 * pow(value / 100, 1.5)).rounded()) } }), in: 0...100).frame(width: 110).modifier(DotistFocusRing())
@@ -64,11 +66,6 @@ struct SettingsWindow: View {
                             settingRow("磨砂程度") {
                                 Slider(value: Binding(get: { Double(model.settings.frost) }, set: { value in update { $0.frost = UInt8(value.rounded()) } }), in: 0...100).frame(width: 110).modifier(DotistFocusRing())
                                 Text("\(model.settings.frost)%").frame(width: 34, alignment: .trailing).foregroundColor(DotistDesign.muted)
-                            }
-                            settingRow("分组颜色") {
-                                // Legacy "dot" values retain their stored identity and render as colored names.
-                                DotistGlassTabs(selection: Binding(get: { model.settings.groupColors == "none" ? "none" : "text" }, set: { value in update { $0.groupColors = value } }), options: [("text", model.text("彩色名称")), ("none", model.text("不显示颜色"))], language: model.language)
-                                    .accessibilityLabel(Text(model.text("分组颜色")))
                             }
                             boolRow("失焦淡出", value: model.settings.idleFade) { $0.idleFade = $1 }
                             if model.settings.idleFade {
@@ -88,7 +85,7 @@ struct SettingsWindow: View {
                                     .labelsHidden().toggleStyle(SwitchToggleStyle()).accentColor(DotistDesign.accent).modifier(DotistFocusRing())
                             }
                             boolRow("悬停显示详情", value: model.settings.hoverExpand) { $0.hoverExpand = $1 }
-                            settingRow("窗口大小") { Button(model.text("恢复默认"), action: resetWindowSize).buttonStyle(DotistActionStyle()).modifier(DotistFocusRing()) }
+                            settingRow("窗口大小") { Button(model.text("恢复默认"), action: resetWindowSize).buttonStyle(DefaultButtonStyle()).modifier(DotistFocusRing()) }
                             boolRow("固定窗口", value: model.settings.locked) { $0.locked = $1 }
                             boolRow("自动收起", value: model.settings.autoCollapse) { $0.autoCollapse = $1 }
                             if model.settings.autoCollapse { numberRow("收起等待时间", value: Double(model.settings.autoCollapseSecs), range: 5...120) { $0.autoCollapseSecs = UInt16($1.rounded()) } }
@@ -98,21 +95,27 @@ struct SettingsWindow: View {
                             settingRow("启动时打开") {
                                 settingMenu("启动时打开", value: model.settings.defaultFilter, options: model.settings.filters.map { ($0, model.text(filterLabel($0))) }) { value in update { $0.defaultFilter = value } }
                             }
-                            ForEach(Array(model.settings.filters.enumerated()), id: \.element) { index, id in
-                                settingRow(filterLabel(id)) {
-                                    Button { moveFilter(index, -1) } label: { Image(systemName: "chevron.up").frame(width: 12) }
-                                        .buttonStyle(DotistActionStyle()).modifier(DotistFocusRing()).disabled(index == 0)
-                                        .accessibilityLabel(Text(model.text("上移") + " " + model.text(filterLabel(id))))
-                                    Button { moveFilter(index, 1) } label: { Image(systemName: "chevron.down").frame(width: 12) }
-                                        .buttonStyle(DotistActionStyle()).modifier(DotistFocusRing()).disabled(index == model.settings.filters.count - 1)
-                                        .accessibilityLabel(Text(model.text("下移") + " " + model.text(filterLabel(id))))
-                                    Button { setFilter(id, enabled: false) } label: { Image(systemName: "xmark").frame(width: 12) }
-                                        .buttonStyle(DotistActionStyle()).modifier(DotistFocusRing()).disabled(model.settings.filters.count == 1)
-                                        .accessibilityLabel(Text(model.text("清除") + " " + model.text(filterLabel(id))))
+                            List {
+                                ForEach(model.settings.filters, id: \.self) { id in
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "line.3.horizontal").foregroundColor(DotistDesign.faint).accessibilityHidden(true)
+                                        Text(model.text(filterLabel(id)))
+                                        Spacer()
+                                        Button { setFilter(id, enabled: false) } label: { Image(systemName: "xmark").frame(width: 20, height: 20) }
+                                            .buttonStyle(.plain).modifier(DotistFocusRing()).disabled(model.settings.filters.count == 1)
+                                            .accessibilityLabel(Text(model.text("清除") + " " + model.text(filterLabel(id))))
+                                    }.frame(height: 32).contentShape(Rectangle())
+                                        .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 6))
+                                }.onMove { source, destination in
+                                    var values = model.settings.filters
+                                    values.move(fromOffsets: source, toOffset: destination)
+                                    update { $0.filters = values }
                                 }
-                            }
+                            }.listStyle(PlainListStyle()).environment(\.defaultMinListRowHeight, 32)
+                                .frame(height: CGFloat(model.settings.filters.count * 32 + 8))
+                                .accessibilityIdentifier("settings-filter-order")
                             ForEach(["today", "all", "tomorrow", "week", "nextweek", "next7", "overdue", "undated", "done"].filter { !model.settings.filters.contains($0) }, id: \.self) { id in
-                                Button("+ " + model.text(filterLabel(id))) { setFilter(id, enabled: true) }.buttonStyle(DotistActionStyle()).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted).frame(height: 32)
+                                Button("+ " + model.text(filterLabel(id))) { setFilter(id, enabled: true) }.buttonStyle(DefaultButtonStyle()).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted).frame(height: 32)
                             }
                         }
                         section("menubar", "菜单栏") {
@@ -146,44 +149,15 @@ struct SettingsWindow: View {
                             shortcutRow("快速添加", id: 2, value: model.settings.quickAddShortcut)
                         }
                         section("mcp", "MCP") {
-                            Text(model.text("Dotist 自带本地 MCP 服务器（stdio），与窗口共用同一个数据库。它不会自动连接任何客户端，由你在客户端里添加；添加后该客户端就能读取和修改你的任务。"))
-                                .foregroundColor(DotistDesign.muted)
-                            let mcp = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("dotist-mcp").path ?? ""
-                            settingRow("可执行文件") {
-                                Button(model.text("在 Finder 中显示")) { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: mcp)]) }.buttonStyle(DotistActionStyle()).modifier(DotistFocusRing())
-                            }
-                            settingRow("MCP 路径") {
-                                Text(mcp).font(font(12)).foregroundColor(DotistDesign.muted).lineLimit(2).textSelectionIfAvailable()
-                                Button(model.text("复制")) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(mcp, forType: .string) }.buttonStyle(DotistActionStyle()).modifier(DotistFocusRing())
-                            }
-                            settingRow("Claude Code") {
-                                Button(model.text("复制")) {
-                                    func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-                                    let qaData = Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa" ? ProcessInfo.processInfo.environment["DOTIST_DATA_DIR"] : nil
-                                    let environment = qaData.map { " -e " + quote("DOTIST_DATA_DIR=" + $0) } ?? ""
-                                    let command = "claude mcp add dotist" + environment + " -- " + quote(mcp)
-                                    NSPasteboard.general.clearContents(); NSPasteboard.general.setString(command, forType: .string)
-                                }.buttonStyle(DotistActionStyle()).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("复制 Claude Code 添加命令")))
-                            }
-                            settingRow("其他客户端配置（JSON）") {
-                                Button(model.text("复制")) {
-                                    var entry: [String: Any] = ["command": mcp]
-                                    if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa", let data = ProcessInfo.processInfo.environment["DOTIST_DATA_DIR"] { entry["env"] = ["DOTIST_DATA_DIR": data] }
-                                    let config: [String: Any] = ["mcpServers": ["dotist": entry]]
-                                    if let bytes = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]), let text = String(data: bytes, encoding: .utf8) {
-                                        NSPasteboard.general.clearContents()
-                                        NSPasteboard.general.setString(text, forType: .string)
-                                    }
-                                }.buttonStyle(DotistActionStyle()).modifier(DotistFocusRing())
-                            }
-                            Text(model.text("工具：{tools}。").replacingOccurrences(of: "{tools}", with: "list_tasks, add_task, update_task, complete_task, delete_task, restore_task, move_task, set_due_date, set_start_date, set_task_status, set_task_parent, list_groups, add_group, update_group, delete_group, restore_group"))
-                                .font(font(12)).foregroundColor(DotistDesign.muted).padding(.top, 8)
+                            MCPSettings(model: model, service: model.mcp)
                         }
-                        section("about", "数据与关于") {
+                        section("data", "数据") {
                             infoRow("数据库路径", model.databasePath)
-                            Button(model.text("在 Finder 中显示")) { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: model.databasePath)]) }.buttonStyle(DotistActionStyle()).modifier(DotistFocusRing())
+                            Button(model.text("在 Finder 中显示")) { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: model.databasePath)]) }.buttonStyle(DefaultButtonStyle()).modifier(DotistFocusRing())
+                        }
+                        section("about", "关于") {
                             infoRow("版本", Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
-                            settingRow("更新") { Button(model.text("检查更新"), action: updater.check).buttonStyle(DotistActionStyle()).modifier(DotistFocusRing()).disabled(updater.busy) }
+                            settingRow("更新") { Button(model.text("检查更新"), action: updater.check).buttonStyle(DefaultButtonStyle()).modifier(DotistFocusRing()).disabled(updater.busy) }
                             boolRow("自动检查更新", value: model.settings.autoCheckUpdates) { $0.autoCheckUpdates = $1 }
                             boolRow("自动安装更新", value: model.settings.autoInstallUpdates) { $0.autoInstallUpdates = $1 }
                             Text(model.text("新版本在退出 Dotist 时安装，重新打开后生效")).font(font(12)).foregroundColor(DotistDesign.muted)
@@ -202,15 +176,15 @@ struct SettingsWindow: View {
                                 if updater.state == .downloaded && model.settings.autoInstallUpdates { Text(model.text("更新已下载，退出 Dotist 时安装。")) }
                                 if !updater.notes.isEmpty { Text(String(updater.notes.prefix(500))) }
                                 HStack(spacing: 16) {
-                                    Button(model.text("立即更新"), action: updater.install).buttonStyle(DotistActionStyle(primary: true)).modifier(DotistFocusRing())
-                                    Button(model.text("跳过此版本"), action: updater.skip).buttonStyle(DotistActionStyle()).modifier(DotistFocusRing())
+                                    Button(model.text("立即更新"), action: updater.install).buttonStyle(DefaultButtonStyle()).modifier(DotistFocusRing())
+                                    Button(model.text("跳过此版本"), action: updater.skip).buttonStyle(DefaultButtonStyle()).modifier(DotistFocusRing())
                                 }
                             }
                         }
                     }.padding(.top, 44).padding(.horizontal, 28).padding(.bottom, 32).frame(maxWidth: .infinity, alignment: .topLeading)
-                }
-            }.font(font(13)).foregroundColor(DotistDesign.ink).controlSize(.regular).modifier(DotistControlTint()).background(WindowDragArea()).background(WindowMaterial(opacity: 68, frost: 0))
-        }
+                }.id(active)
+            }.font(font(13)).foregroundColor(DotistDesign.ink).controlSize(.regular).background(WindowDragArea()).background(DotistDesign.paper)
+        }.modifier(DotistTheme(theme: model.settings.theme))
         }
     }
     private var glassPreset: String {
@@ -222,11 +196,13 @@ struct SettingsWindow: View {
         }
     }
     private var transparency: Double { 100 * pow(min(1, max(0, (95 - Double(model.settings.opacity)) / 91)), 1 / 1.5) }
-    private func section<Content: View>(_ id: String, _ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(model.text(title)).font(font(17, .semibold, serif: true)).padding(.bottom, 8)
-            VStack(alignment: .leading, spacing: 0, content: content).padding(.leading, 22)
-        }.frame(maxWidth: 460, alignment: .leading).id(id)
+    @ViewBuilder private func section<Content: View>(_ id: String, _ title: String, @ViewBuilder content: () -> Content) -> some View {
+        if active == id {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(model.text(title)).font(font(17, .semibold, serif: true)).padding(.bottom, 8)
+                VStack(alignment: .leading, spacing: 0, content: content).padding(.leading, 22)
+            }.frame(maxWidth: 460, alignment: .leading)
+        }
     }
     private func settingRow<Content: View>(_ label: String, @ViewBuilder control: () -> Content) -> some View {
         HStack(spacing: 12) {
@@ -246,8 +222,7 @@ struct SettingsWindow: View {
         } label: {
             Text(options.first(where: { $0.0 == value })?.1 ?? "")
                 .lineLimit(1).frame(width: 164, alignment: .leading)
-        }.menuStyle(BorderlessButtonMenuStyle())
-            .padding(.horizontal, 12).padding(.vertical, 5).background(DotistControlGlass())
+        }.menuStyle(DefaultMenuStyle()).frame(minHeight: 28)
             .modifier(DotistFocusRing())
             .accessibilityLabel(Text(model.text(label)))
             .accessibilityValue(Text(options.first(where: { $0.0 == value })?.1 ?? ""))
@@ -273,13 +248,13 @@ struct SettingsWindow: View {
         settingRow(label) {
             ShortcutRecorder(value: value, label: model.text(label), empty: model.text("未设置"), recordingText: model.text("按下新的快捷键…"), begin: beginShortcutCapture, finish: { endShortcutCapture(id, $0) }).frame(width: 150, height: 28)
             if !value.isEmpty {
-                Button { beginShortcutCapture(); endShortcutCapture(id, "") } label: { Image(systemName: "xmark").frame(width: 24, height: 24) }.buttonStyle(DotistActionStyle()).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("清除")))
+                Button { beginShortcutCapture(); endShortcutCapture(id, "") } label: { Image(systemName: "xmark").frame(width: 24, height: 24) }.buttonStyle(DefaultButtonStyle()).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("清除")))
             }
         }
     }
     private func infoRow(_ label: String, _ value: String) -> some View {
         settingRow(label) {
-            Text(value).font(font(12)).foregroundColor(DotistDesign.muted).lineLimit(2).textSelectionIfAvailable()
+            Text(value).font(font(12)).foregroundColor(DotistDesign.muted).lineLimit(2).textSelection(.enabled)
         }
     }
     private func filterLabel(_ id: String) -> String {
@@ -295,24 +270,11 @@ struct SettingsWindow: View {
         default: return "全部"
         }
     }
-    private func moveFilter(_ index: Int, _ delta: Int) {
-        let destination = index + delta
-        guard model.settings.filters.indices.contains(destination) else { return }
-        var values = model.settings.filters
-        values.swapAt(index, destination)
-        update { $0.filters = values }
-    }
     private func setFilter(_ id: String, enabled: Bool) {
         let values = enabled ? model.settings.filters + [id] : model.settings.filters.filter { $0 != id }
         update {
             $0.filters = values
             if !values.contains(model.settings.defaultFilter) { $0.defaultFilter = values.first }
         }
-    }
-}
-
-private extension View {
-    @ViewBuilder func textSelectionIfAvailable() -> some View {
-        if #available(macOS 12.0, *) { textSelection(.enabled) } else { self }
     }
 }

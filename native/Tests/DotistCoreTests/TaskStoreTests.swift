@@ -2,11 +2,11 @@ import Foundation
 import XCTest
 @testable import DotistCore
 
-final class RustTaskStoreTests: XCTestCase {
+final class TaskStoreTests: XCTestCase {
     func testTagsUseTheSharedTaskStoreAndKeepFamilyContext() throws {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("dotist-swift-tags-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let store = try RustTaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
+        let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
         let parent = try store.addTask(title: "父任务", category: "work")
         let tagged = try store.addTask(title: "子任务 #设计", category: "work", parentId: parent.id)
         let sibling = try store.addTask(title: "另一子任务", category: "work", parentId: parent.id)
@@ -20,11 +20,11 @@ final class RustTaskStoreTests: XCTestCase {
         try store.retag("新标签", replacement: nil)
         XCTAssertEqual(try store.listTasks().first { $0.id == tagged.id }?.title, "子任务")
     }
-    func testSwiftCallsTheRealRustStoreAndRetainsTaskSemantics() throws {
+    func testNativeStoreRetainsTaskSemantics() throws {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("dotist-swift-bridge-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data(#"{"theme":"dark","opacity":0,"window_width":100,"window_height":1000}"#.utf8).write(to: directory.appendingPathComponent("settings.json"))
-        let store = try RustTaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
+        let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
         XCTAssertEqual(try store.settings().theme, "dark")
         XCTAssertEqual(try store.settings().opacity, 4)
         XCTAssertEqual(try store.settings().windowWidth, 320)
@@ -34,7 +34,7 @@ final class RustTaskStoreTests: XCTestCase {
         let updated = try store.updateSettings(patch)
         XCTAssertEqual(updated.theme, "light")
         XCTAssertEqual(updated.opacity, 95)
-        XCTAssertEqual(try RustTaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path).settings(), updated)
+        XCTAssertEqual(try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path).settings(), updated)
         patch.theme = "invalid"
         XCTAssertThrowsError(try store.updateSettings(patch))
         XCTAssertEqual(try store.settings(), updated)

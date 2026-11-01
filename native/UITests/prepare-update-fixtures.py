@@ -1,4 +1,4 @@
-"""Build isolated QA updates with the same signing trust root as production."""
+"""Build isolated QA updates with an ephemeral Sparkle signing key, never a production key."""
 import base64
 import importlib
 import json
@@ -14,18 +14,15 @@ project = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project / 'native/scripts'))
 config = importlib.import_module('update-config').update_config()
 source, root = map(lambda p: Path(p).resolve(), sys.argv[1:3])
-if plistlib.loads((source / 'Contents/Info.plist').read_bytes())['CFBundleIdentifier'] != 'dev.codex.dotist-native-qa':
+source_info = plistlib.loads((source / 'Contents/Info.plist').read_bytes())
+if source_info['CFBundleIdentifier'] != 'dev.codex.dotist-native-qa':
     raise SystemExit('Update tests require an isolated QA application')
+if source_info.get('LSMinimumSystemVersion') != config['LSMinimumSystemVersion']:
+    raise SystemExit('The QA minimum macOS is outdated; rebuild the QA application')
 server = root / 'update-server'
 port = (server / 'port.txt').read_text().strip()
-env = dict(os.environ)
-if len(sys.argv) > 3:
-    credentials = Path(sys.argv[3])
-    env.update({
-        'TAURI_SIGNING_PRIVATE_KEY': (credentials / 'dotist.key').read_text().strip(),
-        'TAURI_SIGNING_PRIVATE_KEY_PASSWORD': (credentials / 'password').read_text().strip(),
-    })
-tool = project / '.cache/native-migration/release-tools-target/release/dotist-release-tools'
+config["SUPublicEDKey"] = (root / "test-signing-public.txt").read_text().strip()
+key = (root / "test-signing.key").read_text().strip()
 signer = project / '.cache/native-migration/deps/Sparkle-2.9.6/bin/sign_update'
 products = root / 'DerivedData/Build/Products'
 
@@ -47,7 +44,7 @@ for number, name in enumerate(['check', 'manual', 'tampered', 'automatic', 'canc
     data.mkdir()
     app = qa / 'Dotist-Native-QA.app'
     shutil.copytree(source, app, symlinks=True)
-    version = f'0.1.{number}'
+    version = f'0.2.{number}'
     route = server / 'www' / name
     route.mkdir()
     automatic = name in ['automatic', 'cancel', 'skip']
@@ -58,11 +55,11 @@ for number, name in enumerate(['check', 'manual', 'tampered', 'automatic', 'canc
         'quick_add_shortcut':'', 'settings_shortcut':'', 'views_shortcut':'',
     }
     (data / 'settings.json').write_text(json.dumps(settings))
-    (data / 'update-target.json').write_text(json.dumps({'version':version, 'currentBuild':'0.1.2', 'targetBuild':version}))
+    (data / 'update-target.json').write_text(json.dumps({'version':version, 'currentBuild':'0.2.0', 'targetBuild':version}))
     info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
     info.update(config)
     info.update({
-        'CFBundleVersion':'0.1.2', 'CFBundleShortVersionString':'0.1.2',
+        'CFBundleVersion':'0.2.0', 'CFBundleShortVersionString':'0.2.0',
         'SUFeedURL':f'http://127.0.0.1:{port}/{name}/appcast.xml',
         'DotistQATestUpdateFeed':True, 'DotistQATestCheckOnLaunch':automatic,
         'NSAppTransportSecurity':{'NSAllowsLocalNetworking':True},
@@ -77,12 +74,13 @@ for number, name in enumerate(['check', 'manual', 'tampered', 'automatic', 'canc
     subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(candidate)], check=True, capture_output=True)
     archive = route / 'update.tar.gz'
     subprocess.run(['tar', '-czf', str(archive), '-C', str(candidate.parent), candidate.name], check=True)
-    signatures = json.loads(subprocess.check_output([str(tool), str(archive), str(signer)], env=env, text=True))
+    signed = subprocess.run([str(signer), "--ed-key-file", "-", "-p", str(archive)], input=key, capture_output=True, text=True, check=True)
+    signatures = {"sparkleSignature": signed.stdout.strip()}
     if name == 'tampered':
         signature = bytearray(base64.b64decode(signatures['sparkleSignature']))
         signature[0] ^= 1
         signatures['sparkleSignature'] = base64.b64encode(signature).decode()
-    (route / 'appcast.xml').write_text(f'''<?xml version="1.0"?><rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><title>Isolated Dotist QA</title><item><title>{version}</title><sparkle:version>{version}</sparkle:version><sparkle:shortVersionString>{version}</sparkle:shortVersionString><sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion><enclosure url="http://127.0.0.1:{port}/{name}/{archive.name}" length="{archive.stat().st_size}" type="application/octet-stream" sparkle:edSignature="{signatures['sparkleSignature']}"/></item></channel></rss>''')
+    (route / 'appcast.xml').write_text(f'''<?xml version="1.0"?><rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><title>Isolated Dotist QA</title><item><title>{version}</title><sparkle:version>{version}</sparkle:version><sparkle:shortVersionString>{version}</sparkle:shortVersionString><sparkle:minimumSystemVersion>{info["LSMinimumSystemVersion"]}</sparkle:minimumSystemVersion><enclosure url="http://127.0.0.1:{port}/{name}/{archive.name}" length="{archive.stat().st_size}" type="application/octet-stream" sparkle:edSignature="{signatures['sparkleSignature']}"/></item></channel></rss>''')
     run = plistlib.loads(next(products.glob('DotistUI_*.xctestrun')).read_bytes())
     target = run['DotistUITests']
     target['UITargetAppPath'] = str(app)

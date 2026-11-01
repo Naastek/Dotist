@@ -6,6 +6,7 @@ struct TagManager: View {
     @ObservedObject var model: AppModel
     let close: () -> Void
     let groups: () -> Void
+    let select: (String) -> Void
     @State private var renaming: String?
     @State private var name = ""
     @State private var saving = false
@@ -16,8 +17,8 @@ struct TagManager: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Button(action: close) { Image(systemName: "chevron.left").frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("返回任务列表")))
-                Button(model.text("分组"), action: groups).buttonStyle(.plain).modifier(DotistFocusRing()).font(font(14, .semibold, serif: true)).foregroundColor(DotistDesign.faint)
-                Text(model.text("标签")).font(font(14, .semibold, serif: true))
+                Button(model.text("分组"), action: groups).buttonStyle(.plain).modifier(DotistFocusRing()).font(font(14, .medium)).foregroundColor(DotistDesign.faint)
+                Text(model.text("标签")).font(font(14, .medium))
                 Spacer()
                 Text(model.text("{n} 个").replacingOccurrences(of: "{n}", with: "\(model.tagCounts.count)")).font(font(12)).foregroundColor(DotistDesign.muted)
             }.padding(.horizontal, 16).frame(height: 44)
@@ -27,9 +28,9 @@ struct TagManager: View {
                     ForEach(model.tagCounts) { tag in
                         HStack(spacing: 8) {
                             if renaming == tag.tag {
-                                TextField(model.text("标签名称"), text: $name, onEditingChanged: { active in if !active { save(tag.tag) } }, onCommit: { save(tag.tag) }).textFieldStyle(.plain).modifier(DotistFocusRing()).font(font(14, .semibold, serif: true))
+                                TextField(model.text("标签名称"), text: $name, onEditingChanged: { active in if !active { save(tag.tag) } }, onCommit: { save(tag.tag) }).textFieldStyle(.plain).modifier(DotistFocusRing()).font(font(14, .medium))
                             } else {
-                                Button("#" + tag.tag) { model.selectTag(tag.tag); model.scope = "all"; close() }.buttonStyle(.plain).modifier(DotistFocusRing()).font(font(14, .semibold, serif: true)).frame(maxWidth: .infinity, alignment: .leading)
+                                Button("#" + tag.tag) { select(tag.tag); close() }.buttonStyle(.plain).modifier(DotistFocusRing()).font(font(14, .medium)).frame(maxWidth: .infinity, alignment: .leading)
                             }
                             Text("\(tag.open)").font(font(12)).foregroundColor(DotistDesign.faint)
                             Button(model.text("重命名")) { renaming = tag.tag; name = tag.tag }.buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12)).foregroundColor(DotistDesign.faint)

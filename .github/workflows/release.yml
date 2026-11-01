@@ -17,58 +17,47 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Set the build version
+      - name: Set the native build version
         id: version
         run: |
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          const path = 'src-tauri/tauri.conf.json';
-          const config = JSON.parse(fs.readFileSync(path, 'utf8'));
-          const base = /^(\d+)\.(\d+)\.0$/.exec(config.version);
-          if (!base) throw new Error('The source version must use a zero patch number');
-          const version = `${base[1]}.${base[2]}.${process.env.GITHUB_RUN_NUMBER}`;
-          config.version = version;
-          fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
-          NODE
-      - run: npm ci
-      - run: npm test
-      - run: cargo test --locked --manifest-path crates/dotist-core/Cargo.toml
-      - name: Test native bridge and build native application
-        env:
-          DOTIST_CARGO_OFFLINE: '0'
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          path = Path('native/app.json')
+          config = json.loads(path.read_text())
+          match = re.fullmatch(r'(\d+)\.(\d+)\.0', config['version'])
+          if not match:
+              raise SystemExit('The source version must end in .0')
+          version = f'{match[1]}.{match[2]}.{os.environ["GITHUB_RUN_NUMBER"]}'
+          config['version'] = version
+          path.write_text(json.dumps(config, indent=2) + '\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\n')
+          PY
+      - name: Test the native application
+        run: bash native/scripts/test-native.sh
+      - name: Build the native application
         run: |
           test "$(uname -m)" = arm64
-          export DOTIST_MACOS_SDK="$(xcrun --sdk macosx --show-sdk-path)"
-          bash native/scripts/test-bridge.sh
           bash native/scripts/build-local.sh > "$RUNNER_TEMP/native-build.log"
           cat "$RUNNER_TEMP/native-build.log"
           app=$(sed -n 's/^Local application: //p' "$RUNNER_TEMP/native-build.log" | tail -n 1)
           echo "DOTIST_RELEASE_APP=$app" >> "$GITHUB_ENV"
-      - name: Sign both native and legacy-compatible update metadata
+      - name: Sign and verify native Sparkle update
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          SPARKLE_SIGNING_PRIVATE_KEY: ${{ secrets.SPARKLE_SIGNING_PRIVATE_KEY }}
         run: |
-          CARGO_TARGET_DIR="$PWD/.cache/native-migration/release-tools-target" cargo build --locked --release --manifest-path native/release-tools/Cargo.toml
           python3 native/scripts/package-update.py "$DOTIST_RELEASE_APP" --output .cache/native-release
           python3 native/scripts/verify-update.py .cache/native-release
-      - name: Upload complete draft and publish
+      - name: Upload the complete draft and publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          tag="v$VERSION"
-          gh release create "$tag" --draft --target "$GITHUB_SHA" --title "Dotist v$VERSION" --notes-file docs/release-notes.md \
-            .cache/native-release/Dotist_darwin_aarch64.app.tar.gz \
-            .cache/native-release/Dotist_darwin_aarch64.app.tar.gz.sig \
-            .cache/native-release/latest.json .cache/native-release/appcast.xml
+          version="$(python3 -c 'import json; print(json.load(open("native/app.json"))["version"])')"
+          tag="v$version"
+          gh release create "$tag" --draft --target "$GITHUB_SHA" --title "Dotist v$version" --notes-file docs/release-notes.md \
+            .cache/native-release/Dotist_darwin_aarch64.app.tar.gz .cache/native-release/appcast.xml
           current=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
           if [ "$current" != "$GITHUB_SHA" ]; then
             echo 'A newer commit is on main; leaving this release as a draft.'

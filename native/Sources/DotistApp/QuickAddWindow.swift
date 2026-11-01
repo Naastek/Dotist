@@ -7,7 +7,7 @@ struct QuickAddWindow: View {
     let close: () -> Void
     @State private var title = ""
     @State private var submitting = false
-    @State private var category = UserDefaults.standard.string(forKey: "dotist.quick.group") ?? "work"
+    @State private var category = UserDefaults.standard.string(forKey: "dotist.quick.group") ?? DotistGroup.inboxID
     @State private var dueIndex = -1
     private func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular, serif: Bool = false) -> Font {
         DotistDesign.font(size, weight: weight, serif: serif, language: model.language)
@@ -28,7 +28,7 @@ struct QuickAddWindow: View {
                 if let group {
                     Button { cycle(1) } label: {
                         Text(group.name).font(font(12, .semibold, serif: true))
-                            .foregroundColor(model.settings.groupColors == "none" ? DotistDesign.ink : DotistDesign.category(group.color))
+                            .foregroundColor(DotistDesign.ink)
                             .lineLimit(1).frame(minHeight: 24).contentShape(Rectangle())
                     }.buttonStyle(.plain).modifier(DotistFocusRing())
                 }
@@ -38,7 +38,7 @@ struct QuickAddWindow: View {
                 Text(model.error.map { model.text($0) } ?? model.text("回车添加 · Esc 关闭 · Tab 换分组")).font(font(12)).foregroundColor(model.error == nil ? DotistDesign.faint : DotistDesign.danger).lineLimit(1)
             }.frame(height: 24)
         }.padding(.horizontal, 22).padding(.vertical, 16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-            .foregroundColor(DotistDesign.ink).background(WindowMaterial(opacity: model.settings.opacity, frost: model.settings.frost)).cornerRadius(18)
+            .foregroundColor(DotistDesign.ink).background(WindowMaterial(opacity: model.settings.opacity, frost: model.settings.frost)).cornerRadius(18).modifier(DotistTheme(theme: model.settings.theme))
     }
     private func cycle(_ step: Int) {
         guard !model.groups.isEmpty else { return }

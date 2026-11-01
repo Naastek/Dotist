@@ -40,7 +40,7 @@ struct RangeCalendar: View {
             HStack(spacing: 10) {
                 ForEach(quick, id: \.0) { label, from, to in
                     Button(model.text(label)) { anchor = nil; hover = nil; choose(from, to) }.buttonStyle(.plain).modifier(DotistFocusRing())
-                        .foregroundColor(start == from && end == to ? DotistDesign.accent : DotistDesign.muted)
+                        .font(font(12, start == from && end == to ? .medium : .regular)).foregroundColor(start == from && end == to ? DotistDesign.ink : DotistDesign.faint)
                 }
                 if let clear, !start.isEmpty { Button(model.text("清除"), action: clear).buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted) }
             }.font(font(12))
@@ -74,15 +74,11 @@ struct RangeCalendar: View {
                             if let from { choose(min(from, chosen), max(from, chosen)); anchor = nil; hover = nil }
                             else { anchor = chosen; choose(chosen, chosen) }
                         } label: {
-                            ZStack {
-                                if edge { Circle().fill(DotistDesign.accent).frame(width: 24, height: 24) }
-                                Text("\(calendar.component(.day, from: date))").font(font(12, iso == Date().dotistDay ? .semibold : .regular))
-                                    .foregroundColor(edge ? .white : selected || iso == Date().dotistDay ? DotistDesign.accent : DotistDesign.ink)
-                                if !single && marks.contains(iso) {
-                                    VStack { Spacer(); RoundedRectangle(cornerRadius: 1).fill(edge ? Color.white : DotistDesign.accent).frame(width: 6, height: 2).padding(.bottom, 2) }
-                                }
-                            }.frame(height: 28).contentShape(Rectangle())
-                        }.buttonStyle(.plain).opacity(calendar.isDate(date, equalTo: month, toGranularity: .month) ? 1 : 0.6)
+                            Text("\(calendar.component(.day, from: date))")
+                                .font(font(12, edge || iso == Date().dotistDay ? .semibold : .regular))
+                                .foregroundColor(selected ? DotistDesign.accent : !calendar.isDate(date, equalTo: month, toGranularity: .month) ? DotistDesign.faint : iso == Date().dotistDay || marks.contains(iso) ? DotistDesign.ink : DotistDesign.muted)
+                                .frame(maxWidth: .infinity).frame(height: 28).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
                             .accessibilityAddTraits(selected ? .isSelected : [])
                             .onHover { over in if anchor != nil { hover = over ? iso : nil } }
                             .modifier(CalendarFocusModifier(date: iso, keyboardDate: $keyboardDate))
@@ -95,10 +91,7 @@ struct RangeCalendar: View {
                                 case .down: offset = 7
                                 @unknown default: return
                                 }
-                                let current: Date
-                                if #available(macOS 12, *) { current = date }
-                                else { current = keyboardDate.flatMap(Date.dotistDay) ?? date }
-                                if let next = calendar.date(byAdding: .day, value: offset, to: current) {
+                                if let next = calendar.date(byAdding: .day, value: offset, to: date) {
                                     month = next
                                     keyboardDate = next.dotistDay
                                 }

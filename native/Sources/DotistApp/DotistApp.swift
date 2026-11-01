@@ -6,6 +6,16 @@ import SwiftUI
 @main
 struct DotistApplication {
     static func main() {
+        if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa" {
+            let expected = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("data", isDirectory: true).standardizedFileURL.path
+            let selected = ProcessInfo.processInfo.environment["DOTIST_DATA_DIR"].map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+            let isLink = (try? URL(fileURLWithPath: expected).resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false
+            guard selected == expected, !isLink else {
+                fputs("Dotist QA requires its own DOTIST_DATA_DIR.\n", stderr)
+                exit(1)
+            }
+        }
+        if CommandLine.arguments.contains("--mcp") { MCPProxy.run() }
         let app = NSApplication.shared
         let delegate = DotistDelegate()
         app.delegate = delegate
@@ -31,66 +41,39 @@ final class DotistHostingView<Content: View>: NSHostingView<Content> {
 }
 
 struct WindowDragArea: View {
-    @State private var origin: (mouse: NSPoint, window: NSPoint)?
     var body: some View {
-        if #available(macOS 15.0, *) {
-            Color.clear.contentShape(Rectangle()).gesture(WindowDragGesture()).allowsWindowActivationEvents()
-        } else {
-            Color.clear.contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 4)
-                .onChanged { _ in
-                    guard let window = NSApp.currentEvent?.window else { return }
-                    if origin == nil { origin = (NSEvent.mouseLocation, window.frame.origin) }
-                    guard let origin else { return }
-                    let mouse = NSEvent.mouseLocation
-                    window.setFrameOrigin(NSPoint(x: origin.window.x + mouse.x - origin.mouse.x, y: origin.window.y + mouse.y - origin.mouse.y))
-                }.onEnded { _ in origin = nil })
-        }
+        Color.clear.contentShape(Rectangle()).gesture(WindowDragGesture()).allowsWindowActivationEvents()
     }
 }
 
 @MainActor
 final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableObject {
-    @Published var bubble = false
-    @Published var hovering = false
-    @Published var bubbleOnRight = true
+    private(set) var motion: PanelMotion!
+    var bubble: Bool { motion?.bubble ?? false }
+    var animationInProgress: Bool { motion?.animationInProgress ?? false }
     private var model: AppModel!
     private var updater: NativeUpdater!
     private var panel: DotistPanel!
     private var viewsWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var quickWindow: QuickPanel?
+    private var searchWindow: QuickPanel?
+    let mainState = TaskPanelState()
+    private var groupPanels: [GroupPanelController] = []
     private var menuBar: MenuBarController?
     private var shortcuts: GlobalShortcuts?
     private var suspendedShortcuts: [UInt32: String] = [:]
     private var settingsObserver: AnyCancellable?
     private var appliedLanguage: String?
     private(set) var expandedSize = NSSize(width: 364, height: 620)
-    private(set) var transitionSize = NSSize(width: 364, height: 620)
     private var idleTimer: Timer?
-    private var lastActive = Date()
-    @Published private(set) var animationInProgress = false
     private var moveCheck: DispatchWorkItem?
-    private var hoverClose: DispatchWorkItem?
-    private var hoverAnimating = false
-    private var pendingHover: Bool?
-    private var pendingBubbleToggle = false
-    private var hoverRequiresExit = false
     private var menuStates: [(NSMenuItem, Bool)] = []
+    private var preferredWindowFrame = NSRect.zero
+    private var displayOffset = NSPoint.zero
+    private var userMoveInProgress = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa" {
-            let expected = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("data", isDirectory: true).standardizedFileURL.path
-            let selected = ProcessInfo.processInfo.environment["DOTIST_DATA_DIR"].map { URL(fileURLWithPath: $0).standardizedFileURL.path }
-            let isLink = (try? URL(fileURLWithPath: expected).resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false
-            if selected != expected || isLink {
-                let alert = NSAlert()
-                alert.messageText = "Dotist QA"
-                alert.informativeText = "验收副本需要使用其专属的隔离数据目录。"
-                alert.runModal()
-                NSApp.terminate(nil)
-                return
-            }
-        }
         DotistDesign.registerFonts()
         do { model = try AppModel() }
         catch {
@@ -102,6 +85,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             return
         }
         updater = NativeUpdater(model: model)
+        mainState.scope = model.settings.defaultFilter
         if model.settings.windowWidth > 0 && model.settings.windowHeight > 0 {
             expandedSize = NSSize(width: Int(model.settings.windowWidth), height: Int(model.settings.windowHeight))
         }
@@ -117,9 +101,10 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         panel.delegate = self
         if model.settings.theme == "light" { panel.appearance = NSAppearance(named: .aqua) }
         if model.settings.theme == "dark" { panel.appearance = NSAppearance(named: .darkAqua) }
+        motion = PanelMotion(model: model, panel: panel, size: expandedSize, title: { [model] in model!.bubbleTitle }, rememberFrame: { [weak self] in self?.rememberWindowFrame($0) })
         let container = NSView(frame: NSRect(origin: .zero, size: expandedSize))
         let hosting = DotistHostingView(rootView: RootWindow(model: model, coordinator: self))
-        if #available(macOS 13.0, *) { hosting.sizingOptions = [] }
+        hosting.sizingOptions = []
         hosting.frame = container.bounds
         hosting.autoresizingMask = [.width, .height]
         container.addSubview(hosting)
@@ -154,8 +139,11 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             self.panel.appearance = appearance
             self.panel.level = settings.alwaysOnTop ? .floating : .normal
             self.viewsWindow?.appearance = appearance
+            self.viewsWindow?.level = settings.alwaysOnTop ? .floating : .normal
             self.settingsWindow?.appearance = appearance
             self.quickWindow?.appearance = appearance
+            self.searchWindow?.appearance = appearance
+            self.groupPanels.forEach { $0.applyAppearance() }
             if self.appliedLanguage != settings.language {
                 self.appliedLanguage = settings.language
                 self.viewsWindow?.title = self.model.text("任务视图")
@@ -172,8 +160,24 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         } else if let area = NSScreen.main?.visibleFrame {
             panel.setFrameOrigin(NSPoint(x: max(area.minX, area.maxX - expandedSize.width - 16), y: max(area.minY, area.maxY - expandedSize.height - 16)))
         } else { panel.center() }
-        panel.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        preferredWindowFrame = panel.frame
+        if let x = UserDefaults.standard.object(forKey: "dotist.native.window.x") as? Double,
+           let y = UserDefaults.standard.object(forKey: "dotist.native.window.y") as? Double {
+            preferredWindowFrame.origin = NSPoint(x: x, y: y)
+            displayOffset = NSPoint(x: panel.frame.minX - x, y: panel.frame.minY - y)
+            screensChanged()
+        }
+        NotificationCenter.default.addObserver(self, selector: #selector(screensChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        if !CommandLine.arguments.contains("--background") {
+            panel.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        model.mcp.focus = { [weak self] task in
+            guard let self else { return }
+            self.performMenuAction("show")
+            if let task { self.revealTask(task) }
+        }
+        if model.settings.mcpEnabled { model.mcp.start() }
         idleTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.updateIdleState() }
         }
@@ -186,8 +190,16 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if updater.shouldDelayTermination({ allowed in sender.reply(toApplicationShouldTerminate: allowed) }) { return .terminateLater }
+        if updater?.shouldDelayTermination({ allowed in sender.reply(toApplicationShouldTerminate: allowed) }) == true { return .terminateLater }
         return .terminateNow
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        motion?.stop()
+        groupPanels.forEach { $0.motion.stop() }
+        model?.mcp.stop()
+        idleTimer?.invalidate()
+        NotificationCenter.default.removeObserver(self)
     }
 
     func windowDidEndLiveResize(_ notification: Notification) {
@@ -196,6 +208,10 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         patch.windowWidth = UInt32(max(320, panel.frame.width.rounded()))
         patch.windowHeight = UInt32(max(440, panel.frame.height.rounded()))
         model.updateSettings(patch)
+        preferredWindowFrame = panel.frame
+        displayOffset = .zero
+        UserDefaults.standard.set(panel.frame.minX, forKey: "dotist.native.window.x")
+        UserDefaults.standard.set(panel.frame.minY, forKey: "dotist.native.window.y")
     }
     func windowDidResignKey(_ notification: Notification) {
         if let window = notification.object as? NSWindow, window === quickWindow { window.orderOut(nil) }
@@ -208,6 +224,9 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
 
     func windowDidMove(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === panel, !animationInProgress else { return }
+        // Only a user's drag changes the preferred placement. Display rearrangement is temporary.
+        guard NSEvent.pressedMouseButtons & 1 != 0 || userMoveInProgress else { return }
+        userMoveInProgress = true
         moveCheck?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.finishMove() }
         moveCheck = work
@@ -222,43 +241,40 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
             return
         }
-        if bubble, let area = panel.screen?.visibleFrame {
-            let frame = panel.frame
-            let x = min(max(frame.minX, area.minX), max(area.minX, area.maxX - frame.width))
-            let y = min(max(frame.minY, area.minY), max(area.minY, area.maxY - frame.height))
-            if x != frame.minX || y != frame.minY { panel.setFrameOrigin(NSPoint(x: x, y: y)) }
-            if !hovering && !hoverAnimating && frame.width <= 49 { bubbleOnRight = x + frame.width / 2 > area.midX }
-            let width = min(expandedSize.width, area.width)
-            let height = min(expandedSize.height, area.height)
-            let center = bubbleOnRight ? x + frame.width - 24 : x + 24
-            let right = min(max(center + 22, area.minX + width), area.maxX)
-            let top = min(max(y + 46, area.minY + height), area.maxY)
-            UserDefaults.standard.set(right - width, forKey: "dotist.native.window.x")
-            UserDefaults.standard.set(top - height, forKey: "dotist.native.window.y")
-            return
-        }
-        UserDefaults.standard.set(panel.frame.minX, forKey: "dotist.native.window.x")
-        UserDefaults.standard.set(panel.frame.minY, forKey: "dotist.native.window.y")
+        userMoveInProgress = false
+        if motion.finishBubbleMove() != nil { return }
+        rememberWindowFrame(panel.frame)
+    }
+
+    private func rememberWindowFrame(_ frame: NSRect) {
+        displayOffset = .zero
+        UserDefaults.standard.set(frame.minX, forKey: "dotist.native.window.x")
+        UserDefaults.standard.set(frame.minY, forKey: "dotist.native.window.y")
+        preferredWindowFrame = frame
+    }
+
+    static func screenPlacement(for frame: NSRect, screens: [NSRect], main: NSRect) -> NSRect {
+        if screens.contains(where: {
+            let overlap = $0.intersection(frame)
+            return overlap.width >= 80 && overlap.height >= 80
+        }) { return frame }
+        return NSRect(x: min(max(frame.minX, main.minX), max(main.minX, main.maxX - frame.width)),
+                      y: min(max(frame.minY, main.minY), max(main.minY, main.maxY - frame.height)),
+                      width: frame.width, height: frame.height)
+    }
+
+    @objc private func screensChanged() {
+        guard !userMoveInProgress, !animationInProgress, let main = NSScreen.main?.visibleFrame else { return }
+        moveCheck?.cancel()
+        let target = Self.screenPlacement(for: preferredWindowFrame, screens: NSScreen.screens.map(\.visibleFrame), main: main)
+        let offset = NSPoint(x: target.minX - preferredWindowFrame.minX, y: target.minY - preferredWindowFrame.minY)
+        panel.setFrameOrigin(NSPoint(x: panel.frame.minX + offset.x - displayOffset.x, y: panel.frame.minY + offset.y - displayOffset.y))
+        displayOffset = offset
     }
 
     private func updateIdleState() {
-        let prefs = model.settings
-        if bubble && hoverRequiresExit && !panel.frame.contains(NSEvent.mouseLocation) { hoverRequiresExit = false }
-        if bubble && hovering && !panel.frame.contains(NSEvent.mouseLocation) && NSEvent.pressedMouseButtons & 1 == 0 { setHover(false) }
-        let active = bubble || animationInProgress || panel.isKeyWindow || panel.frame.contains(NSEvent.mouseLocation) || NSEvent.pressedMouseButtons & 1 != 0
-        if active || prefs.locked { lastActive = Date() }
-        let idle = Date().timeIntervalSince(lastActive)
-        if !active && !prefs.locked && prefs.autoCollapse && idle >= Double(prefs.autoCollapseSecs) {
-            toggleBubble()
-            return
-        }
-        let faded = !active && !prefs.locked && prefs.idleFade && idle >= Double(prefs.idleDelaySecs)
-        let target = faded ? CGFloat(prefs.idleOpacity) / 100 : 1
-        guard abs(panel.alphaValue - target) > 0.01 else { return }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : (faded ? Double(prefs.idleFadeSecs) : 0.12)
-            panel.animator().alphaValue = target
-        }
+        motion.updateIdleState()
+        groupPanels.forEach { $0.motion.updateIdleState() }
     }
 
     private func installMenu() {
@@ -284,11 +300,16 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         editMenu.addItem(withTitle: model.text("复制"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: model.text("粘贴"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: model.text("全选"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+        let search = NSMenuItem(title: model.text("搜索"), action: #selector(openSearchFromMenu), keyEquivalent: "k")
+        search.target = self
+        editMenu.addItem(search)
         editItem.submenu = editMenu
         NSApp.mainMenu = menu
     }
     @objc private func openSettingsFromMenu() { showSettings() }
     @objc private func openQuickFromMenu() { showQuick() }
+    @objc private func openSearchFromMenu() { showSearch() }
 
     private func shortcutValues() -> [UInt32: String] {
         [1: model.settings.toggleShortcut, 2: model.settings.quickAddShortcut, 3: model.settings.settingsShortcut, 4: model.settings.viewsShortcut]
@@ -329,10 +350,12 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
 
     private func performMenuAction(_ action: String) {
         if action.hasPrefix("filter:") {
+            mainState.groupID = nil
             model.scope = String(action.dropFirst("filter:".count)); model.scopeNavigation += 1; showMain(); return
         }
         if action.hasPrefix("group:") {
             let id = String(action.dropFirst("group:".count))
+            mainState.groupID = id == "all" ? nil : id
             model.scope = "all"; model.scopeNavigation += 1; showMain()
             if id != "all" { DispatchQueue.main.async { self.model.gotoGroup = id } }
             return
@@ -354,132 +377,40 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func toggleBubble() {
-        guard !animationInProgress, let screen = panel.screen ?? NSScreen.main else { return }
-        if hoverAnimating {
-            hoverClose?.cancel(); hoverClose = nil
-            pendingHover = nil; pendingBubbleToggle = true
-            return
+    func toggleBubble() { motion.toggleBubble() }
+
+    func showBubbleMenu(_ event: NSEvent, in view: NSView) {
+        let menu = NSMenu()
+        func add(_ title: String, _ action: String, checked: Bool = false) {
+            let item = NSMenuItem(title: model.text(title), action: #selector(bubbleMenuAction(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = action
+            item.state = checked ? .on : .off
+            menu.addItem(item)
         }
-        hoverClose?.cancel(); hoverClose = nil
-        animationInProgress = true
-        let area = screen.visibleFrame
-        let old = panel.frame
-        let reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let target: NSRect
-        if !bubble {
-            hoverRequiresExit = true
-            expandedSize = old.size
-            transitionSize = old.size
-            let x = min(max(old.maxX - 46, area.minX), area.maxX - 48)
-            let y = min(max(old.maxY - 46, area.minY), area.maxY - 48)
-            target = NSRect(x: x, y: y, width: 48, height: 48)
-            bubbleOnRight = target.midX > area.midX
-            panel.minSize = NSSize(width: 48, height: 48)
-            panel.styleMask.remove(.resizable)
-            bubble = true
-        } else {
-            let width = min(expandedSize.width, area.width)
-            let height = min(expandedSize.height, area.height)
-            let center = bubbleOnRight ? old.maxX - 24 : old.minX + 24
-            let right = min(max(center + 22, area.minX + width), area.maxX)
-            let top = min(max(old.midY + 22, area.minY + height), area.maxY)
-            target = NSRect(x: right - width, y: top - height, width: width, height: height)
-            transitionSize = target.size
-            hovering = false
-            bubble = false
-        }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = reduced ? 0 : (bubble ? 0.28 : 0.34)
-            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
-            panel.animator().setFrame(target, display: true)
-        } completionHandler: { [weak self] in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.animationInProgress = false
-                if self.bubble {
-                    // A collapse click often leaves the pointer inside the new circle.
-                    // Only a fresh pointer entry should reveal the detail capsule.
-                    self.hoverRequiresExit = self.panel.frame.contains(NSEvent.mouseLocation)
-                    return
-                }
-                self.panel.minSize = NSSize(width: 320, height: 440)
-                self.panel.styleMask.insert(.resizable)
-                UserDefaults.standard.set(self.panel.frame.minX, forKey: "dotist.native.window.x")
-                UserDefaults.standard.set(self.panel.frame.minY, forKey: "dotist.native.window.y")
-            }
-        }
+        add("显示窗口", "show")
+        add("快速添加", "quick")
+        add("任务视图", "views")
+        menu.addItem(.separator())
+        add(model.settings.alwaysOnTop ? "取消置顶" : "置顶窗口", "top", checked: model.settings.alwaysOnTop)
+        add(model.settings.locked ? "取消固定" : "固定窗口", "locked", checked: model.settings.locked)
+        menu.addItem(.separator())
+        add("设置…", "settings")
+        add("退出 Dotist", "quit")
+        motion.showMenu(menu, event: event, in: view)
     }
 
-    func setHover(_ active: Bool) {
-        if !active && !panel.frame.contains(NSEvent.mouseLocation) { hoverRequiresExit = false }
-        guard bubble, !animationInProgress, let screen = panel.screen ?? NSScreen.main else { return }
-        if active && hoverRequiresExit { return }
-        if active && !model.settings.hoverExpand { return }
-        if active && NSEvent.pressedMouseButtons & 1 != 0 { return }
-        if !active {
-            guard hovering, hoverClose == nil else { return }
-            let work = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                self.hoverClose = nil
-                guard self.bubble, NSEvent.pressedMouseButtons & 1 == 0, !self.panel.frame.contains(NSEvent.mouseLocation) else { return }
-                self.setHoverNow(false, screen: self.panel.screen ?? screen)
-            }
-            hoverClose = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: work)
+    @objc private func bubbleMenuAction(_ sender: NSMenuItem) {
+        guard let action = sender.representedObject as? String else { return }
+        if action == "top" {
+            var patch = DotistSettingsPatch(); patch.alwaysOnTop = !model.settings.alwaysOnTop; model.updateSettings(patch)
             return
         }
-        hoverClose?.cancel(); hoverClose = nil
-        pendingHover = nil
-        guard !hovering else { return }
-        setHoverNow(true, screen: screen)
-    }
-
-    private func setHoverNow(_ active: Bool, screen: NSScreen) {
-        guard bubble, !animationInProgress else { return }
-        if hoverAnimating { pendingHover = active; return }
-        guard hovering != active else { return }
-        hoverAnimating = true
-        let frame = panel.frame
-        let titleWidth = (model.bubbleTitle as NSString).size(withAttributes: [.font: DotistDesign.nativeFont(13, weight: .medium, language: model.language)]).width
-        let detailWidth = (model.bubbleDetail as NSString).size(withAttributes: [.font: DotistDesign.nativeFont(12, language: model.language)]).width
-        let width: CGFloat = active ? min(max(120, ceil(48 + 12 + max(titleWidth, detailWidth) + 18)), min(440, screen.visibleFrame.width / 2)) : 48
-        let coreX = bubbleOnRight ? frame.maxX - 24 : frame.minX + 24
-        let target = NSRect(x: bubbleOnRight ? coreX + 24 - width : coreX - 24, y: frame.minY, width: width, height: 48)
-        // Resize the coordinate space without animation; only the glass surface morphs.
-        // Animating the whole tree also moves the hit target away from the pointer.
-        if active { panel.setFrame(target, display: true) }
-        hovering = active
-    }
-
-    func finishHover(_ active: Bool) {
-        guard bubble, hoverAnimating else { return }
-        if !active && NSEvent.pressedMouseButtons & 1 != 0 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.finishHover(active) }
+        if action == "locked" {
+            var patch = DotistSettingsPatch(); patch.locked = !model.settings.locked; model.updateSettings(patch)
             return
         }
-        if !active {
-            let frame = panel.frame
-            let coreX = bubbleOnRight ? frame.maxX - 24 : frame.minX + 24
-            panel.setFrame(NSRect(x: coreX - 24, y: frame.minY, width: 48, height: 48), display: true)
-            if let screen = panel.screen ?? NSScreen.main { bubbleOnRight = coreX > screen.visibleFrame.midX }
-        }
-        hoverAnimating = false
-        if pendingBubbleToggle {
-            pendingBubbleToggle = false
-            toggleBubble()
-            return
-        }
-        if let next = pendingHover {
-            pendingHover = nil
-            if let screen = panel.screen ?? NSScreen.main { setHoverNow(next, screen: screen) }
-        }
-    }
-
-    func beginBubbleDrag() {
-        guard bubble, !animationInProgress else { return }
-        hoverClose?.cancel(); hoverClose = nil
-        pendingHover = nil
+        performMenuAction(action)
     }
 
     func showViews() {
@@ -499,8 +430,26 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             viewsWindow = window
         }
         NSApp.setActivationPolicy(.regular)
+        viewsWindow?.level = panel.level
         viewsWindow?.makeKeyAndOrderFront(nil)
         viewsWindow?.makeFirstResponder(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func showGroupPanel(_ id: String) {
+        guard model.groups.contains(where: { $0.id == id }) else { return }
+        if let existing = groupPanels.first(where: { $0.state.groupID == id }) {
+            if existing.compact { existing.toggleCompact() }
+            existing.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let controller = GroupPanelController(model: model, groupID: id, near: groupPanels.last?.window?.frame ?? panel.frame,
+            showViews: { [weak self] in self?.showViews() }, showSearch: { [weak self] in self?.showSearch() },
+            showSettings: { [weak self] in self?.showSettings() }, showGroupPanel: { [weak self] in self?.showGroupPanel($0) },
+            didClose: { [weak self] closed in self?.groupPanels.removeAll { $0 === closed } })
+        groupPanels.append(controller)
+        controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
     func showSettings() {
@@ -526,7 +475,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     private func installContent<Content: View>(_ content: Content, in window: NSWindow) {
         let container = NSView(frame: window.contentView?.bounds ?? .zero)
         let hosting = DotistHostingView(rootView: content)
-        if #available(macOS 13.0, *) { hosting.sizingOptions = [] }
+        hosting.sizingOptions = []
         hosting.frame = container.bounds
         hosting.autoresizingMask = [.width, .height]
         container.addSubview(hosting)
@@ -539,6 +488,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         model.updateSettings(patch) { [weak self] success in
             guard success, let self else { return }
             self.expandedSize = NSSize(width: 364, height: 620)
+            self.motion.expandedSize = self.expandedSize
             guard !self.bubble else { return }
             let old = self.panel.frame
             self.panel.setFrame(NSRect(x: old.maxX - 364, y: old.maxY - 620, width: 364, height: 620), display: true, animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
@@ -567,36 +517,62 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         quickWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    func showSearch() {
+        if searchWindow == nil {
+            let window = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 600, height: 440), styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.hasShadow = true
+            window.level = .floating
+            window.isReleasedWhenClosed = false
+            window.isMovableByWindowBackground = true
+            window.appearance = panel.appearance
+            window.center()
+            searchWindow = window
+        }
+        guard let window = searchWindow else { return }
+        window.title = model.text("搜索")
+        installContent(CommandPalette(model: model, close: { [weak window] in window?.orderOut(nil) }, reveal: revealTask, revealGroup: revealGroup, showViews: showViews), in: window)
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func revealGroup(_ group: DotistGroup) {
+        performMenuAction("show")
+        mainState.groupID = group.id
+        model.selectTag(nil)
+        model.focusId = nil
+        model.scope = "all"
+        model.activeGroupNavigation(group.id)
+    }
+
+    private func revealTask(_ task: DotistTask) {
+        performMenuAction("show")
+        mainState.groupID = task.category
+        model.scope = "all"
+        model.selectTag(nil)
+        if let parent = task.parentId {
+            mainState.expanded.insert(parent)
+            if model.tasks.first(where: { $0.id == parent })?.completed == true { mainState.folded.insert(task.category) }
+        }
+        if task.completed { mainState.folded.insert(task.category) }
+        model.gotoGroup = task.category
+        model.scopeNavigation += 1
+        DispatchQueue.main.async { [weak self] in
+            self?.model.focusId = task.id
+            self?.model.focusNavigation += 1
+        }
+    }
 }
 
 struct RootWindow: View {
     @ObservedObject var model: AppModel
-    @ObservedObject var coordinator: DotistDelegate
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let coordinator: DotistDelegate
     var body: some View {
-        GeometryReader { geometry in
-            let fixed = coordinator.bubble || coordinator.animationInProgress
-            let width = fixed ? coordinator.transitionSize.width : geometry.size.width
-            let height = fixed ? coordinator.transitionSize.height : geometry.size.height
-            ZStack(alignment: .topTrailing) {
-                MainWindowContent(model: model, coordinator: coordinator).equatable()
-                    .frame(width: width, height: height)
-                    .opacity(coordinator.bubble ? 0 : 1)
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.14).delay(coordinator.bubble ? 0 : 0.1), value: coordinator.bubble)
-                    .allowsHitTesting(!coordinator.bubble)
-                    .accessibilityHidden(coordinator.bubble)
-                // Keep text, font cascade and SwiftUI metadata warm before the first
-                // collapse. The circle's content never lays out at intermediate widths.
-                BubbleWindow(model: model, coordinator: coordinator, width: coordinator.hovering ? geometry.size.width : 48)
-                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: coordinator.animationInProgress || coordinator.bubbleOnRight ? .topTrailing : .topLeading)
-                    .opacity(coordinator.bubble ? 1 : 0)
-                    .allowsHitTesting(coordinator.bubble && !coordinator.animationInProgress)
-                    .accessibilityHidden(!coordinator.bubble)
-            }
-            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topTrailing)
-            .background(FloatingSurface(model: model, coordinator: coordinator, size: geometry.size))
-            .clipped()
-        }
+        FloatingPanelView(model: model, motion: coordinator.motion, title: model.bubbleTitle,
+            remaining: model.remainingCount, total: model.topLevelTasks.count, groupName: nil,
+            contextMenu: coordinator.showBubbleMenu, content: MainWindowContent(model: model, coordinator: coordinator).equatable())
     }
 }
 
@@ -607,102 +583,44 @@ private struct MainWindowContent: View, Equatable {
     let coordinator: DotistDelegate
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.model === rhs.model && lhs.coordinator === rhs.coordinator }
     var body: some View {
-        MainWindow(model: model, showViews: coordinator.showViews, showSettings: coordinator.showSettings, collapse: coordinator.toggleBubble)
+        MainWindow(model: model, state: coordinator.mainState, showViews: coordinator.showViews, showSearch: coordinator.showSearch, showSettings: coordinator.showSettings, showGroupPanel: coordinator.showGroupPanel, collapse: coordinator.toggleBubble)
     }
 }
 
-private struct FloatingSurface: View {
-    @ObservedObject var model: AppModel
-    @ObservedObject var coordinator: DotistDelegate
-    let size: CGSize
-    @State private var revealDetails = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        FloatingMaterial(opacity: model.settings.opacity, frost: model.settings.frost, compact: coordinator.bubble)
-            .frame(width: coordinator.bubble && !coordinator.animationInProgress && !revealDetails ? 48 : size.width, height: size.height)
-            .frame(width: size.width, height: size.height, alignment: coordinator.bubbleOnRight ? .topTrailing : .topLeading)
-            .onChange(of: coordinator.hovering) { active in
-                // The parent window has already adopted its final coordinate space.
-                // Animate this surface alone, and shrink the window only after it settles.
-                if reduceMotion {
-                    revealDetails = active
-                    coordinator.finishHover(active)
-                } else if #available(macOS 14.0, *) {
-                    withAnimation(.spring(response: 0.34, dampingFraction: 0.9), completionCriteria: .removed) {
-                        revealDetails = active
-                    } completion: {
-                        coordinator.finishHover(active)
-                    }
-                } else {
-                    withAnimation(.easeInOut(duration: 0.26)) { revealDetails = active }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) { coordinator.finishHover(active) }
-                }
-            }
-    }
-}
-
-struct BubbleWindow: View {
-    @ObservedObject var model: AppModel
-    @ObservedObject var coordinator: DotistDelegate
-    let width: CGFloat
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    var body: some View {
-        Button(action: coordinator.toggleBubble) {
-            ZStack(alignment: coordinator.bubbleOnRight ? .trailing : .leading) {
-                details
-                    .frame(width: coordinator.hovering ? max(40, width - 78) : 362,
-                           alignment: coordinator.bubbleOnRight ? .trailing : .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .opacity(coordinator.hovering ? 1 : 0)
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: coordinator.hovering)
-                    .padding(coordinator.bubbleOnRight ? .leading : .trailing, 12)
-                    .padding(coordinator.bubbleOnRight ? .trailing : .leading, 60)
-                    .frame(width: width, height: 48, alignment: coordinator.bubbleOnRight ? .trailing : .leading)
-                    .accessibilityHidden(true)
-                ZStack {
-                    Circle().stroke(DotistDesign.rule, lineWidth: 2.5).frame(width: 30, height: 30)
-                    Circle().trim(from: 0, to: model.topLevelTasks.isEmpty ? 0 : CGFloat(model.topLevelTasks.count - model.remainingCount) / CGFloat(model.topLevelTasks.count))
-                        .stroke(DotistDesign.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round)).frame(width: 30, height: 30).rotationEffect(.degrees(-90))
-                    if model.remainingCount == 0 && !model.topLevelTasks.isEmpty {
-                        Image(systemName: "checkmark").font(.system(size: 20, weight: .semibold)).foregroundColor(DotistDesign.accent)
-                    } else {
-                        Text("\(model.remainingCount)").font(DotistDesign.font(20, weight: .bold, language: model.language)).foregroundColor(DotistDesign.ink)
-                    }
-                }.frame(width: 48, height: 48).contentShape(Circle())
-            }.frame(width: width, height: 48, alignment: coordinator.bubbleOnRight ? .trailing : .leading)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .modifier(DotistFocusRing())
-        .overlay(BubblePointer(action: coordinator.toggleBubble, drag: coordinator.beginBubbleDrag).accessibilityHidden(true))
-        .accessibilityLabel(Text(model.remainingCount > 0 ? model.text("还有 {n} 件，点击展开").replacingOccurrences(of: "{n}", with: "\(model.remainingCount)") : model.text("全部完成，点击展开")))
-        .onHover(perform: coordinator.setHover)
-    }
-    private var details: some View {
-        VStack(alignment: coordinator.bubbleOnRight ? .trailing : .leading, spacing: 0) {
-            Text(model.bubbleTitle).font(DotistDesign.font(13, weight: .medium, language: model.language)).foregroundColor(DotistDesign.ink).lineLimit(1)
-            if !model.bubbleDetail.isEmpty { Text(model.bubbleDetail).font(DotistDesign.font(12, language: model.language)).foregroundColor(DotistDesign.muted).lineLimit(1) }
-        }
-    }
-}
-
-private struct BubblePointer: NSViewRepresentable {
+struct BubblePointer: NSViewRepresentable {
     let action: () -> Void
     let drag: () -> Void
+    let hover: (Bool) -> Void
+    let contextMenu: (NSEvent, NSView) -> Void
+    var dragEnd: () -> Void = {}
     func makeNSView(context: Context) -> BubblePointerView { BubblePointerView() }
-    func updateNSView(_ view: BubblePointerView, context: Context) { view.action = action; view.drag = drag }
+    func updateNSView(_ view: BubblePointerView, context: Context) { view.action = action; view.drag = drag; view.hover = hover; view.contextMenu = contextMenu; view.dragEnd = dragEnd }
 }
 
 final class BubblePointerView: NSView {
     var action: () -> Void = {}
     var drag: () -> Void = {}
+    var hover: (Bool) -> Void = { _ in }
+    var contextMenu: (NSEvent, NSView) -> Void = { _, _ in }
+    var dragEnd: () -> Void = {}
     private var down: (mouse: NSPoint, origin: NSPoint)?
     private var dragged = false
+    private var hoverTrackingArea: NSTrackingArea?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        // This AppKit overlay owns pointer input, including while another app is active.
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        hoverTrackingArea = area
+        addTrackingArea(area)
+    }
+    override func mouseEntered(with event: NSEvent) { hover(true) }
+    override func mouseExited(with event: NSEvent) { hover(false) }
     override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control) { rightMouseDown(with: event); return }
         guard let window else { return }
         down = (window.convertPoint(toScreen: event.locationInWindow), window.frame.origin)
         dragged = false
@@ -720,7 +638,12 @@ final class BubblePointerView: NSView {
         guard down != nil else { return }
         down = nil
         defer { dragged = false }
-        guard !dragged else { return }
+        if dragged { dragEnd(); return }
         if bounds.contains(convert(event.locationInWindow, from: nil)) { action() }
+    }
+    override func rightMouseDown(with event: NSEvent) {
+        down = nil
+        dragged = false
+        contextMenu(event, self)
     }
 }

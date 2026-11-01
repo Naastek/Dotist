@@ -1,5 +1,0 @@
-module DotistCoreFFI [system] {
-  header "include/dotist_native.h"
-  link "dotist_native"
-  export *
-}

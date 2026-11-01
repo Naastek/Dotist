@@ -14,7 +14,7 @@ Usage: native/scripts/build-local.sh [--qa-app PATH] [--version X.Y.Z] [--build 
 
 Package a native Dotist.app under .cache/native-migration without installing it.
 Without --qa-app, build-qa.sh first builds a fresh isolated QA application.
-The version defaults to src-tauri/tauri.conf.json; the numeric build defaults to
+The version defaults to native/app.json; the numeric build defaults to
 that version. DotistBuildLabel records a separate native-local build timestamp.
 This candidate uses ad hoc signing and the native signed GitHub update feed.
 USAGE
@@ -37,7 +37,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$version" ]]; then
-  version="$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')"
+  version="$(python3 -c 'import json; print(json.load(open("native/app.json"))["version"])')"
 fi
 build_version="${build_version:-$version}"
 python3 - "$version" "$build_version" <<'PY'
@@ -55,14 +55,16 @@ if [[ -z "$qa_app" ]]; then
 fi
 
 qa_app="$(python3 - "$qa_app" <<'PY'
-import plistlib, sys
+import json, plistlib, sys
 from pathlib import Path
 app = Path(sys.argv[1]).resolve()
 with (app / "Contents/Info.plist").open("rb") as source:
     info = plistlib.load(source)
 if info.get("CFBundleIdentifier") != "dev.codex.dotist-native-qa":
     raise SystemExit("Expected an isolated native QA bundle")
-for relative in ("Contents/MacOS/dotist", "Contents/MacOS/dotist-mcp-real",
+if info.get("LSMinimumSystemVersion") != json.loads(Path('native/app.json').read_text())['minimumMacOS']:
+    raise SystemExit("QA minimum macOS does not match native/app.json; rebuild the QA application")
+for relative in ("Contents/MacOS/dotist",
                  "Contents/Resources/icon.icns", "Contents/Frameworks/Sparkle.framework"):
     if not (app / relative).exists():
         raise SystemExit(f"Missing QA bundle resource: {relative}")
@@ -74,9 +76,6 @@ codesign --verify --deep --strict "$qa_app"
 candidate_dir="$(mktemp -d "$cache_dir/native-local-XXXXXXXX")"
 app="$candidate_dir/Dotist.app"
 ditto "$qa_app" "$app"
-# Only this new candidate loses the QA wrapper; the source QA remains isolated.
-cp "$app/Contents/MacOS/dotist-mcp-real" "$app/Contents/MacOS/dotist-mcp"
-rm "$app/Contents/MacOS/dotist-mcp-real"
 python3 - "$app" "$version" "$build_version" <<'PY'
 import datetime, plistlib, sys
 sys.path.insert(0, "native/scripts")
@@ -103,7 +102,6 @@ info.update(update_config())
 with path.open("wb") as output:
     plistlib.dump(info, output)
 PY
-codesign --force --sign - "$app/Contents/MacOS/dotist-mcp"
 codesign --force --deep --sign - "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 printf 'Local application: %s\nVersion: %s (build %s)\n' "$app" "$version" "$build_version"

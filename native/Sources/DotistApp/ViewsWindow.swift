@@ -58,7 +58,7 @@ struct ViewsWindow: View {
                     if view == "gantt" { ganttView(narrow: geometry.size.width <= 760) }
                 }.padding(.horizontal, narrow ? 16 : 24).padding(.top, 12).padding(.bottom, 20).frame(minWidth: 632, maxWidth: .infinity, alignment: .topLeading).background(WindowDragArea())
             }
-        }.foregroundColor(DotistDesign.ink).modifier(DotistControlTint()).background(WindowMaterial(opacity: 78, frost: model.settings.frost))
+        }.foregroundColor(DotistDesign.ink).modifier(DotistControlTint()).background(WindowMaterial(opacity: 78, frost: model.settings.frost)).modifier(DotistTheme(theme: model.settings.theme))
         }
     }
 
@@ -120,9 +120,8 @@ struct ViewsWindow: View {
                 VStack(alignment: .center, spacing: 4) {
                     Text(dateText(date, format: "EEE")).font(font(12)).foregroundColor(DotistDesign.muted)
                     Text("\(calendar.component(.day, from: date))").font(font(20, isToday || isSelected ? .semibold : .regular))
-                        .foregroundColor(isToday ? DotistDesign.paper : DotistDesign.ink)
+                        .foregroundColor(isToday ? DotistDesign.accent : DotistDesign.ink)
                         .frame(minWidth: 32, minHeight: 30)
-                        .background(Capsule().fill(isToday ? DotistDesign.accent : isSelected ? DotistDesign.rule.opacity(0.6) : Color.clear))
                 }.frame(maxWidth: .infinity).padding(.bottom, 8)
             }.buttonStyle(.plain)
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -148,14 +147,11 @@ struct ViewsWindow: View {
     }
 
     private func moveDate(_ date: Date, direction: MoveCommandDirection) {
-        let current: Date
-        if #available(macOS 12, *) { current = date }
-        else { current = keyboardDate.flatMap(Date.dotistDay) ?? date }
         switch direction {
-        case .left: choose(day(current, -1))
-        case .right: choose(day(current, 1))
-        case .up: choose(day(current, -7))
-        case .down: choose(day(current, 7))
+        case .left: choose(day(date, -1))
+        case .right: choose(day(date, 1))
+        case .up: choose(day(date, -7))
+        case .down: choose(day(date, 7))
         @unknown default: break
         }
         keyboardDate = selected.dotistDay
@@ -207,19 +203,17 @@ struct ViewsWindow: View {
         let items = model.ordered(model.tasks.filter { $0.dueDate == date.dotistDay })
         return VStack(alignment: .leading, spacing: 2) {
             Button { choose(date); keyboardDate = date.dotistDay } label: {
-                Text("\(calendar.component(.day, from: date))").font(font(12, date.dotistDay == Date().dotistDay ? .semibold : .regular))
-                    .foregroundColor(date.dotistDay == selected.dotistDay ? DotistDesign.accent : DotistDesign.ink)
-                    .opacity(calendar.isDate(date, equalTo: visibleMonth, toGranularity: .month) ? 1 : 0.45)
+                Text("\(calendar.component(.day, from: date))").font(font(12, date.dotistDay == Date().dotistDay || date.dotistDay == selected.dotistDay ? .semibold : .regular))
+                    .foregroundColor(date.dotistDay == Date().dotistDay ? DotistDesign.accent : calendar.isDate(date, equalTo: visibleMonth, toGranularity: .month) ? DotistDesign.ink : DotistDesign.faint)
                     .frame(width: 26, height: 24)
-                    .background(Capsule().fill(date.dotistDay == selected.dotistDay ? DotistDesign.rule.opacity(0.6) : Color.clear))
             }.buttonStyle(.plain)
                 .accessibilityAddTraits(date.dotistDay == selected.dotistDay ? .isSelected : [])
                 .modifier(CalendarFocusModifier(date: date.dotistDay, keyboardDate: $keyboardDate))
                 .onMoveCommand { direction in moveDate(date, direction: direction) }
             ForEach(Array(items.prefix(2))) { task in
-                Text("\(task.completed ? "✓ " : task.dueDate.map { $0 < Date().dotistDay } == true ? "△ " : "")\(task.title)").font(font(11)).strikethrough(task.completed).lineLimit(1)
+                Text("\(task.completed ? "✓ " : task.dueDate.map { $0 < Date().dotistDay } == true ? "△ " : "")\(task.title)").font(font(11)).foregroundColor(task.completed ? DotistDesign.faint : DotistDesign.ink).lineLimit(1)
                     .foregroundColor(date.dotistDay == selected.dotistDay ? DotistDesign.accent : DotistDesign.ink)
-                    .onDrag { model.beginDrag(task.id, scope: "calendar"); return NSItemProvider(object: task.id as NSString) }
+                    .overlay(TaskDragSource(model: model, task: task, scope: "calendar", font: DotistDesign.nativeFont(11, language: model.language), click: { choose(date); keyboardDate = date.dotistDay }).accessibilityHidden(true))
             }
             if items.count > 2 { Text(model.text("另有 {n} 件").replacingOccurrences(of: "{n}", with: "\(items.count - 2)")).font(font(11)).foregroundColor(DotistDesign.muted) }
             Spacer(minLength: 0)
@@ -336,7 +330,7 @@ struct ViewsWindow: View {
                             } label: {
                                 HStack {
                                     Image(systemName: collapsed.contains(group.id) ? "chevron.right" : "chevron.down").font(.system(size: 10))
-                                    Text(group.name).font(font(13, .semibold)).foregroundColor(model.settings.groupColors == "none" ? DotistDesign.ink : DotistDesign.category(group.color))
+                                    Text(group.name).font(font(13, .semibold)).foregroundColor(DotistDesign.ink)
                                     Spacer()
                                     Text("\(values.count)").font(font(12))
                                 }.padding(.horizontal, 10).frame(width: 220, height: 38).contentShape(Rectangle())
@@ -353,7 +347,7 @@ struct ViewsWindow: View {
                     ForEach(model.groups) { group in
                         let values = undated.filter { $0.category == group.id }
                         if !values.isEmpty {
-                            Text(group.name).font(font(12, .semibold)).foregroundColor(model.settings.groupColors == "none" ? DotistDesign.ink : DotistDesign.category(group.color)).padding(.top, 8)
+                            Text(group.name).font(font(12, .semibold)).foregroundColor(DotistDesign.ink).padding(.top, 8)
                             unscheduledRows(values)
                         }
                     }
@@ -367,6 +361,7 @@ struct ViewsWindow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(alignment: .top, spacing: 4) {
                         Text(task.title).font(font(14, .semibold)).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
+                            .overlay(TaskDragSource(model: model, task: task, scope: "scheduled", font: DotistDesign.nativeFont(14, weight: .semibold, language: model.language)).accessibilityHidden(true))
                         ViewTaskCard(model: model, task: task, previous: index > 0 ? values[index - 1].id : nil, next: index + 1 < values.count ? values[index + 1].id : nil, scope: "scheduled", compact: true, grouped: grouped, dropTarget: $dropTarget, dropAfter: $dropAfter).frame(width: 22)
                     }
                     let children = model.children(of: task)
@@ -377,7 +372,6 @@ struct ViewsWindow: View {
                         Color.clear.onAppear { ganttLabelHeights[task.id] = geometry.size.height }.onChange(of: geometry.size.height) { ganttLabelHeights[task.id] = $0 }
                     })
                     .contentShape(Rectangle())
-                    .onDrag { model.beginDrag(task.id, scope: "scheduled"); return NSItemProvider(object: task.id as NSString) }
                     .onDrop(of: ["public.utf8-plain-text"], delegate: ViewReorderDrop(model: model, task: task, scope: "scheduled", grouped: grouped, height: ganttLabelHeights[task.id] ?? 56, target: $dropTarget, after: $dropAfter))
                 GanttTrack(model: model, task: task, start: ganttStart, count: ganttCount)
             }.frame(minWidth: 600, minHeight: 56).overlay(Rectangle().fill(DotistDesign.rule).frame(height: 1), alignment: .bottom)
@@ -393,24 +387,11 @@ struct ViewsWindow: View {
 struct CalendarFocusModifier: ViewModifier {
     let date: String
     @Binding var keyboardDate: String?
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 12, *) { content.focusable(true).modifier(ModernCalendarFocus(date: date, keyboardDate: keyboardDate)) }
-        else { content.focusable(true) { if $0 { keyboardDate = date } } }
-    }
-}
-@available(macOS 12, *)
-private struct ModernCalendarFocus: ViewModifier {
-    let date: String
-    let keyboardDate: String?
     @FocusState private var focused: Bool
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 14, *) {
-            tracked(content).focusEffectDisabled()
-        } else { tracked(content) }
-    }
-    private func tracked(_ content: Content) -> some View {
-        content.focused($focused).onAppear { if keyboardDate == date { focused = true } }
-            .onChange(of: keyboardDate) { if $0 == date { focused = true } }
+    func body(content: Content) -> some View {
+        content.focusable(true).focused($focused).focusEffectDisabled()
+            .onAppear { if keyboardDate == date { focused = true } }
+            .onChange(of: keyboardDate) { _, value in if value == date { focused = true } }
     }
 }
 
@@ -430,7 +411,7 @@ private struct ViewTaskCard: View {
     @State private var height: CGFloat = 64
 
     private func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> Font { DotistDesign.font(size, weight: weight, language: model.language) }
-    private var groupColor: Color { model.settings.groupColors == "none" ? DotistDesign.muted : DotistDesign.category(model.group(for: task)?.color ?? "work") }
+    private var groupColor: Color { DotistDesign.muted }
 
     private var completionButton: some View {
         Button { model.complete(task) } label: {
@@ -455,9 +436,10 @@ private struct ViewTaskCard: View {
         VStack(alignment: .leading, spacing: calendarColumn ? 6 : 8) {
             if calendarColumn {
                 Button { open = true } label: {
-                    Text(task.title).font(font(12)).strikethrough(task.completed)
+                    Text(task.title).font(font(12)).foregroundColor(task.completed ? DotistDesign.faint : DotistDesign.ink)
                         .lineLimit(4).frame(maxWidth: .infinity, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true).contentShape(Rectangle())
+                        .overlay(TaskDragSource(model: model, task: task, scope: scope, font: DotistDesign.nativeFont(12, language: model.language), click: { open = true }).accessibilityHidden(true))
                 }.buttonStyle(.plain).modifier(DotistFocusRing())
                 HStack(alignment: .center, spacing: 4) {
                     completionButton
@@ -474,7 +456,8 @@ private struct ViewTaskCard: View {
                 HStack(alignment: .top, spacing: 7) {
                     if !compact {
                         completionButton
-                        Text(task.title).font(font(14)).strikethrough(task.completed).frame(maxWidth: .infinity, alignment: .leading)
+                        Text(task.title).font(font(14)).foregroundColor(task.completed ? DotistDesign.faint : DotistDesign.ink).frame(maxWidth: .infinity, alignment: .leading)
+                            .overlay(TaskDragSource(model: model, task: task, scope: scope, font: DotistDesign.nativeFont(14, language: model.language)).accessibilityHidden(true))
                     } else { Spacer(minLength: 0) }
                     adjustmentButton
                 }
@@ -508,7 +491,6 @@ private struct ViewTaskCard: View {
             if direction == .up, let previous { model.reorder(task.id, relativeTo: previous, after: false, allTasks: true) }
             if direction == .down, let next { model.reorder(task.id, relativeTo: next, after: true, allTasks: true) }
         }
-        .onDrag { model.beginDrag(task.id, scope: scope); return NSItemProvider(object: task.id as NSString) }
         .onDrop(of: ["public.utf8-plain-text"], delegate: ViewReorderDrop(model: model, task: task, scope: scope, grouped: grouped, height: height, target: $dropTarget, after: $dropAfter))
         .contextMenu {
             Button(model.text("调整任务")) { open = true }
@@ -663,7 +645,7 @@ private struct GanttGroupTrack: View {
             ZStack(alignment: .leading) {
                 HStack(spacing: 0) { ForEach(0..<count, id: \.self) { _ in Rectangle().fill(Color.clear).frame(width: width).overlay(Rectangle().fill(DotistDesign.rule).frame(width: 1), alignment: .trailing) } }
                 if right > left {
-                    RoundedRectangle(cornerRadius: 1).fill(DotistDesign.category(group.color).opacity(0.8)).frame(width: CGFloat(right - left) * width, height: 5).offset(x: CGFloat(left) * width)
+                    RoundedRectangle(cornerRadius: 1).fill(DotistDesign.accent.opacity(0.8)).frame(width: CGFloat(right - left) * width, height: 5).offset(x: CGFloat(left) * width)
                 }
             }
         }.frame(height: 38)
@@ -701,7 +683,7 @@ private struct GanttTrack: View {
                     Rectangle().fill(DotistDesign.accent.opacity(0.75)).frame(width: 1).offset(x: (CGFloat(today) + 0.5) * width)
                 }
                 if right > left {
-                    RoundedRectangle(cornerRadius: 6).fill(DotistDesign.category(model.group(for: task)?.color ?? "work").opacity(task.completed ? 0.45 : 0.8))
+                    RoundedRectangle(cornerRadius: 6).fill(DotistDesign.accent.opacity(task.completed ? 0.45 : 0.8))
                         .frame(width: max(8, CGFloat(right - left) * width), height: 20)
                         .overlay(GanttPointer(changed: { startX, translation in
                             guard !saving else { return }

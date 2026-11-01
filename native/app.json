@@ -1,0 +1,8 @@
+{
+  "name": "Dotist",
+  "identifier": "com.dotist.app",
+  "version": "0.2.0",
+  "minimumMacOS": "26.0",
+  "updateFeed": "https://github.com/Naastek/Dotist/releases/latest/download/appcast.xml",
+  "updatePublicKey": "ZbPiymOezCC/dL7FhQTO0BilUQzJEZ56KPuN8fJRurY="
+}

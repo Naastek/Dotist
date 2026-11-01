@@ -1,6 +1,8 @@
 import AppKit
 import DotistCore
 import Foundation
+import GRDB
+import ServiceManagement
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -18,32 +20,38 @@ final class AppModel: ObservableObject {
     @Published private(set) var dragId: String?
     @Published private(set) var dragScope: String?
     @Published var focusId: String?
+    @Published var focusNavigation = 0
     @Published var gotoGroup: String?
     @Published var undo: UndoEntry?
     @Published var scope = "all"
     @Published var scopeNavigation = 0
     @Published private(set) var launchAtLogin: Bool
     let databasePath: String
-    private let loginAppName: String
-    private let executable: String
-    private let core: RustTaskStore
+    let core: TaskStore
+    let mcp: MCPService
     private let queue = DispatchQueue(label: "dev.dotist.native.store", qos: .userInitiated)
-    private var timer: Timer?
+    private var observation: (any DatabaseCancellable)?
+    private var pendingSnapshot: TaskSnapshot?
+    private var groupsByID: [String: DotistGroup] = [:]
+    private var childrenByParent: [String: [DotistTask]] = [:]
+    private var tagsByID: [String: DotistTaskTags] = [:]
+    private var roots: [DotistTask] = []
+    private var remaining = 0
+    private var next: DotistTask?
+    private var sortedTags: [DotistTagCount] = []
     private var pendingChanges = 0
-    private var dragTimer: Timer?
-    private var dragGeneration = 0
     private var dictionary: [String: [String: String]] = [:]
 
-    init() throws {
-        core = try RustTaskStore()
-        tasks = try core.listTasks()
-        groups = try core.listGroups()
+    init(store: TaskStore? = nil) throws {
+        core = try store ?? TaskStore()
+        mcp = MCPService(store: core)
+        let snapshot = try core.snapshot()
+        tasks = snapshot.tasks
+        groups = snapshot.groups
         settings = try core.settings()
-        tagDescription = try core.describeTags()
+        tagDescription = snapshot.tags
         databasePath = try core.databasePath()
-        loginAppName = Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa" ? "Dotist Native QA" : "Dotist"
-        executable = Bundle.main.executableURL?.path ?? ""
-        launchAtLogin = try core.launchAtLogin(appName: loginAppName, executable: executable)
+        launchAtLogin = SMAppService.mainApp.status == .enabled
         scope = settings.defaultFilter
         if let url = Bundle.main.url(forResource: "locales", withExtension: "json") ?? Bundle.module.url(forResource: "locales", withExtension: "json"),
            let data = try? Data(contentsOf: url) {
@@ -54,12 +62,15 @@ final class AppModel: ObservableObject {
            let extra = try? JSONDecoder().decode([String: [String: String]].self, from: data) {
             for (language, values) in extra { dictionary[language, default: [:]].merge(values) { _, new in new } }
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
-        }
+        rebuildIndexes()
+        observation = core.observe(onError: { [weak self] error in
+            Task { @MainActor in self?.error = error.localizedDescription }
+        }, onChange: { [weak self] snapshot in
+            Task { @MainActor in self?.apply(snapshot) }
+        })
     }
 
-    deinit { timer?.invalidate(); dragTimer?.invalidate() }
+    deinit { observation?.cancel() }
 
     var language: String {
         let setting = settings.language
@@ -85,50 +96,29 @@ final class AppModel: ObservableObject {
         formatter.setLocalizedDateFormatFromTemplate(days > 1 && days <= 6 ? "EEE" : sameYear ? "MMMd" : "yyyyMMMd")
         return formatter.string(from: date)
     }
-    func group(for task: DotistTask) -> DotistGroup? { groups.first { $0.id == task.category } }
-    func children(of task: DotistTask) -> [DotistTask] { ordered(tasks.filter { $0.parentId == task.id }) }
+    func group(for task: DotistTask) -> DotistGroup? { groupsByID[task.category] }
+    func activeGroupNavigation(_ id: String) { gotoGroup = id; scopeNavigation += 1 }
+    func children(of task: DotistTask) -> [DotistTask] { childrenByParent[task.id] ?? [] }
     var displayTasks: [DotistTask] { activeTag == nil ? tasks : taggedTasks }
-    var tagCounts: [DotistTagCount] { tagDescription.counts.sorted { $0.open == $1.open ? $0.tag.localizedCompare($1.tag) == .orderedAscending : $0.open > $1.open } }
-    func visibleChildren(of task: DotistTask) -> [DotistTask] { ordered(displayTasks.filter { $0.parentId == task.id }) }
-    func tags(for task: DotistTask) -> DotistTaskTags? { tagDescription.tasks.first { $0.id == task.id } }
-    var topLevelTasks: [DotistTask] { tasks.filter { $0.parentId == nil } }
-    var remainingCount: Int { topLevelTasks.filter { !$0.completed }.count }
-    var nextTask: DotistTask? {
-        for group in groups {
-            if let task = ordered(topLevelTasks.filter { $0.category == group.id && !$0.completed }).first { return task }
-        }
-        return nil
-    }
+    var tagCounts: [DotistTagCount] { sortedTags }
+    func visibleChildren(of task: DotistTask) -> [DotistTask] { children(of: task) }
+    func tags(for task: DotistTask) -> DotistTaskTags? { tagsByID[task.id] }
+    var topLevelTasks: [DotistTask] { roots }
+    var remainingCount: Int { remaining }
+    var nextTask: DotistTask? { next }
     var bubbleTitle: String {
         nextTask?.title ?? text(topLevelTasks.isEmpty ? "把要做的事，放在这里。" : "今天的事都做完了")
-    }
-    var bubbleDetail: String {
-        nextTask == nil ? "" : text("还有 {n} 件").replacingOccurrences(of: "{n}", with: "\(remainingCount)")
     }
     func ordered(_ values: [DotistTask]) -> [DotistTask] {
         values.sorted { $0.position == $1.position ? $0.id < $1.id : $0.position < $1.position }
     }
 
     func refresh() {
-        guard dragId == nil else { return }
         let core = core
-        let tag = activeTag
         queue.async { [weak self] in
             do {
-                let tasks = try core.listTasks()
-                let groups = try core.listGroups()
-                let tags = try core.describeTags()
-                let filtered = try tag.map { try core.filterByTag($0) } ?? []
-                DispatchQueue.main.async {
-                    guard let self, self.dragId == nil else { return }
-                    if self.tasks != tasks { self.tasks = tasks }
-                    if self.groups != groups { self.groups = groups }
-                    if self.tagDescription != tags { self.tagDescription = tags }
-                    if self.activeTag == tag {
-                        if let tag, !tags.counts.contains(where: { $0.tag == tag && $0.open > 0 }) { self.activeTag = nil; self.taggedTasks = [] }
-                        else if self.taggedTasks != filtered { self.taggedTasks = filtered }
-                    }
-                }
+                let snapshot = try core.snapshot()
+                DispatchQueue.main.async { self?.apply(snapshot) }
             } catch {
                 DispatchQueue.main.async { self?.error = error.localizedDescription }
             }
@@ -139,58 +129,51 @@ final class AppModel: ObservableObject {
         let selected = tag.flatMap { value in tagCounts.contains(where: { $0.tag == value && $0.open > 0 }) ? value : nil }
         activeTag = selected
         guard let tag = selected else { taggedTasks = []; return }
-        let core = core
-        queue.async { [weak self] in
-            do {
-                let filtered = try core.filterByTag(tag)
-                DispatchQueue.main.async { if self?.activeTag == tag { self?.taggedTasks = filtered } }
-            } catch { DispatchQueue.main.async { self?.error = error.localizedDescription } }
+        taggedTasks = TaskTags.filter(tasks, tag: tag, description: tagDescription)
+    }
+
+    private func apply(_ snapshot: TaskSnapshot) {
+        guard dragId == nil else { pendingSnapshot = snapshot; return }
+        guard tasks != snapshot.tasks || groups != snapshot.groups else { return }
+        tasks = snapshot.tasks
+        groups = snapshot.groups
+        tagDescription = snapshot.tags
+        rebuildIndexes()
+        if let tag = activeTag {
+            if !tagCounts.contains(where: { $0.tag == tag && $0.open > 0 }) { activeTag = nil; taggedTasks = [] }
+            else { taggedTasks = TaskTags.filter(tasks, tag: tag, description: tagDescription) }
         }
+    }
+
+    private func rebuildIndexes() {
+        groupsByID = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0) })
+        childrenByParent = Dictionary(grouping: tasks.filter { $0.parentId != nil }, by: { $0.parentId! }).mapValues(ordered)
+        tagsByID = Dictionary(uniqueKeysWithValues: tagDescription.tasks.map { ($0.id, $0) })
+        roots = tasks.filter { $0.parentId == nil }
+        remaining = roots.filter { !$0.completed }.count
+        let grouped = Dictionary(grouping: roots.filter { !$0.completed }, by: \.category).mapValues(ordered)
+        next = groups.lazy.compactMap { grouped[$0.id]?.first }.first
+        sortedTags = tagDescription.counts.sorted { $0.open == $1.open ? $0.tag.localizedCompare($1.tag) == .orderedAscending : $0.open > $1.open }
     }
 
     func beginDrag(_ id: String, scope: String) {
-        dragGeneration += 1
-        let generation = dragGeneration
         dragId = id
         dragScope = scope
-        dragTimer?.invalidate()
-        dragTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] timer in
-            guard NSEvent.pressedMouseButtons & 1 == 0 else { return }
-            timer.invalidate()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                guard let self, self.dragGeneration == generation, self.dragId != nil else { return }
-                self.endDrag()
-                self.refresh()
-            }
-        }
     }
     func endDrag() {
-        dragTimer?.invalidate()
-        dragTimer = nil
         dragId = nil
         dragScope = nil
+        if let snapshot = pendingSnapshot { pendingSnapshot = nil; apply(snapshot) }
     }
 
-    func change(completed: (() -> Void)? = nil, failed: (() -> Void)? = nil, _ operation: @escaping (RustTaskStore) throws -> Void) {
+    func change(completed: (() -> Void)? = nil, failed: (() -> Void)? = nil, _ operation: @escaping (TaskStore) throws -> Void) {
         pendingChanges += 1
         busy = true
         let core = core
-        let tag = activeTag
         queue.async { [weak self] in
             do {
                 try operation(core)
-                let tasks = try core.listTasks()
-                let groups = try core.listGroups()
-                let tags = try core.describeTags()
-                let filtered = try tag.map { try core.filterByTag($0) } ?? []
                 DispatchQueue.main.async {
-                    self?.tasks = tasks
-                    self?.groups = groups
-                    self?.tagDescription = tags
-                    if self?.activeTag == tag {
-                        if let tag, !tags.counts.contains(where: { $0.tag == tag && $0.open > 0 }) { self?.activeTag = nil; self?.taggedTasks = [] }
-                        else { self?.taggedTasks = filtered }
-                    }
                     self?.pendingChanges -= 1
                     self?.busy = (self?.pendingChanges ?? 0) > 0
                     self?.error = nil
@@ -230,7 +213,11 @@ final class AppModel: ObservableObject {
         queue.async { [weak self] in
             do {
                 let settings = try core.updateSettings(patch)
-                DispatchQueue.main.async { self?.settings = settings; completed?(true) }
+                DispatchQueue.main.async {
+                    self?.settings = settings
+                    if settings.mcpEnabled { self?.mcp.start() } else { self?.mcp.stop() }
+                    completed?(true)
+                }
             } catch {
                 DispatchQueue.main.async { self?.error = error.localizedDescription; completed?(false) }
             }
@@ -238,17 +225,11 @@ final class AppModel: ObservableObject {
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
-        let core = core
-        let name = loginAppName
-        let executable = executable
-        queue.async { [weak self] in
-            do {
-                let enabled = try core.setLaunchAtLogin(appName: name, executable: executable, enabled: enabled)
-                DispatchQueue.main.async { self?.launchAtLogin = enabled }
-            } catch {
-                DispatchQueue.main.async { self?.error = error.localizedDescription }
-            }
-        }
+        do {
+            if enabled { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+        } catch { self.error = error.localizedDescription }
     }
 }
 
