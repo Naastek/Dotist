@@ -46,7 +46,7 @@ struct RangeCalendar: View {
             }.font(font(12))
             HStack {
                 Button { month = calendar.date(byAdding: .month, value: -1, to: first)! } label: { Image(systemName: "chevron.left") }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("上个月")))
-                Text(format(month, "yyyyMMMM")).font(font(14, .semibold, serif: true))
+                Text(format(month, "yyyyMMMM")).font(font(14, .semibold))
                 Spacer()
                 Button(model.text("今天")) { month = Date() }.buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12))
                 Button { month = calendar.date(byAdding: .month, value: 1, to: first)! } label: { Image(systemName: "chevron.right") }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("下个月")))

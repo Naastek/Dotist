@@ -1,5 +1,6 @@
 import AppKit
 import CoreText
+import DotistCore
 import SwiftUI
 
 enum DotistDesign {
@@ -42,13 +43,22 @@ enum DotistDesign {
         })
     }
     /// Registers fonts for this process only; the user's installed fonts are never changed.
-    static func registerFonts() {
-        let directory = Bundle.main.resourceURL?.appendingPathComponent("Fonts", isDirectory: true)
-        guard let directory else { return }
+    static func registerFonts(in directory: URL? = nil) {
+        guard let directory = directory ?? Bundle.main.resourceURL?.appendingPathComponent("Fonts", isDirectory: true) else { return }
         for name in ["SourceSans3", "SourceSerif4", "NotoSansSC", "NotoSansTC", "NotoSansJP", "NotoSerifSC", "NotoSerifTC", "NotoSerifJP"] {
             let url = directory.appendingPathComponent("\(name).ttf")
             if FileManager.default.fileExists(atPath: url.path) { CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil) }
         }
+        // Tests and preview hosts may resolve tokens before the app registers its resources.
+        fonts.removeAllObjects()
+    }
+
+    /// Names alone use the serif family; all other interface text uses sans.
+    static func nameFont(_ size: CGFloat, weight: NSFont.Weight = .regular, language: String) -> Font {
+        font(size, weight: weight, serif: true, language: language)
+    }
+    static func textFont(_ size: CGFloat, weight: NSFont.Weight = .regular, language: String) -> Font {
+        font(size, weight: weight, language: language)
     }
 
     static func font(_ size: CGFloat, weight: NSFont.Weight = .regular, serif: Bool = false, language: String) -> Font {
@@ -56,7 +66,7 @@ enum DotistDesign {
     }
     static func nativeFont(_ size: CGFloat, weight: NSFont.Weight = .regular, serif: Bool = false, language: String) -> NSFont {
         let source = serif ? "Source Serif 4" : "Source Sans 3"
-        let region = language == "ja" ? "JP" : language == "zh-TW" ? "TC" : "SC"
+        let region = language.hasPrefix("ja") ? "JP" : ["zh-TW", "zh-Hant", "zh-HK"].contains(where: { language.hasPrefix($0) }) ? "TC" : "SC"
         let key = "\(size)|\(weight.rawValue)|\(serif)|\(region)" as NSString
         if let cached = fonts.object(forKey: key) { return cached }
         let fallback = "Noto \(serif ? "Serif" : "Sans") \(region)"
@@ -83,6 +93,8 @@ struct FloatingMaterial: View {
     let opacity: UInt8
     let frost: UInt8
     let compact: Bool
+    var color: DotistGroupColor = .none
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var scheme
@@ -90,17 +102,18 @@ struct FloatingMaterial: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: compact ? 24 : DotistDesign.windowCornerRadius, style: .continuous)
         Group {
-            if reduceTransparency {
+            if reduceTransparency || contrast == .increased {
                 DotistDesign.paper
             } else {
                 Color.clear
                     // Keep the material and interaction graph alive across all shapes;
                     // switching clear → regular.interactive on the first collapse is cold.
-                    .glassEffect(.regular.interactive(), in: shape)
+                    .glassEffect(color == .none ? .regular.interactive() : .regular.tint(DotistTheme.tint(color, scheme)).interactive(), in: shape)
                     .overlay(DotistDesign.paper.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: contrast == .increased)))
                     .overlay(DotistDesign.paper.opacity(Double(frost) / 100 * 0.12))
             }
         }.clipShape(shape)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: color)
     }
 }
 
@@ -154,7 +167,7 @@ struct DotistGlassTabs: View {
             ForEach(options, id: \.0) { option in
                 Button { focused = option.0; selection = option.0 } label: {
                     Text(option.1)
-                        .font(DotistDesign.font(13, weight: selection == option.0 ? .medium : .regular, language: language))
+                        .font(DotistDesign.textFont(13, weight: selection == option.0 ? .medium : .regular, language: language))
                         .foregroundColor(focused == option.0 ? DotistDesign.accent : selection == option.0 ? DotistDesign.ink : DotistDesign.faint)
                         .lineLimit(1).fixedSize().frame(height: 28).contentShape(Rectangle())
                 }

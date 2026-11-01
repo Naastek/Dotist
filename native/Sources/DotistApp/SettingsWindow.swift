@@ -54,6 +54,14 @@ struct SettingsWindow: View {
                                                       label: model.text("主题")).frame(width: 244, height: 24)
                             }
 
+                            settingRow("默认颜色") {
+                                ManagerColorPalette(model: model, selected: DotistGroupColor(rawValue: model.settings.allColor)) { color in
+                                    update { $0.allColor = color.rawValue }
+                                }
+                            }
+                            Text(model.text("各分组可在管理分组里单独设置颜色,未设置的分组使用这个默认颜色"))
+                                .font(font(12)).foregroundColor(DotistDesign.muted).padding(.bottom, 8)
+
                             settingRow("玻璃预设") {
                                 NativeSegmentedPicker(selection: Binding(get: { glassPreset }, set: { value in
                                     let preset = value == "clear" ? (UInt8(38), UInt8(22)) : value == "ultra" ? (UInt8(8), UInt8(4)) : (UInt8(60), UInt8(40))
@@ -266,7 +274,7 @@ struct SettingsWindow: View {
     @ViewBuilder private func section<Content: View>(_ id: String, _ title: String, @ViewBuilder content: () -> Content) -> some View {
         if active == id {
             VStack(alignment: .leading, spacing: 0) {
-                Text(model.text(title)).font(font(17, .semibold, serif: true)).padding(.bottom, 8)
+                Text(model.text(title)).font(font(17, .semibold)).padding(.bottom, 8)
                 VStack(alignment: .leading, spacing: 0, content: content).padding(.leading, 22)
             }.frame(maxWidth: 460, alignment: .leading)
         }

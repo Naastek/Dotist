@@ -27,7 +27,8 @@ struct TaskRowLayout: Layout {
         return CGSize(width: width, height: TaskRowMetrics.height(depth, titleHeight: title.height))
     }
     private func titleWidth(_ width: CGFloat, _ subviews: Subviews) -> CGFloat {
-        let meta = min(subviews[2].sizeThatFits(.unspecified).width, max(0, width * 0.4))
+        // Metadata is never compressed by the title, including at depth four.
+        let meta = subviews[2].sizeThatFits(.unspecified).width
         return max(1, width - (TaskRowMetrics.textX(depth) - TaskRowMetrics.inset) - (meta > 0 ? meta + 8 : 0))
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
@@ -36,7 +37,7 @@ struct TaskRowLayout: Layout {
         let circle = TaskRowMetrics.diameter(depth)
         subviews[0].place(at: CGPoint(x: bounds.minX + TaskRowMetrics.circleX(depth) - TaskRowMetrics.inset, y: bounds.midY - circle / 2), proposal: .init(width: circle, height: circle))
         subviews[1].place(at: CGPoint(x: bounds.minX + TaskRowMetrics.textX(depth) - TaskRowMetrics.inset, y: bounds.midY - title.height / 2), proposal: .init(width: titleWidth, height: title.height))
-        let metadata = subviews[2].sizeThatFits(.init(width: max(0, bounds.width - titleWidth - (TaskRowMetrics.textX(depth) - TaskRowMetrics.inset) - 8), height: nil))
+        let metadata = subviews[2].sizeThatFits(.unspecified)
         subviews[2].place(at: CGPoint(x: bounds.maxX - metadata.width, y: bounds.midY - metadata.height / 2), proposal: .init(width: metadata.width, height: metadata.height))
     }
 }
@@ -269,11 +270,13 @@ struct TaskReorderInteractionGuard: NSViewRepresentable {
     let rowFrames: [CGRect]
     let dragging: Bool
     let cancel: () -> Void
+    var undoRedo: (Bool) -> Bool = { _ in false }
     func makeNSView(context: Context) -> GuardView { GuardView() }
     func updateNSView(_ view: GuardView, context: Context) {
         view.rowFrames = rowFrames
         view.dragging = dragging
         view.cancel = cancel
+        view.undoRedo = undoRedo
     }
     static func dismantleNSView(_ view: GuardView, coordinator: ()) { view.stop() }
 
@@ -281,6 +284,7 @@ struct TaskReorderInteractionGuard: NSViewRepresentable {
         var rowFrames: [CGRect] = []
         var dragging = false
         var cancel: () -> Void = {}
+        var undoRedo: (Bool) -> Bool = { _ in false }
         private var monitor: Any?
         private weak var guardedWindow: NSWindow?
         private var originalBackgroundMovement: Bool?
@@ -295,6 +299,9 @@ struct TaskReorderInteractionGuard: NSViewRepresentable {
                 guard let self else { return event }
                 if event.type == .leftMouseUp { restoreWindowMovement(); return event }
                 guard event.window === window else { return event }
+                if let redo = TaskPanelUndoShortcut.redo(for: event, responder: window?.firstResponder), undoRedo(redo) {
+                    return nil
+                }
                 if event.type == .keyDown, event.keyCode == 53, dragging {
                     cancel()
                     restoreWindowMovement()
@@ -319,6 +326,20 @@ struct TaskReorderInteractionGuard: NSViewRepresentable {
             monitor = nil
             restoreWindowMovement()
         }
+    }
+}
+
+enum TaskPanelUndoShortcut {
+    /// Native text editing keeps its own undo manager, including field editors
+    /// and editors in group/tag management. Other windows never reach this gate.
+    static func redo(for event: NSEvent, responder: NSResponder?) -> Bool? {
+        guard event.type == .keyDown,
+              event.charactersIgnoringModifiers?.lowercased() == "z" else { return nil }
+        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        guard flags == [.command] || flags == [.command, .shift] else { return nil }
+        if let editor = responder as? NSTextView, editor.isEditable { return nil }
+        if let field = responder as? NSTextField, field.isEditable { return nil }
+        return flags.contains(.shift)
     }
 }
 

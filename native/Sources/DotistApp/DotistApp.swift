@@ -573,7 +573,7 @@ struct RootWindow: View {
     @ObservedObject var model: AppModel
     let coordinator: DotistDelegate
     var body: some View {
-        FloatingPanelView(model: model, motion: coordinator.motion, title: model.bubbleTitle,
+        FloatingPanelView(model: model, motion: coordinator.motion, colorState: coordinator.mainState, title: model.bubbleTitle,
             remaining: model.remainingCount, total: model.topLevelTasks.count, groupName: nil,
             contextMenu: coordinator.showBubbleMenu, content: MainWindowContent(model: model, coordinator: coordinator).equatable())
     }

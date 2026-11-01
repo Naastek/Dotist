@@ -30,6 +30,19 @@ public struct DotistGroup: Codable, Identifiable, Equatable, Sendable {
     public let position: Int64
 }
 
+/// Stored independently of the UI palette. Legacy or unknown colors are neutral.
+public enum DotistGroupColor: String, Codable, CaseIterable, Sendable {
+    case none, red, orange, yellow, green, teal, blue, purple, pink
+
+    public init(rawValue: String) {
+        self = Self.allCases.first { $0.rawValue == rawValue } ?? .none
+    }
+
+    public init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+}
+
 public struct DotistTaskTags: Decodable, Equatable, Sendable {
     public let id: String
     public let text: String
@@ -74,6 +87,8 @@ public struct DotistSettings: Codable, Equatable, Sendable {
     public var trayFilter: String
     public var trayGroup: String
     public var groupColors: String
+    public var tagOrder: [String] = []
+    public var allColor: String = "none"
     public var filters: [String]
     public var defaultFilter: String
     public var autoCollapse: Bool
@@ -100,6 +115,8 @@ public struct DotistSettingsPatch: Encodable, Sendable {
     public var idleDelaySecs: UInt8?
     public var idleFadeSecs: UInt8?
     public var groupColors: String?
+    public var tagOrder: [String]?
+    public var allColor: String?
     public var filters: [String]?
     public var defaultFilter: String?
     public var autoCollapse: Bool?

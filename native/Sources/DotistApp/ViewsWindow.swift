@@ -19,7 +19,7 @@ struct ViewsWindow: View {
     @State private var showUnscheduled = false
 
     private func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular, serif: Bool = false) -> Font {
-        DotistDesign.font(size, weight: weight, serif: serif, language: model.language)
+        (serif ? DotistDesign.nameFont(size, weight: weight, language: model.language) : DotistDesign.textFont(size, weight: weight, language: model.language))
     }
     private var calendar: Calendar {
         var value = Calendar(identifier: .gregorian)
@@ -93,7 +93,7 @@ struct ViewsWindow: View {
         VStack(alignment: .leading, spacing: 12) {
             Button { showUnscheduled.toggle() } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: showUnscheduled ? "chevron.down" : "chevron.right").font(.system(size: 10, weight: .medium))
+                    Image(systemName: showUnscheduled ? "chevron.down" : "chevron.right").font(font(10, .medium))
                     Text("\(model.text("未排期")) \(model.tasks.filter { $0.dueDate == nil }.count)").font(font(13, .medium))
                     Spacer(minLength: 0)
                 }.contentShape(Rectangle()).padding(.vertical, 8)
@@ -159,7 +159,7 @@ struct ViewsWindow: View {
 
     private var calendarTitle: some View {
         Text(scale == "month" ? dateText(visibleMonth, format: "yyyyMMMM") : scale == "day" ? dateText(selected, format: "yyyyMMMMEEEEd") : "\(dateText(startOfWeek(selected), format: "MMMd")) – \(dateText(day(startOfWeek(selected), 6), format: "MMMd"))")
-            .font(font(20, .semibold, serif: true))
+            .font(font(20, .semibold))
     }
     private var calendarNavigation: some View {
         Group {
@@ -268,7 +268,7 @@ struct ViewsWindow: View {
         let values = model.ordered(model.tasks.filter { $0.parentId == nil && $0.status == status })
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Image(systemName: symbol).font(.system(size: 11))
+                Image(systemName: symbol).font(font(11))
                 Text(model.text(label)).font(font(16, .medium))
                 Spacer()
                 Text("\(values.count)").font(font(12)).foregroundColor(DotistDesign.muted)
@@ -288,7 +288,7 @@ struct ViewsWindow: View {
         return calendar.range(of: .day, in: .month, for: ganttStart)!.count
     }
     private var ganttTitle: some View {
-        Text("\(ganttStart.dotistDay) – \(day(ganttStart, ganttCount - 1).dotistDay)").font(font(20, .semibold, serif: true))
+        Text("\(ganttStart.dotistDay) – \(day(ganttStart, ganttCount - 1).dotistDay)").font(font(20, .semibold))
     }
     private var ganttNavigation: some View {
         HStack(spacing: 8) {
@@ -329,8 +329,8 @@ struct ViewsWindow: View {
                                 if collapsed.contains(group.id) { collapsed.remove(group.id) } else { collapsed.insert(group.id) }
                             } label: {
                                 HStack {
-                                    Image(systemName: collapsed.contains(group.id) ? "chevron.right" : "chevron.down").font(.system(size: 10))
-                                    Text(group.name).font(font(13, .semibold)).foregroundColor(DotistDesign.ink)
+                                    Image(systemName: collapsed.contains(group.id) ? "chevron.right" : "chevron.down").font(font(10))
+                                    Text(model.groupDisplayName(group.id)).font(font(13, .semibold, serif: true)).foregroundColor(DotistDesign.ink)
                                     Spacer()
                                     Text("\(values.count)").font(font(12))
                                 }.padding(.horizontal, 10).frame(width: 220, height: 38).contentShape(Rectangle())
@@ -347,7 +347,7 @@ struct ViewsWindow: View {
                     ForEach(model.groups) { group in
                         let values = undated.filter { $0.category == group.id }
                         if !values.isEmpty {
-                            Text(group.name).font(font(12, .semibold)).foregroundColor(DotistDesign.ink).padding(.top, 8)
+                            Text(model.groupDisplayName(group.id)).font(font(12, .semibold, serif: true)).foregroundColor(DotistDesign.ink).padding(.top, 8)
                             unscheduledRows(values)
                         }
                     }
@@ -410,14 +410,14 @@ private struct ViewTaskCard: View {
     @State private var hovered = false
     @State private var height: CGFloat = 64
 
-    private func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> Font { DotistDesign.font(size, weight: weight, language: model.language) }
+    private func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> Font { DotistDesign.textFont(size, weight: weight, language: model.language) }
     private var groupColor: Color { DotistDesign.muted }
 
     private var completionButton: some View {
         Button { model.complete(task) } label: {
             ZStack {
                 Circle().stroke(task.completed ? DotistDesign.accent : DotistDesign.faint, lineWidth: 1.5)
-                if task.completed { Circle().fill(DotistDesign.accent); Image(systemName: "checkmark").font(.system(size: calendarColumn ? 8 : 10)).foregroundColor(.white) }
+                if task.completed { Circle().fill(DotistDesign.accent); Image(systemName: "checkmark").font(font(calendarColumn ? 8 : 10)).foregroundColor(.white) }
             }.frame(width: calendarColumn ? 14 : 18, height: calendarColumn ? 14 : 18).contentShape(Rectangle())
         }.buttonStyle(.plain).modifier(DotistFocusRing())
             .accessibilityLabel(Text(model.text(task.completed ? "恢复 {title}" : "完成 {title}").replacingOccurrences(of: "{title}", with: task.title)))
@@ -425,7 +425,7 @@ private struct ViewTaskCard: View {
 
     private var adjustmentButton: some View {
         Button { open = true } label: {
-            Image(systemName: "ellipsis").font(.system(size: 12, weight: .medium)).frame(width: 18, height: 18).contentShape(Rectangle())
+            Image(systemName: "ellipsis").font(font(12, .medium)).frame(width: 18, height: 18).contentShape(Rectangle())
         }.buttonStyle(.plain).modifier(DotistFocusRing())
             .foregroundColor(hovered || open ? DotistDesign.ink : DotistDesign.faint)
             .accessibilityLabel(Text(model.text("调整任务") + " " + task.title))
@@ -444,7 +444,7 @@ private struct ViewTaskCard: View {
                 HStack(alignment: .center, spacing: 4) {
                     completionButton
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(model.group(for: task)?.name ?? "").foregroundColor(groupColor).lineLimit(1)
+                        Text(model.group(for: task)?.name ?? "").font(DotistDesign.nameFont(10, language: model.language)).foregroundColor(groupColor).lineLimit(1)
                         if task.parentId != nil { Text(model.text("子任务")).lineLimit(1) }
                     }.font(font(10)).foregroundColor(DotistDesign.muted).frame(maxWidth: .infinity, alignment: .leading)
                     adjustmentButton
@@ -463,7 +463,7 @@ private struct ViewTaskCard: View {
                 }
                 if !compact {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(model.group(for: task)?.name ?? "").foregroundColor(groupColor)
+                        Text(model.group(for: task)?.name ?? "").font(DotistDesign.nameFont(11, language: model.language)).foregroundColor(groupColor)
                         if task.parentId != nil { Text(model.text("子任务")) }
                         if let due = task.dueDate { Text(due) }
                         if task.dueDate.map({ $0 < Date().dotistDay }) == true && !task.completed {

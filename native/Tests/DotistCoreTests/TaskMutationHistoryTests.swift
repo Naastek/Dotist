@@ -68,7 +68,7 @@ final class TaskMutationHistoryTests: XCTestCase {
         XCTAssertEqual(try store.database.read { try Row.fetchAll($0, sql: "SELECT * FROM sync_outbox ORDER BY operation_id").map(\.description) }, outbox)
     }
 
-    func testCustomInboxGroupRestoresItsOriginalFamilyAfterMigration() throws {
+    func testCustomInboxGroupRestoresWithoutReclaimingMigratedTasks() throws {
         let store = try store()
         try store.database.write { try $0.execute(sql: "DELETE FROM task_groups WHERE id=?", arguments: [DotistGroup.inboxID]) }
         let group = try store.addGroup(name: "Inbox")
@@ -83,12 +83,12 @@ final class TaskMutationHistoryTests: XCTestCase {
         XCTAssertEqual(Set(try reopened.listGroups().filter { $0.name == "Inbox" }.map(\.id)), Set([group.id, DotistGroup.inboxID]))
         let restoredParent = try XCTUnwrap(reopened.listTasks().first { $0.id == parent.id })
         let restoredChild = try XCTUnwrap(reopened.listTasks().first { $0.id == child.id })
-        XCTAssertEqual(restoredParent.category, group.id)
+        XCTAssertEqual(restoredParent.category, DotistGroup.inboxID)
         XCTAssertEqual(restoredParent.dueDate, parent.dueDate)
-        XCTAssertEqual(restoredChild.category, group.id)
+        XCTAssertEqual(restoredChild.category, DotistGroup.inboxID)
         XCTAssertEqual(restoredChild.parentId, parent.id)
         XCTAssertTrue(restoredChild.completed)
-        XCTAssertEqual(try reopened.database.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM sync_outbox WHERE kind='restore'") }, 2)
+        XCTAssertEqual(try reopened.database.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM sync_outbox WHERE kind='restore'") }, 0)
         XCTAssertThrowsError(try reopened.addGroup(name: "Inbox"))
     }
 

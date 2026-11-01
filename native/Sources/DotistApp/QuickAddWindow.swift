@@ -10,7 +10,7 @@ struct QuickAddWindow: View {
     @State private var category = UserDefaults.standard.string(forKey: "dotist.quick.group") ?? DotistGroup.inboxID
     @State private var dueIndex = -1
     private func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular, serif: Bool = false) -> Font {
-        DotistDesign.font(size, weight: weight, serif: serif, language: model.language)
+        (serif ? DotistDesign.nameFont(size, weight: weight, language: model.language) : DotistDesign.textFont(size, weight: weight, language: model.language))
     }
     private var choices: [(String, String)] {
         let today = Date()
@@ -19,7 +19,8 @@ struct QuickAddWindow: View {
         let nextMonday = (2 - weekday + 7) % 7
         return [("今天", today.dotistDay), ("明天", calendar.date(byAdding: .day, value: 1, to: today)!.dotistDay), ("下周一", calendar.date(byAdding: .day, value: nextMonday == 0 ? 7 : nextMonday, to: today)!.dotistDay)]
     }
-    private var group: DotistGroup? { model.groups.first { $0.id == category } ?? model.groups.first }
+    private var groupIDs: [String] { [DotistGroup.inboxID] + model.visibleGroups.map(\.id) }
+    private var group: DotistGroup? { model.groups.first { $0.id == category } ?? model.groups.first { $0.id == DotistGroup.inboxID } }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             QuickInput(text: $title, placeholder: model.text("写下一件小事"), label: model.text("快速添加"), font: DotistDesign.nativeFont(22, language: model.language), commit: add, cancel: close, cycle: cycle)
@@ -27,7 +28,7 @@ struct QuickAddWindow: View {
             HStack(spacing: 14) {
                 if let group {
                     Button { cycle(1) } label: {
-                        Text(group.name).font(font(12, .semibold, serif: true))
+                        Text(model.groupDisplayName(group.id)).font(font(12, .semibold, serif: true))
                             .foregroundColor(DotistDesign.ink)
                             .lineLimit(1).frame(minHeight: 24).contentShape(Rectangle())
                     }.buttonStyle(.plain).modifier(DotistFocusRing())
@@ -41,9 +42,8 @@ struct QuickAddWindow: View {
             .foregroundColor(DotistDesign.ink).background(WindowMaterial(opacity: model.settings.opacity, frost: model.settings.frost)).cornerRadius(18).modifier(DotistTheme(theme: model.settings.theme))
     }
     private func cycle(_ step: Int) {
-        guard !model.groups.isEmpty else { return }
-        let index = model.groups.firstIndex(where: { $0.id == group?.id }) ?? 0
-        category = model.groups[(index + step + model.groups.count) % model.groups.count].id
+        let index = groupIDs.firstIndex(of: category) ?? 0
+        category = groupIDs[(index + step + groupIDs.count) % groupIDs.count]
         UserDefaults.standard.set(category, forKey: "dotist.quick.group")
     }
     private func add() {

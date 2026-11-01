@@ -137,13 +137,14 @@ final class NativeStoreTests: XCTestCase {
         XCTAssertEqual(Set(try store.listTasks().map(\.id)), Set([parent.id, child.id]))
     }
 
-    func testRestoreRequiresTheOriginalGroupIdentity() throws {
+    func testGroupDeletionKeepsTasksUngroupedWhenAnotherGroupIsCreated() throws {
         let store = try store()
         let task = try store.addTask(title: "原分组任务", category: "work")
         try store.deleteGroup("work")
         _ = try store.addGroup(name: "work")
         XCTAssertThrowsError(try store.restoreTask(task.id))
-        XCTAssertTrue(try store.listTasks().isEmpty)
+        XCTAssertEqual(try store.listTasks().map(\.id), [task.id])
+        XCTAssertEqual(try store.listTasks().first?.category, DotistGroup.inboxID)
     }
 
     func testReorderPreservesFamilyDatesAndCompletedTimestampWithTiedPositions() throws {

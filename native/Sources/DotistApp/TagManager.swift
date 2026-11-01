@@ -10,6 +10,8 @@ struct TagManager: View {
     @State private var renaming: String?
     @State private var name = ""
     @State private var saving = false
+    @State private var drag = ManagerDragState()
+    @State private var hovered: String?
     private func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular, serif: Bool = false) -> Font {
         DotistDesign.font(size, weight: weight, serif: serif, language: model.language)
     }
@@ -20,13 +22,14 @@ struct TagManager: View {
                 Button(model.text("分组"), action: groups).buttonStyle(.plain).modifier(DotistFocusRing()).font(font(14, .medium)).foregroundColor(DotistDesign.faint)
                 Text(model.text("标签")).font(font(14, .medium))
                 Spacer()
-                Text(model.text("{n} 个").replacingOccurrences(of: "{n}", with: "\(model.tagCounts.count)")).font(font(12)).foregroundColor(DotistDesign.muted)
+                Text(model.text("{n} 个").replacingOccurrences(of: "{n}", with: "\(model.orderedTagCounts.count)")).font(font(12)).foregroundColor(DotistDesign.muted)
             }.padding(.horizontal, 16).frame(height: 44)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    if model.tagCounts.isEmpty { Text(model.text("在任务里写 #词 就会有标签，比如：写周报 #sideproject")).font(font(12)).foregroundColor(DotistDesign.muted) }
-                    ForEach(model.tagCounts) { tag in
+                    if model.orderedTagCounts.isEmpty { Text(model.text("在任务里写 #词 就会有标签，比如：写周报 #sideproject")).font(font(12)).foregroundColor(DotistDesign.muted) }
+                    ForEach(Array(model.orderedTagCounts.enumerated()), id: \.element.tag) { index, tag in
                         HStack(spacing: 8) {
+                            Image(systemName: "line.3.horizontal").foregroundColor(hovered == tag.tag ? DotistDesign.muted : DotistDesign.faint).frame(width: 18)
                             if renaming == tag.tag {
                                 TextField(model.text("标签名称"), text: $name, onEditingChanged: { active in if !active { save(tag.tag) } }, onCommit: { save(tag.tag) }).textFieldStyle(.plain).modifier(DotistFocusRing()).font(font(14, .medium))
                             } else {
@@ -34,10 +37,12 @@ struct TagManager: View {
                             }
                             Text("\(tag.open)").font(font(12)).foregroundColor(DotistDesign.faint)
                             Button(model.text("重命名")) { renaming = tag.tag; name = tag.tag }.buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12)).foregroundColor(DotistDesign.faint)
-                            Button { model.change { try $0.retag(tag.tag, replacement: nil) } } label: { Image(systemName: "trash").frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("移除标签 {tag}").replacingOccurrences(of: "{tag}", with: tag.tag)))
-                        }.frame(minHeight: 40)
+                            Button { model.deleteTag(tag.tag) } label: { Image(systemName: "trash").frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("移除标签 {tag}").replacingOccurrences(of: "{tag}", with: tag.tag)))
+                        }.frame(height: 40).contentShape(Rectangle())
+                            .onHover { hovered = $0 ? tag.tag : nil }
+                            .modifier(ManagerReorderRow(id: tag.tag, index: index, count: model.orderedTagCounts.count, drag: $drag) { model.moveTag(tag.tag, toIndex: $0) })
                     }
-                    Text(model.text("标签写在任务标题里（#词），所以改名和移除会同步改写所有带它的任务。")).font(font(12)).foregroundColor(DotistDesign.muted).padding(.top, 10)
+                    Text(model.text("只移除标题里的 #标签,任务会保留")).font(font(12)).foregroundColor(DotistDesign.muted).padding(.top, 10)
                 }.padding(.horizontal, 16)
             }
         }.foregroundColor(DotistDesign.ink)

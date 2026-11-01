@@ -21,10 +21,10 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
     let model: AppModel
     let state: TaskPanelState
     private(set) var motion: PanelMotion!
-    var compact: Bool { motion.bubble }
+    var compact: Bool { motion?.bubble ?? false }
     private let didClose: (GroupPanelController) -> Void
 
-    var groupName: String { model.groups.first { $0.id == state.groupID }?.name ?? model.text("全部") }
+    var groupName: String { state.groupID.map { model.groupDisplayName($0) } ?? model.text("全部") }
     var tasks: [DotistTask] { model.topLevelTasks.filter { state.groupID == nil || $0.category == state.groupID } }
     var remaining: Int { tasks.filter { !$0.completed }.count }
     var bubbleTitle: String {
@@ -38,6 +38,8 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
         self.model = model
         state = TaskPanelState(groupID: groupID)
         self.didClose = didClose
+        // Inbox is storage for ungrouped tasks, never an independent group panel.
+        guard groupID != DotistGroup.inboxID else { super.init(window: nil); return }
         let size = NSSize(width: 364, height: 620)
         let panel = DotistPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.minSize = NSSize(width: 320, height: 440)
@@ -72,7 +74,7 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
         window?.level = model.settings.alwaysOnTop ? .floating : .normal
     }
     func updateTitle() { window?.title = "Dotist · " + groupName }
-    func toggleCompact() { motion.toggleBubble() }
+    func toggleCompact() { motion?.toggleBubble() }
 
     func showBubbleMenu(_ event: NSEvent, in view: NSView) {
         let menu = NSMenu()
@@ -82,12 +84,12 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
         let close = NSMenuItem(title: model.text("关闭面板"), action: #selector(closePanel), keyEquivalent: "")
         close.target = self
         menu.addItem(close)
-        motion.showMenu(menu, event: event, in: view)
+        motion?.showMenu(menu, event: event, in: view)
     }
     @objc private func expandPanel() { if compact { toggleCompact() }; window?.makeKeyAndOrderFront(nil) }
     @objc func closePanel() { close() }
     func windowWillClose(_ notification: Notification) {
-        motion.stop()
+        motion?.stop()
         window?.contentView = nil
         didClose(self)
     }
@@ -103,14 +105,17 @@ private struct GroupPanelContent: View {
     let showGroupPanel: (String) -> Void
 
     var body: some View {
-        FloatingPanelView(model: model, motion: controller.motion, title: controller.bubbleTitle,
+        FloatingPanelView(model: model, motion: controller.motion, colorState: state, title: controller.bubbleTitle,
             remaining: controller.remaining, total: controller.tasks.count, groupName: controller.groupName,
             contextMenu: controller.showBubbleMenu,
             content: MainWindow(model: model, state: state, showViews: showViews, showSearch: showSearch, showSettings: showSettings,
                 showGroupPanel: showGroupPanel, collapse: controller.toggleCompact, close: controller.closePanel, primary: false))
-        .onChange(of: state.groupID) { _ in controller.updateTitle() }
+        .onChange(of: state.groupID) { id in
+            guard let id, id != DotistGroup.inboxID else { controller.closePanel(); return }
+            controller.updateTitle()
+        }
         .onChange(of: model.groups) { groups in
-            if let id = state.groupID, !groups.contains(where: { $0.id == id }) { state.groupID = DotistGroup.inboxID }
+            if let id = state.groupID, !groups.contains(where: { $0.id == id }) { controller.closePanel(); return }
             controller.updateTitle()
         }
     }

@@ -216,6 +216,7 @@ final class PanelMotion: ObservableObject {
 struct FloatingPanelView<Content: View>: View {
     @ObservedObject var model: AppModel
     @ObservedObject var motion: PanelMotion
+    @ObservedObject var colorState: TaskPanelState
     let title: String
     let remaining: Int
     let total: Int
@@ -245,7 +246,7 @@ struct FloatingPanelView<Content: View>: View {
                     .accessibilityHidden(!motion.bubble)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topTrailing)
-            .background(FloatingSurface(model: model, motion: motion, size: geometry.size, reveal: hoverReveal))
+            .background(FloatingSurface(model: model, motion: motion, size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID)))
             .clipped()
         }
         .onChange(of: motion.hovering) { active in
@@ -271,9 +272,10 @@ private struct FloatingSurface: View {
     @ObservedObject var motion: PanelMotion
     let size: CGSize
     let reveal: CGFloat
+    let color: DotistGroupColor
 
     var body: some View {
-        FloatingMaterial(opacity: model.settings.opacity, frost: model.settings.frost, compact: motion.bubble)
+        FloatingMaterial(opacity: model.settings.opacity, frost: model.settings.frost, compact: motion.bubble, color: color)
             .frame(width: motion.bubble && !motion.animationInProgress ? 48 + (size.width - 48) * reveal : size.width, height: size.height)
             .frame(width: size.width, height: size.height, alignment: motion.bubbleOnRight ? .topTrailing : .topLeading)
     }
@@ -294,10 +296,15 @@ private struct FloatingBubble: View {
             ZStack(alignment: motion.bubbleOnRight ? .trailing : .leading) {
                 VStack(alignment: .leading, spacing: 1) {
                     let next = model.ordered(model.topLevelTasks.filter { !$0.completed && (groupName == nil || model.group(for: $0)?.name == groupName) }).first
-                    Text(next?.title ?? title).font(DotistDesign.font(13, weight: .medium, language: model.language)).foregroundColor(DotistDesign.ink).lineLimit(1)
+                    Text(next?.title ?? title).font(DotistDesign.textFont(13, weight: .medium, language: model.language)).foregroundColor(DotistDesign.ink).lineLimit(1)
                     if let next {
-                        let details = [model.group(for: next)?.name, next.dueDate.map(model.dueLabel)].compactMap { $0 }.joined(separator: " · ")
-                        if !details.isEmpty { Text(details).font(DotistDesign.font(12, language: model.language)).foregroundColor(DotistDesign.muted).lineLimit(1) }
+                        HStack(spacing: 4) {
+                            if let group = model.group(for: next) {
+                                Text(group.name).font(DotistDesign.nameFont(12, language: model.language))
+                                if next.dueDate != nil { Text("·") }
+                            }
+                            if let due = next.dueDate { Text(model.dueLabel(due)) }
+                        }.font(DotistDesign.textFont(12, language: model.language)).foregroundColor(DotistDesign.muted).lineLimit(1)
                     }
                 }
                     .frame(width: max(40, width - 78),
@@ -312,7 +319,7 @@ private struct FloatingBubble: View {
                     .frame(width: width, height: 48, alignment: motion.bubbleOnRight ? .leading : .trailing)
                     .accessibilityHidden(true)
                 ZStack {
-                    Text("\(remaining)").font(DotistDesign.font(20, weight: .semibold, language: model.language)).monospacedDigit().foregroundColor(DotistDesign.ink)
+                    Text("\(remaining)").font(DotistDesign.textFont(20, weight: .semibold, language: model.language)).monospacedDigit().foregroundColor(DotistDesign.ink)
                 }.frame(width: 48, height: 48).contentShape(Circle())
             }.frame(width: width, height: 48, alignment: motion.bubbleOnRight ? .trailing : .leading)
                 .contentShape(Rectangle())

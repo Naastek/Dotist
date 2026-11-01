@@ -97,28 +97,28 @@ public final class TaskStore: @unchecked Sendable {
     }
 
     public func snapshot() throws -> TaskSnapshot {
-        try database.read { try TaskSnapshot(tasks: Self.tasks($0), groups: Self.groups($0)) }
+        try read { try TaskSnapshot(tasks: Self.tasks($0), groups: Self.groups($0)) }
     }
-    public func listTasks() throws -> [DotistTask] { try database.read(Self.tasks) }
-    public func listGroups() throws -> [DotistGroup] { try database.read(Self.groups) }
+    public func listTasks() throws -> [DotistTask] { try read(Self.tasks) }
+    public func listGroups() throws -> [DotistGroup] { try read(Self.groups) }
 
     public struct NewTask: Sendable {
         public let title: String
         public let category: String
         public let parentId: String?
         public let dueDate: String?
-        public init(title: String, category: String, parentId: String? = nil, dueDate: String? = nil) {
+        public init(title: String, category: String = DotistGroup.inboxID, parentId: String? = nil, dueDate: String? = nil) {
             self.title = title; self.category = category; self.parentId = parentId; self.dueDate = dueDate
         }
     }
 
-    @discardableResult public func addTask(title: String, category: String, parentId: String? = nil, dueDate: String? = nil) throws -> DotistTask {
+    @discardableResult public func addTask(title: String, category: String = DotistGroup.inboxID, parentId: String? = nil, dueDate: String? = nil) throws -> DotistTask {
         try addTasks([NewTask(title: title, category: category, parentId: parentId, dueDate: dueDate)])[0]
     }
 
     /// A batch is one transaction: an invalid title, parent or date leaves no partial tasks.
     public func addTasks(_ values: [NewTask]) throws -> [DotistTask] {
-        try database.write { db in
+        try write { db in
             try values.map { value in
                 let title = try Self.validated(value.title, limit: 500, empty: "任务内容不能为空", long: "任务内容不能超过 500 个字")
                 try Self.validateDate(value.dueDate)
@@ -145,12 +145,13 @@ public final class TaskStore: @unchecked Sendable {
 
     @discardableResult public func patchTask(id: String, title: String? = nil, category: String? = nil, completed: Bool? = nil, status: TaskStatus? = nil) throws -> DotistTask {
         if let completed, let status, completed != (status == .done) { throw TaskStoreError("完成标记与状态不一致") }
-        return try database.write { db in
+        return try write { db in
             let old = try Self.task(db, id)
             let title = try Self.validated(title ?? old.title, limit: 500, empty: "任务内容不能为空", long: "任务内容不能超过 500 个字")
             let category = try category.map { try Self.resolveGroup(db, $0) } ?? old.category
             guard old.parentId == nil || old.category == category else { throw TaskStoreError("子任务的分类跟随父任务") }
             let status = status ?? completed.map { $0 ? .done : .todo } ?? old.status
+            guard title != old.title || category != old.category || status != old.status else { return old }
             let position = old.category == category ? old.position : try Int64.fetchOne(db, sql: "SELECT COALESCE(MAX(position),-1)+1 FROM tasks WHERE category=? AND parent_id IS NULL AND deleted_at IS NULL", arguments: [category]) ?? 0
             let now = Self.timestamp()
             try db.execute(sql: "UPDATE tasks SET title=?,category=?,status=?,completed=?,position=?,updated_at=?,revision=revision+1 WHERE id=?",
@@ -172,17 +173,17 @@ public final class TaskStore: @unchecked Sendable {
     }
 
     @discardableResult public func setDueDate(_ id: String, date: String?) throws -> DotistTask {
-        try database.write { db in let task = try Self.task(db, id); return try Self.dates(db, task, start: task.startDate, due: date) }
+        try write { db in let task = try Self.task(db, id); return try Self.dates(db, task, start: task.startDate, due: date) }
     }
     @discardableResult public func setStartDate(_ id: String, date: String?) throws -> DotistTask {
-        try database.write { db in let task = try Self.task(db, id); return try Self.dates(db, task, start: date, due: task.dueDate) }
+        try write { db in let task = try Self.task(db, id); return try Self.dates(db, task, start: date, due: task.dueDate) }
     }
     @discardableResult public func setDateRange(_ id: String, start: String?, due: String?) throws -> DotistTask {
-        try database.write { try Self.dates($0, Self.task($0, id), start: start, due: due) }
+        try write { try Self.dates($0, Self.task($0, id), start: start, due: due) }
     }
 
     public func deleteTask(_ id: String) throws {
-        try database.write { db in
+        try write { db in
             let now = Self.timestamp()
             let root = try Self.task(db, id)
             for task in [root] + TaskHierarchy(try Self.tasks(db)).descendants(of: id) {
@@ -193,7 +194,7 @@ public final class TaskStore: @unchecked Sendable {
     }
 
     @discardableResult public func restoreTask(_ id: String) throws -> DotistTask {
-        try database.write { db in
+        try write { db in
             let old = try Self.task(db, id, deleted: true)
             guard let stamp = old.deletedAt else { throw TaskStoreError("任务没有被删除") }
             let parent = try old.parentId.map { try Self.task(db, $0) }
@@ -213,10 +214,10 @@ public final class TaskStore: @unchecked Sendable {
     }
 
     @discardableResult public func addGroup(name: String, color: String? = nil) throws -> DotistGroup {
-        try database.write { db in
+        try write { db in
             let name = try Self.validated(name, limit: 20, empty: "分组名不能为空", long: "分组名不能超过 20 个字")
             try Self.availableGroupName(db, name, except: "")
-            let color = color ?? "work"
+            let color = color ?? "none"
             guard Self.colors.contains(color) else { throw TaskStoreError("无效的分组颜色") }
             let id = UUID().uuidString.lowercased()
             let position = try Int64.fetchOne(db, sql: "SELECT COALESCE(MAX(position),-1)+1 FROM task_groups WHERE deleted_at IS NULL") ?? 0
@@ -228,12 +229,12 @@ public final class TaskStore: @unchecked Sendable {
 
     @discardableResult public func updateGroup(_ id: String, name: String? = nil, color: String? = nil) throws -> DotistGroup {
         guard id != DotistGroup.inboxID else { throw TaskStoreError("Inbox 是固定的收集箱") }
-        return try database.write { db in
+        return try write { db in
             guard let old = try Self.groups(db).first(where: { $0.id == id }) else { throw TaskStoreError("找不到分组") }
             let name = try Self.validated(name ?? old.name, limit: 20, empty: "分组名不能为空", long: "分组名不能超过 20 个字")
             try Self.availableGroupName(db, name, except: id, preservingName: name == old.name)
+            if let color { guard Self.colors.contains(color) else { throw TaskStoreError("无效的分组颜色") } }
             let color = color ?? old.color
-            guard Self.colors.contains(color) else { throw TaskStoreError("无效的分组颜色") }
             try db.execute(sql: "UPDATE task_groups SET name=?,color=?,updated_at=? WHERE id=?", arguments: [name, color, Self.timestamp(), id])
             return DotistGroup(id: id, name: name, color: color, position: old.position)
         }
@@ -242,34 +243,65 @@ public final class TaskStore: @unchecked Sendable {
     public func moveGroup(_ id: String, direction: Int) throws {
         guard [-1, 1].contains(direction) else { throw TaskStoreError("排序方向无效") }
         guard id != DotistGroup.inboxID else { return }
-        try database.write { db in
+        try write { db in
             let groups = try Self.groups(db).filter { $0.id != DotistGroup.inboxID }
             guard let index = groups.firstIndex(where: { $0.id == id }) else { throw TaskStoreError("找不到分组") }
             guard groups.indices.contains(index + direction) else { return }
-            let other = groups[index + direction]
-            let now = Self.timestamp()
-            try db.execute(sql: "UPDATE task_groups SET position=?,updated_at=? WHERE id=?", arguments: [other.position, now, id])
-            try db.execute(sql: "UPDATE task_groups SET position=?,updated_at=? WHERE id=?", arguments: [groups[index].position, now, other.id])
+            try moveGroup(id, toIndex: index + direction)
         }
+    }
+
+    /// The index is the final index among visible groups, with the system bucket excluded.
+    public func moveGroup(_ id: String, toIndex: Int) throws {
+        guard id != DotistGroup.inboxID else { return }
+        try write { db in
+            var groups = try Self.groups(db).filter { $0.id != DotistGroup.inboxID }
+            guard let source = groups.firstIndex(where: { $0.id == id }) else { throw TaskStoreError("找不到分组") }
+            let destination = min(max(toIndex, 0), groups.count - 1)
+            guard source != destination else { return }
+            groups.insert(groups.remove(at: source), at: destination)
+            let now = Self.timestamp()
+            for (position, group) in groups.enumerated() where group.position != Int64(position) {
+                try db.execute(sql: "UPDATE task_groups SET position=?,updated_at=? WHERE id=?", arguments: [position, now, group.id])
+            }
+        }
+    }
+
+    public func setGroupColor(_ id: String, _ color: DotistGroupColor) throws {
+        _ = try updateGroup(id, color: color.rawValue)
     }
 
     public func deleteGroup(_ id: String) throws {
         guard id != DotistGroup.inboxID else { throw TaskStoreError("Inbox 是固定的收集箱") }
-        try database.write { db in
+        try write { db in
             let groups = try Self.groups(db)
             guard groups.contains(where: { $0.id == id }) else { throw TaskStoreError("找不到分组") }
-            guard groups.count > 1 else { throw TaskStoreError("至少保留一个分组") }
             let now = Self.timestamp()
             try db.execute(sql: "UPDATE task_groups SET deleted_at=?,updated_at=? WHERE id=?", arguments: [now, now, id])
-            for task in try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE category=? AND deleted_at IS NULL", arguments: [id]) {
-                try db.execute(sql: "UPDATE tasks SET deleted_at=?,updated_at=?,revision=revision+1 WHERE id=?", arguments: [now, now, task.id])
-                try Self.record(db, Self.task(db, task.id, deleted: true), kind: "delete", base: task.revision)
+            let tasks = try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE category=? ORDER BY position,id", arguments: [id])
+            let roots = try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE category=? AND parent_id IS NULL AND deleted_at IS NULL ORDER BY position,id", arguments: [DotistGroup.inboxID])
+            var rootPosition = roots.last?.position ?? -1
+            let rootCount = tasks.filter { $0.parentId == nil && $0.deletedAt == nil }.count
+            if rootPosition.addingReportingOverflow(Int64(rootCount)).overflow {
+                // Rebase only if appending would exceed SQLite's integer range.
+                for (position, root) in roots.enumerated() where root.position != Int64(position) {
+                    try db.execute(sql: "UPDATE tasks SET position=?,updated_at=?,revision=revision+1 WHERE id=?", arguments: [position, root.completed ? root.updatedAt : now, root.id])
+                    try Self.record(db, Self.task(db, root.id), kind: "reorder", base: root.revision)
+                }
+                rootPosition = Int64(roots.count) - 1
+            }
+            for task in tasks {
+                // Tombstones keep their deletion state, so separately deleted tasks remain restorable.
+                var position = task.position
+                if task.parentId == nil && task.deletedAt == nil { rootPosition += 1; position = rootPosition }
+                try db.execute(sql: "UPDATE tasks SET category=?,position=?,updated_at=?,revision=revision+1 WHERE id=?", arguments: [DotistGroup.inboxID, position, task.completed ? task.updatedAt : now, task.id])
+                try Self.record(db, Self.task(db, task.id, deleted: true), kind: "update", base: task.revision)
             }
         }
     }
 
     @discardableResult public func restoreGroup(_ id: String) throws -> DotistGroup {
-        try database.write { db in
+        try write { db in
             guard let row = try Row.fetchOne(db, sql: "SELECT * FROM task_groups WHERE id=?", arguments: [id]) else { throw TaskStoreError("找不到分组") }
             guard let stamp: String = row["deleted_at"] else { throw TaskStoreError("分组没有被删除") }
             let group = try DotistGroup(row: row)
@@ -285,20 +317,20 @@ public final class TaskStore: @unchecked Sendable {
 
     /// Snapshot queries include all active descendants, independently of UI expansion.
     public func children(of id: String) throws -> [DotistTask] {
-        try database.read { TaskHierarchy(try Self.tasks($0)).children(of: id) }
+        try read { TaskHierarchy(try Self.tasks($0)).children(of: id) }
     }
     public func depth(of id: String) throws -> Int {
-        try database.read { TaskHierarchy(try Self.tasks($0)).depth(of: id) }
+        try read { TaskHierarchy(try Self.tasks($0)).depth(of: id) }
     }
     public func descendants(of id: String) throws -> [DotistTask] {
-        try database.read { TaskHierarchy(try Self.tasks($0)).descendants(of: id) }
+        try read { TaskHierarchy(try Self.tasks($0)).descendants(of: id) }
     }
     public func subtreeHeight(of id: String) throws -> Int {
-        try database.read { TaskHierarchy(try Self.tasks($0)).subtreeHeight(of: id) }
+        try read { TaskHierarchy(try Self.tasks($0)).subtreeHeight(of: id) }
     }
 
     @discardableResult public func reparent(_ id: String, parentId: String?) throws -> DotistTask {
-        try database.write { db in
+        try write { db in
             let old = try Self.task(db, id)
             if let parentId {
                 let parent = try Self.task(db, parentId)
@@ -316,7 +348,7 @@ public final class TaskStore: @unchecked Sendable {
     /// Selected descendants travel with their selected ancestor. All validation
     /// and writes (including outbox records) belong to this single transaction.
     @discardableResult public func indent(ids: [String]) throws -> [DotistTask] {
-        try database.write { db in
+        try write { db in
             let hierarchy = TaskHierarchy(try Self.tasks(db))
             for id in Set(ids) { _ = try Self.task(db, id) }
             let selected = hierarchy.selectionRoots(ids: ids, groupIDs: try Self.groups(db).map(\.id))
@@ -337,7 +369,7 @@ public final class TaskStore: @unchecked Sendable {
     }
 
     @discardableResult public func outdent(ids: [String]) throws -> [DotistTask] {
-        try database.write { try Self.outdent($0, ids: ids) }
+        try write { try Self.outdent($0, ids: ids) }
     }
 
     @discardableResult private static func outdent(_ db: Database, ids: [String]) throws -> [DotistTask] {
@@ -373,7 +405,7 @@ public final class TaskStore: @unchecked Sendable {
     /// Moves an entire subtree atomically. `beforeID` must be a destination
     /// sibling; nil appends. A stale anchor rolls back every write.
     public func commitReorder(_ id: String, groupID: String, parentID: String?, beforeID: String?) throws {
-        try database.write { try Self.commitReorder($0, id, groupID: groupID, parentID: parentID, beforeID: beforeID) }
+        try write { try Self.commitReorder($0, id, groupID: groupID, parentID: parentID, beforeID: beforeID) }
     }
 
     private static func commitReorder(_ db: Database, _ id: String, groupID: String, parentID: String?, beforeID: String?) throws {
@@ -403,7 +435,7 @@ public final class TaskStore: @unchecked Sendable {
     }
 
     public func reorder(_ id: String, relativeTo targetId: String, after: Bool, allTasks: Bool) throws {
-        try database.write { db in
+        try write { db in
             let task = try Self.task(db, id)
             let target = try Self.task(db, targetId)
             guard allTasks || (task.category == target.category && task.parentId == target.parentId) else { throw TaskStoreError("只能调整同级任务的顺序") }
@@ -414,7 +446,7 @@ public final class TaskStore: @unchecked Sendable {
     public func moveStatus(_ id: String, direction: Int) throws { try move(id, direction: direction, statusColumn: true) }
     private func move(_ id: String, direction: Int, statusColumn: Bool) throws {
         guard [-1, 1].contains(direction) else { throw TaskStoreError("排序方向无效") }
-        try database.write { db in
+        try write { db in
             let task = try Self.task(db, id)
             guard !statusColumn || task.parentId == nil else { throw TaskStoreError("看板只展示一级任务") }
             let peers = try Self.tasks(db).filter {
@@ -464,7 +496,8 @@ public final class TaskStore: @unchecked Sendable {
         }
     }
 
-    private static let colors = ["work", "life", "study", "teal", "rose", "moss"]
+    // Keep legacy values writable for older MCP clients; they resolve to a neutral theme.
+    private static let colors = Set(DotistGroupColor.allCases.map(\.rawValue) + ["work", "life", "study", "rose", "moss"])
     private static func tasks(_ db: Database) throws -> [DotistTask] {
         try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE deleted_at IS NULL ORDER BY category,position,id")
     }
@@ -505,6 +538,7 @@ public final class TaskStore: @unchecked Sendable {
     private static func dates(_ db: Database, _ old: DotistTask, start: String?, due: String?) throws -> DotistTask {
         try validateDate(start); try validateDate(due)
         if let start, let due, start > due { throw TaskStoreError("开始日不能晚于到期日") }
+        guard start != old.startDate || due != old.dueDate else { return old }
         try db.execute(sql: "UPDATE tasks SET start_date=?,due_date=?,updated_at=?,revision=revision+1 WHERE id=?", arguments: [start, due, timestamp(), old.id])
         let updated = try task(db, old.id)
         try record(db, updated, kind: "update", base: old.revision)

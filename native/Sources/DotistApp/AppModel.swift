@@ -23,6 +23,11 @@ final class AppModel: ObservableObject {
     @Published var focusNavigation = 0
     @Published var gotoGroup: String?
     @Published var undo: UndoEntry?
+    @Published var canUndoAction = false
+    @Published var canRedoAction = false
+    var undoHistory: [TaskMutationPatch] = []
+    var redoHistory: [TaskMutationPatch] = []
+    var historyActionInFlight = false
     @Published var scope = "all"
     @Published var scopeNavigation = 0
     @Published private(set) var launchAtLogin: Bool
@@ -97,7 +102,24 @@ final class AppModel: ObservableObject {
         formatter.setLocalizedDateFormatFromTemplate(days > 1 && days <= 6 ? "EEE" : sameYear ? "MMMd" : "yyyyMMMd")
         return formatter.string(from: date)
     }
-    func group(for task: DotistTask) -> DotistGroup? { groupsByID[task.category] }
+    func group(for task: DotistTask) -> DotistGroup? { task.category == DotistGroup.inboxID ? nil : groupsByID[task.category] }
+    var visibleGroups: [DotistGroup] {
+        groups.filter { $0.id != DotistGroup.inboxID }.sorted {
+            $0.position == $1.position ? $0.id < $1.id : $0.position < $1.position
+        }
+    }
+    /// Root rows for the unheaded section in All; descendants are rendered with their parent.
+    var ungroupedTasks: [DotistTask] { ordered(displayTasks.filter { $0.category == DotistGroup.inboxID && $0.parentId == nil }) }
+    func groupDisplayName(_ id: String?) -> String {
+        guard let id, id != DotistGroup.inboxID else { return text("无分组") }
+        return groupsByID[id]?.name ?? text("无分组")
+    }
+    func themeColor(forGroup id: String?) -> DotistGroupColor {
+        let fallback = DotistGroupColor(rawValue: settings.allColor)
+        guard let id, let group = groupsByID[id] else { return fallback }
+        let color = DotistGroupColor(rawValue: group.color)
+        return color == .none ? fallback : color
+    }
     func activeGroupNavigation(_ id: String) { gotoGroup = id; scopeNavigation += 1 }
     func children(of task: DotistTask) -> [DotistTask] { childrenByParent[task.id] ?? [] }
     func depth(of task: DotistTask) -> Int { depth(of: task.id) }
@@ -111,6 +133,7 @@ final class AppModel: ObservableObject {
     }
     var displayTasks: [DotistTask] { activeTag == nil ? tasks : taggedTasks }
     var tagCounts: [DotistTagCount] { sortedTags }
+    var orderedTagCounts: [DotistTagCount] { TaskTags.orderedCounts(sortedTags, order: settings.tagOrder) }
     func visibleChildren(of task: DotistTask) -> [DotistTask] { children(of: task) }
     func tags(for task: DotistTask) -> DotistTaskTags? { tagsByID[task.id] }
     var topLevelTasks: [DotistTask] { roots }
@@ -163,32 +186,43 @@ final class AppModel: ObservableObject {
         roots = tasks.filter { $0.parentId == nil }
         remaining = roots.filter { !$0.completed }.count
         let grouped = Dictionary(grouping: roots.filter { !$0.completed }, by: \.category).mapValues(ordered)
-        next = groups.lazy.compactMap { grouped[$0.id]?.first }.first
+        next = grouped[DotistGroup.inboxID]?.first ?? visibleGroups.lazy.compactMap { grouped[$0.id]?.first }.first
         sortedTags = tagDescription.counts.sorted { $0.open == $1.open ? $0.tag.localizedCompare($1.tag) == .orderedAscending : $0.open > $1.open }
     }
 
     func beginDrag(_ id: String, scope: String) {
         dragId = id
         dragScope = scope
+        updateHistoryAvailability()
     }
     func endDrag() {
         dragId = nil
         dragScope = nil
         if let snapshot = pendingSnapshot { pendingSnapshot = nil; apply(snapshot) }
+        updateHistoryAvailability()
     }
 
-    func change(completed: (() -> Void)? = nil, failed: (() -> Void)? = nil, _ operation: @escaping (TaskStore) throws -> Void) {
+    func change(recordHistory: Bool = true, completed: (() -> Void)? = nil, failed: (() -> Void)? = nil, _ operation: @escaping (TaskStore) throws -> Void) {
         pendingChanges += 1
         busy = true
+        updateHistoryAvailability()
         let core = core
         queue.async { [weak self] in
             do {
-                try operation(core)
+                let patch: TaskMutationPatch?
+                if recordHistory { patch = try core.captureChanges(operation) }
+                else { try operation(core); patch = nil }
+                let snapshot = try? core.snapshot()
+                let settings = try? core.settings()
                 DispatchQueue.main.async {
                     self?.pendingChanges -= 1
                     self?.busy = (self?.pendingChanges ?? 0) > 0
                     self?.error = nil
+                    if let patch { self?.recordHistory(patch) }
+                    if let settings { self?.settings = settings }
+                    if let snapshot { self?.apply(snapshot) }
                     completed?()
+                    self?.updateHistoryAvailability()
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -196,6 +230,7 @@ final class AppModel: ObservableObject {
                     self?.busy = (self?.pendingChanges ?? 0) > 0
                     self?.error = self?.text(error.localizedDescription) ?? error.localizedDescription
                     failed?()
+                    self?.updateHistoryAvailability()
                 }
             }
         }
@@ -208,10 +243,35 @@ final class AppModel: ObservableObject {
     func deleteGroup(_ group: DotistGroup) {
         change(completed: { [weak self] in self?.undo = UndoEntry(id: group.id, title: group.name, group: true) }) { try $0.deleteGroup(group.id) }
     }
+    func moveGroup(_ id: String, toIndex: Int) { change { try $0.moveGroup(id, toIndex: toIndex) } }
+    func setGroupColor(_ id: String, _ color: DotistGroupColor) { change { try $0.setGroupColor(id, color) } }
+    func moveTag(_ tag: String, toIndex: Int) { change(recordHistory: false) { try $0.moveTag(tag, toIndex: toIndex) } }
+    func deleteTag(_ tag: String) { change { try $0.retag(tag, replacement: nil) } }
+    func renameTag(_ tag: String, to name: String) {
+        let wasSelected = activeTag == tag
+        let normalized = String(name.trimmingCharacters(in: .whitespacesAndNewlines).drop(while: { $0 == "#" }).filter { !$0.isWhitespace }.prefix(24))
+        guard !normalized.isEmpty else { return }
+        change(completed: { [weak self] in
+            if wasSelected { self?.selectTag(normalized) }
+        }) { try $0.retag(tag, replacement: name) }
+    }
     func restore() {
         guard let item = undo else { return }
+        // The deletion banner and ⌘Z consume the same entry when possible.
+        // Restoring from the banner must not add an inverse deletion entry.
+        if canUndoAction, let patch = undoHistory.last,
+           item.group ? patch.after.groups.contains(where: { $0.group.id == item.id && $0.deletedAt != nil })
+                      : patch.after.tasks.contains(where: { $0.id == item.id && $0.deletedAt != nil }) {
+            undoLast()
+            return
+        }
+        let deletion = item.group ? undoHistory.last(where: {
+            $0.after.groups.contains { $0.group.id == item.id && $0.deletedAt != nil }
+        }) : nil
         change(completed: { [weak self] in self?.undo = nil }) {
-            if item.group { _ = try $0.restoreGroup(item.id) } else { _ = try $0.restoreTask(item.id) }
+            if let deletion { try $0.apply(patch: deletion.before) }
+            else if item.group { _ = try $0.restoreGroup(item.id) }
+            else { _ = try $0.restoreTask(item.id) }
         }
     }
     func reorder(_ id: String, relativeTo target: String, after: Bool, allTasks: Bool) {

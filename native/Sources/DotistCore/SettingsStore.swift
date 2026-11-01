@@ -77,6 +77,8 @@ final class SettingsStore: @unchecked Sendable {
         if let value = patch.idleDelaySecs { next.idleDelaySecs = value }
         if let value = patch.idleFadeSecs { next.idleFadeSecs = value }
         if let value = patch.groupColors { next.groupColors = value }
+        if let value = patch.tagOrder { next.tagOrder = value }
+        if let value = patch.allColor { next.allColor = value }
         if let value = patch.filters { next.filters = value }
         if let value = patch.defaultFilter { next.defaultFilter = value }
         if let value = patch.autoCollapse { next.autoCollapse = value }
@@ -112,6 +114,9 @@ final class SettingsStore: @unchecked Sendable {
 
     private static func normalized(_ settings: DotistSettings) throws -> DotistSettings {
         var next = settings
+        next.allColor = DotistGroupColor(rawValue: next.allColor).rawValue
+        var seenTags: Set<String> = []
+        next.tagOrder = next.tagOrder.filter { !$0.isEmpty && seenTags.insert($0).inserted }
         guard ["system", "light", "dark"].contains(next.theme) else { throw TaskStoreError("无效的主题") }
         guard ["system", "zh-CN", "zh-TW", "en", "ja"].contains(next.language) else { throw TaskStoreError("无效的语言") }
         guard ["icon", "count", "next", "next_date", "rotate"].contains(next.trayMode) else { throw TaskStoreError("无效的菜单栏显示方式") }

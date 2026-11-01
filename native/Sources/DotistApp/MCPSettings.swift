@@ -34,8 +34,8 @@ struct MCPSettings: View {
                     Text("·")
                     Text(model.text("已连接 {n} 个客户端").replacingOccurrences(of: "{n}", with: "\(service.connections)"))
                 }
-            }.font(.system(size: 12)).foregroundColor(DotistDesign.muted)
-            if let error = service.error { Text(error).foregroundColor(DotistDesign.danger).font(.system(size: 12)) }
+            }.font(DotistDesign.font(12, language: model.language)).foregroundColor(DotistDesign.muted)
+            if let error = service.error { Text(error).foregroundColor(DotistDesign.danger).font(DotistDesign.font(12, language: model.language)) }
             Text(model.text("客户端通过本机连接读取和修改任务。修改会即时显示，普通操作不会抢走键盘焦点。"))
                 .foregroundColor(DotistDesign.muted)
             Divider()
@@ -45,7 +45,7 @@ struct MCPSettings: View {
                 Text(model.text("其他客户端")).tag("json")
             }.pickerStyle(.segmented)
             Text(model.text(client == "json" ? "将配置加入客户端的 MCP 设置。" : "复制命令，在终端执行后重新连接客户端。"))
-                .font(.system(size: 12)).foregroundColor(DotistDesign.muted)
+                .font(DotistDesign.font(12, language: model.language)).foregroundColor(DotistDesign.muted)
             Text(configuration).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button(model.text(copied ? "已复制" : "复制")) {
@@ -55,7 +55,7 @@ struct MCPSettings: View {
             }.buttonStyle(DefaultButtonStyle())
                 .accessibilityLabel(Text(model.text(client == "json" ? "复制客户端配置" : client == "codex" ? "复制 Codex 添加命令" : "复制 Claude Code 添加命令")))
             Text(model.text("支持批量添加、搜索、日期与状态调整、分组管理和删除恢复。"))
-                .font(.system(size: 12)).foregroundColor(DotistDesign.muted)
+                .font(DotistDesign.font(12, language: model.language)).foregroundColor(DotistDesign.muted)
         }.onChange(of: client) { _ in copied = false }
     }
 }

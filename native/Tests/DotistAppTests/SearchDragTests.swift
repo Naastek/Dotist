@@ -27,7 +27,7 @@ final class SearchDragTests: XCTestCase {
         let container = NSView(frame: NSRect(origin: .zero, size: size))
         let content = MainWindow(model: model, state: state, showViews: {}, showSearch: {}, showSettings: {},
             showGroupPanel: { _ in }, collapse: motion.toggleBubble)
-        let hosting = DotistHostingView(rootView: FloatingPanelView(model: model, motion: motion, title: model.bubbleTitle,
+        let hosting = DotistHostingView(rootView: FloatingPanelView(model: model, motion: motion, colorState: state, title: model.bubbleTitle,
             remaining: model.remainingCount, total: model.topLevelTasks.count, groupName: nil, contextMenu: { _, _ in }, content: content))
         hosting.sizingOptions = []
         hosting.frame = container.bounds

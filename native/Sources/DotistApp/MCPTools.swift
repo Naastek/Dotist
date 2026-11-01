@@ -55,11 +55,11 @@ struct DotistMCPTools: Sendable {
             tool("set_start_date", "Set or clear a task start date. It cannot be after its due date.", ["id": id, "start_date": date], required: ["id"]),
             tool("set_task_parent", "Move a task and its subtree under any parent (maximum five levels, no cycles), or omit parent_id to outdent it by one level.", ["id": id, "parent_id": ["type": ["string", "null"]]], required: ["id"]),
             tool("move_task", "Move a task up or down among its siblings without changing dates, group or state.", ["id": id, "direction": ["type": "string", "enum": ["up", "down"]]], required: ["id", "direction"]),
-            tool("list_groups", "Read the ordered active task groups.", readOnly: true),
+            tool("list_groups", "Read the ordered active task groups, including the internal inbox id for ungrouped tasks.", readOnly: true),
             tool("add_group", "Create a uniquely named task group.", ["name": text], required: ["name"]),
             tool("update_group", "Rename an existing task group.", ["id": id, "name": text], required: ["id", "name"]),
-            tool("delete_group", "Soft-delete a group and its active tasks. The last group cannot be deleted.", ["id": id], required: ["id"], destructive: true),
-            tool("restore_group", "Restore a group and the tasks deleted with it. Conflicting active names are rejected.", ["id": id], required: ["id"]),
+            tool("delete_group", "Delete a group while keeping all its tasks and subtasks in the ungrouped inbox bucket. The internal inbox cannot be deleted.", ["id": id], required: ["id"], destructive: true),
+            tool("restore_group", "Restore a group. Tasks moved to inbox remain ungrouped; legacy tasks deleted with a group are restored. Conflicting active names are rejected.", ["id": id], required: ["id"]),
             tool("focus_task", "Explicitly bring Dotist forward and locate a task. Omit id to show the main window. Ordinary reads and writes never take keyboard focus.", ["id": id]),
         ]
     }

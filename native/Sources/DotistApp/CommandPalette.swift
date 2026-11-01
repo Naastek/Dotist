@@ -36,18 +36,18 @@ struct CommandPalette: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Text(model.text("搜索")).font(.system(size: 12, weight: .medium))
+                Text(model.text("搜索")).font(DotistDesign.font(12, weight: .medium, language: model.language))
                 Spacer()
-                Text("⌘K").font(.system(size: 11)).foregroundColor(DotistDesign.faint)
-                Button(action: close) { Image(systemName: "xmark").font(.system(size: 14)).frame(width: 24, height: 24).contentShape(Rectangle()) }
+                Text("⌘K").font(DotistDesign.font(11, language: model.language)).foregroundColor(DotistDesign.faint)
+                Button(action: close) { Image(systemName: "xmark").font(DotistDesign.font(14, language: model.language)).frame(width: 24, height: 24).contentShape(Rectangle()) }
                     .buttonStyle(.plain).foregroundColor(DotistDesign.muted).help(model.text("关闭")).accessibilityLabel(model.text("关闭"))
             }.foregroundColor(DotistDesign.muted).padding(.horizontal, 16).frame(height: 38)
                 .overlay(SearchDragArea().padding(.trailing, 44).accessibilityHidden(true))
                 .accessibilityIdentifier("search-drag-handle")
             HStack(spacing: 12) {
-                Image(systemName: "magnifyingglass").font(.system(size: 14)).foregroundColor(DotistDesign.faint)
+                Image(systemName: "magnifyingglass").font(DotistDesign.font(14, language: model.language)).foregroundColor(DotistDesign.faint)
                 TextField(model.text("搜索任务、分组或视图"), text: $query)
-                    .textFieldStyle(.plain).font(.system(size: 16)).focused($focused).onSubmit(openSelected)
+                    .textFieldStyle(.plain).font(DotistDesign.font(16, language: model.language)).focused($focused).onSubmit(openSelected)
             }.padding(.horizontal, 12).frame(height: 44)
                 .overlay(alignment: .bottom) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5) }
                 .padding(.horizontal, 12).padding(.bottom, 8)
@@ -73,7 +73,7 @@ struct CommandPalette: View {
             HStack {
                 Text(model.text("↑↓ 选择 · Return 打开 · Esc 关闭"))
                 Spacer()
-            }.font(.system(size: 11)).foregroundColor(DotistDesign.muted).padding(.horizontal, 18).frame(height: 30)
+            }.font(DotistDesign.font(11, language: model.language)).foregroundColor(DotistDesign.muted).padding(.horizontal, 18).frame(height: 30)
                 .overlay(SearchDragArea().accessibilityHidden(true))
         }
         .foregroundColor(DotistDesign.ink)
@@ -100,19 +100,19 @@ struct CommandPalette: View {
             VStack(alignment: .leading, spacing: 3) {
                 switch result {
                 case .task(let task):
-                    Text(task.title).font(.system(size: 13, weight: selectedID == result.id ? .medium : .regular)).lineLimit(1)
+                    Text(task.title).font(DotistDesign.font(13, weight: selectedID == result.id ? .medium : .regular, language: model.language)).lineLimit(1)
                     Text([model.group(for: task)?.name, task.dueDate.map(model.dueLabel)].compactMap { $0 }.joined(separator: " · "))
-                        .font(.system(size: 11)).foregroundColor(DotistDesign.muted)
+                        .font(DotistDesign.font(11, language: model.language)).foregroundColor(DotistDesign.muted)
                 case .group(let group):
-                    Text(group.name).font(.system(size: 13, weight: selectedID == result.id ? .medium : .regular))
-                    Text(model.text("分组")).font(.system(size: 11)).foregroundColor(DotistDesign.muted)
+                    Text(group.name).font(DotistDesign.font(13, weight: selectedID == result.id ? .medium : .regular, language: model.language))
+                    Text(model.text("分组")).font(DotistDesign.font(11, language: model.language)).foregroundColor(DotistDesign.muted)
                 case .views:
-                    Text(model.text("任务视图")).font(.system(size: 13, weight: selectedID == result.id ? .medium : .regular))
-                    Text(model.text("日历") + " · " + model.text("看板") + " · " + model.text("甘特")).font(.system(size: 11)).foregroundColor(DotistDesign.muted)
+                    Text(model.text("任务视图")).font(DotistDesign.font(13, weight: selectedID == result.id ? .medium : .regular, language: model.language))
+                    Text(model.text("日历") + " · " + model.text("看板") + " · " + model.text("甘特")).font(DotistDesign.font(11, language: model.language)).foregroundColor(DotistDesign.muted)
                 }
             }
             Spacer(minLength: 12)
-            Image(systemName: "return").font(.system(size: 12)).opacity(selectedID == result.id ? 1 : 0)
+            Image(systemName: "return").font(DotistDesign.font(12, language: model.language)).opacity(selectedID == result.id ? 1 : 0)
         }.foregroundColor(selectedID == result.id ? DotistDesign.ink : DotistDesign.muted)
     }
 
