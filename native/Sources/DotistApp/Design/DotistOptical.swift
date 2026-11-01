@@ -53,20 +53,40 @@ extension VerticalAlignment {
         guard right >= left else { return nil }
         return CGRect(x: left, y: top, width: right - left + 1, height: bottom - top + 1)
     }
-    private static func measure<V: View>(_ view: V, key: String, width: CGFloat = 64) -> Measurement {
+    private static func measure<V: View>(_ view: V, key: String, width: CGFloat = 64, scale: CGFloat = 4) -> Measurement {
         if let result = table[key] { return result }
         let renderer = ImageRenderer(content: view.foregroundStyle(.white).fixedSize().frame(width: width, height: 64))
-        renderer.scale = 4
-        let offset = renderer.cgImage.flatMap { inkBounds(of: $0) }.map { $0.midY / 4 - 32 } ?? 0
+        renderer.scale = scale
+        let offset = renderer.cgImage.flatMap { inkBounds(of: $0) }.map { $0.midY / scale - 32 } ?? 0
         let result = Measurement(inkOffset: offset)
         table[key] = result
         return result
     }
     static func text(_ font: NSFont, script: Script) -> Measurement { text(font, sample: script.sample) }
-    static func text(_ font: NSFont, sample: String) -> Measurement {
+    private static func textKey(_ font: NSFont, sample: String) -> String {
         let cascade = (font.fontDescriptor.object(forKey: .cascadeList) as? [NSFontDescriptor] ?? []).map { String(describing: $0.object(forKey: .family)) }.joined(separator: ",")
+        return "\(DotistDesign.fontCacheKey)|\(font.fontName)|\(font.pointSize)|\(String(describing: CTFontCopyVariation(font as CTFont)))|\(String(describing: font.fontDescriptor.object(forKey: .traits)))|\(cascade)|\(sample)"
+    }
+    static func text(_ font: NSFont, sample: String) -> Measurement {
         let width = min(320, max(8, ceil((sample as NSString).size(withAttributes: [.font: font]).width) + 4))
-        return measure(Text(sample).font(Font(font)), key: "text|\(font.fontName)|\(font.pointSize)|\(String(describing: font.fontDescriptor.object(forKey: .traits)))|\(cascade)|\(sample)", width: width)
+        return measure(Text(sample).font(Font(font)), key: "text|\(textKey(font, sample: sample))", width: width)
+    }
+    static func attributedBaseline(_ font: NSFont, sample: String) -> CGFloat {
+        // A 2x native borderless Menu baseline sweep measured bundled serif
+        // labels up to 0.75pt high, while the system serif was already centered.
+        // Its line box rounds differently: a shared adjustment regresses it.
+        // Keep the bridge calibration with the actual font, including fallbacks;
+        // ordinary SwiftUI text remeasures the resulting line box below.
+        let menuAdjustment: CGFloat = ["Newsreader", "Source Serif 4"].contains(font.familyName ?? "") ? -0.25 : 0
+        return text(font, sample: sample).inkOffset + menuAdjustment
+    }
+    static func baselineText(_ font: NSFont, sample: String, baseline: CGFloat) -> Measurement {
+        let width = min(320, max(8, ceil((sample as NSString).size(withAttributes: [.font: font]).width) + 4))
+        // SwiftUI can expand the line box for an attributed baseline. Measure
+        // that box again; native Menu consumes the attribute and ignores this
+        // residual view correction. Both rendering paths keep their ink axis.
+        return measure(Text(sample).font(Font(font)).baselineOffset(baseline),
+                       key: "baseline|2|\(baseline)|\(textKey(font, sample: sample))", width: width, scale: 2)
     }
     static func symbol(_ name: String, size: CGFloat, weight: Font.Weight = .regular) -> Measurement {
         measure(Image(systemName: name).font(.system(size: size, weight: weight)).imageScale(.medium),
@@ -76,6 +96,7 @@ extension VerticalAlignment {
 
 /// The visual correction stays inside the original layout and hit-test box.
 struct OpticalText: View {
+    @ObservedObject private var typography = DotistTypography.shared
     let title: String
     var size: CGFloat = 13
     var weight: NSFont.Weight = .regular
@@ -83,8 +104,16 @@ struct OpticalText: View {
     var language = "en"
     var body: some View {
         let font = DotistDesign.nativeFont(size, weight: weight, serif: serif, language: language)
+        let sample = title.isEmpty ? " " : title
+        let baseline = OpticalMetrics.attributedBaseline(font, sample: sample)
+        // Keep the residual on the 2x pixel grid; fractional pixel transforms
+        // otherwise move faint text's thresholded ink edge by another pixel.
+        let residual = (OpticalMetrics.baselineText(font, sample: sample, baseline: baseline).correction * 2).rounded(.down) / 2
         Text(title).font(Font(font))
-            .offset(y: OpticalMetrics.text(font, sample: title.isEmpty ? " " : title).correction)
+            // Native Menu extracts an attributed title and discards view offsets.
+            // A baseline attribute survives both that bridge and SwiftUI rendering.
+            .baselineOffset(baseline)
+            .offset(y: residual)
             .alignmentGuide(.opticalCenter) { $0[VerticalAlignment.center] }
     }
 }
@@ -184,6 +213,7 @@ struct OpticalInput: NSViewRepresentable {
 }
 
 struct SearchRow: View {
+    @ObservedObject private var typography = DotistTypography.shared
     @Binding var text: String
     let placeholder: String
     let language: String

@@ -51,7 +51,6 @@ final class PanelMotion: ObservableObject {
     private let model: AppModel
     private let title: () -> String
     private let bubbleContent: (() -> BubbleContent)?
-    private let shadow: PanelShadowController
     private let rememberFrame: (NSRect) -> Void
     private var lastActive = Date()
     private var hoverClose: DispatchWorkItem?
@@ -70,8 +69,7 @@ final class PanelMotion: ObservableObject {
         self.title = title
         self.bubbleContent = bubbleContent
         self.rememberFrame = rememberFrame
-        panel.hasShadow = false
-        shadow = PanelShadowController(panel: panel)
+        panel.hasShadow = true
         closeObservation = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stop() }
         }
@@ -79,7 +77,6 @@ final class PanelMotion: ObservableObject {
     isolated deinit {
         hoverClose?.cancel()
         if let closeObservation { NotificationCenter.default.removeObserver(closeObservation) }
-        shadow.stop()
     }
     func stop() {
         guard !stopped else { return }
@@ -91,12 +88,10 @@ final class PanelMotion: ObservableObject {
         animationInProgress = false
         if let closeObservation { NotificationCenter.default.removeObserver(closeObservation) }
         closeObservation = nil
-        shadow.stop()
     }
 
     func refreshShadow() {
         guard !stopped else { return }
-        shadow.update(compact: bubble, transitioning: animationInProgress, onRight: bubbleOnRight)
         panel.invalidateShadow()
         // SwiftUI may not have committed its glass/tint change until the next turn.
         DispatchQueue.main.async { [weak self] in
@@ -104,8 +99,6 @@ final class PanelMotion: ObservableObject {
             self.panel.invalidateShadow()
         }
     }
-
-    func setShadowReveal(_ reveal: CGFloat) { shadow.state.reveal = reveal }
 
     func toggleBubble() {
         guard let area = (panel.screen ?? NSScreen.main)?.visibleFrame else { return }
@@ -309,202 +302,130 @@ final class PanelMotion: ObservableObject {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : (faded ? Double(prefs.idleFadeSecs) : 0.12)
             panel.animator().alphaValue = target
-            shadow.fade(to: target)
         }
     }
 
 }
 
-/// A noninteractive child behind the real panel gives the shadow transparent
-/// breathing room without changing any panel frames, drag coordinates or hit areas.
-@MainActor
-private final class PanelShadowController {
-    static let margin = PanelShadowRenderer.margin
-    let state = PanelShadowState()
-    private weak var panel: NSWindow?
-    private let window: PanelShadowWindow
-    private var observations: [NSObjectProtocol] = []
-    private var stopped = false
-    private var synchronizing = false
-    private var frameSync: DispatchWorkItem?
+/// Refresh AppKit's alpha-derived shadow after SwiftUI commits and throughout
+/// its longest surface/frame animation. This view draws no pixels and owns no window.
+struct ShadowTrackedContent<Content: View>: View {
+    @ObservedObject var model: AppModel
+    let content: Content
+    var body: some View {
+        content.background(WindowShadowInvalidation(settings: model.settings))
+    }
+}
 
-    init(panel: NSWindow) {
-        self.panel = panel
-        window = PanelShadowWindow(contentRect: panel.frame.insetBy(dx: -Self.margin, dy: -Self.margin),
-            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        window.hasShadow = false
-        window.ignoresMouseEvents = true
-        window.isMovable = false
-        window.isExcludedFromWindowsMenu = true
-        window.hidesOnDeactivate = false
-        window.setAccessibilityElement(false)
-        window.animationBehavior = .none
-        window.level = panel.level
-        window.collectionBehavior = Self.collectionBehavior(for: panel)
-        let host = NSHostingView(rootView: PanelShadowView(state: state))
-        host.sizingOptions = []
-        host.frame = NSRect(origin: .zero, size: window.frame.size)
-        host.autoresizingMask = [.width, .height]
-        window.contentView = host
-        (panel as? DotistPanel)?.synchronizePanelShadow = { [weak self] in self?.synchronizeFrame() }
+struct WindowShadowInvalidation: NSViewRepresentable {
+    var settings: DotistSettings? = nil
+    func makeNSView(context: Context) -> ShadowInvalidationView { ShadowInvalidationView() }
+    func updateNSView(_ view: ShadowInvalidationView, context: Context) { view.refresh() }
+    static func dismantleNSView(_ view: ShadowInvalidationView, coordinator: ()) { view.stop() }
+}
+
+final class ShadowInvalidationView: NSView {
+    private var timer: Timer?
+    private var refreshDisplayLink: CADisplayLink?
+    private var deadline = Date.distantPast
+    private var closed = false
+    private var observations: [NSObjectProtocol] = []
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        stop()
+        closed = false
+        guard let window else { return }
         for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
-            observations.append(NotificationCenter.default.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.scheduleFrameSync() }
+            observations.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refresh() }
             })
         }
+        observations.append(NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.closed = true; self?.stopFrames() }
+        })
+        observations.append(NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                // Settings/search windows are retained and may reopen after close.
+                self?.closed = false
+                self?.refresh()
+            }
+        })
+        refresh()
     }
 
-    isolated deinit { stop() }
-
-    private func scheduleFrameSync() {
-        guard !stopped, frameSync == nil else { return }
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.frameSync = nil
-            self.synchronizeFrame()
+    func refresh() {
+        guard !closed, let window else { return }
+        window.invalidateShadow()
+        deadline = Date().addingTimeInterval(0.45)
+        guard timer == nil, refreshDisplayLink == nil else { return }
+        if window.isVisible, window.screen != nil {
+            // Follow the display cadence (including ProMotion), rather than
+            // sampling a 120 Hz glass animation with a fixed 60 Hz timer.
+            let link = displayLink(target: ShadowRefreshTarget(view: self), selector: #selector(ShadowRefreshTarget.tick(_:)))
+            refreshDisplayLink = link
+            link.add(to: .main, forMode: .common)
+            return
         }
-        frameSync = work
-        DispatchQueue.main.async(execute: work)
-    }
-
-    func synchronizeFrame() {
-        guard !stopped, !synchronizing, let panel else { return }
-        synchronizing = true
-        defer { synchronizing = false }
-        let frame = panel.frame.insetBy(dx: -Self.margin, dy: -Self.margin)
-        if window.frame != frame { window.setFrame(frame, display: false) }
-        window.contentView?.frame = NSRect(origin: .zero, size: frame.size)
-    }
-
-    private static func collectionBehavior(for panel: NSWindow) -> NSWindow.CollectionBehavior {
-        var behavior = panel.collectionBehavior
-        behavior.subtract([.managed, .stationary, .participatesInCycle])
-        behavior.formUnion([.transient, .ignoresCycle])
-        return behavior
-    }
-
-    func update(compact: Bool, transitioning: Bool, onRight: Bool) {
-        guard !stopped else { return }
-        if let panel, window.parent == nil { panel.addChildWindow(window, ordered: .below) }
-        if let panel, panel.isVisible, let sibling = panel.childWindows?.first(where: { $0 !== window }) {
-            window.order(.below, relativeTo: sibling.windowNumber)
+        // Offscreen test hosts have no display ticks; still refresh their commits.
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self else { timer.invalidate(); return }
+                self.refreshFrame()
+            }
         }
-        if state.compact != compact { state.compact = compact }
-        if state.transitioning != transitioning { state.transitioning = transitioning }
-        if state.onRight != onRight { state.onRight = onRight }
-        if let panel {
-            window.level = panel.level
-            window.collectionBehavior = Self.collectionBehavior(for: panel)
-        }
-        synchronizeFrame()
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
-    func fade(to alpha: CGFloat) { window.animator().alphaValue = alpha }
+    fileprivate func refreshFrame() {
+        window?.invalidateShadow()
+        if window == nil || Date() >= deadline {
+            timer?.invalidate(); timer = nil
+            refreshDisplayLink?.invalidate(); refreshDisplayLink = nil
+        }
+    }
+
+    private func stopFrames() {
+        timer?.invalidate(); timer = nil
+        refreshDisplayLink?.invalidate(); refreshDisplayLink = nil
+    }
 
     func stop() {
-        guard !stopped else { return }
-        stopped = true
-        frameSync?.cancel()
-        frameSync = nil
+        stopFrames()
         observations.forEach { NotificationCenter.default.removeObserver($0) }
         observations.removeAll()
-        (panel as? DotistPanel)?.synchronizePanelShadow = nil
-        panel?.removeChildWindow(window)
-        window.orderOut(nil)
-        window.close()
+    }
+    isolated deinit { stop() }
+}
+
+/// CADisplayLink retains its target. A weak forwarding target lets removing a
+/// hosting view release its refresh driver without waiting for a final frame.
+private final class ShadowRefreshTarget: NSObject {
+    weak var view: ShadowInvalidationView?
+    init(view: ShadowInvalidationView) { self.view = view }
+    @objc func tick(_ link: CADisplayLink) {
+        guard let view else { link.invalidate(); return }
+        view.refreshFrame()
     }
 }
 
-private final class PanelShadowWindow: NSPanel {
-    override var canBecomeKey: Bool { false }
-    override var canBecomeMain: Bool { false }
-}
-
-@MainActor
-final class PanelShadowState: ObservableObject {
-    @Published var compact = false
-    @Published var transitioning = false
-    @Published var onRight = true
-    @Published var reveal: CGFloat = 0
-}
-
-struct PanelShadowView: View {
-    @ObservedObject var state: PanelShadowState
-    var body: some View {
-        PanelShadowImage(compact: state.compact, transitioning: state.transitioning,
-                         onRight: state.onRight, reveal: state.reveal)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
-
-/// Animate the silhouette with the glass reveal, but punch out its interior in
-/// the bitmap itself. A destinationOut SwiftUI overlay is not a reliable hole
-/// when NSHostingView splits the drawing into window-backed compositing layers.
-private struct PanelShadowImage: View, Animatable {
+/// The content and material share the same animated silhouette, including the
+/// unused transparent area of the already-resized hover window.
+struct FloatingPanelShape: Shape {
     let compact: Bool
     let transitioning: Bool
     let onRight: Bool
     var reveal: CGFloat
-    @Environment(\.displayScale) private var scale
-
     var animatableData: CGFloat {
         get { reveal }
         set { reveal = newValue }
     }
-
-    var body: some View {
-        Canvas { context, size in
-            if let image = PanelShadowRenderer.image(size: size, scale: scale, compact: compact,
-                                                    transitioning: transitioning, onRight: onRight, reveal: reveal) {
-                context.draw(Image(decorative: image, scale: scale), in: CGRect(origin: .zero, size: size))
-            }
-        }
-    }
-}
-
-enum PanelShadowRenderer {
-    static let margin: CGFloat = 48
-
-    static func surfaceRect(size: CGSize, compact: Bool, transitioning: Bool, onRight: Bool, reveal: CGFloat) -> CGRect {
-        let width = max(0, size.width - margin * 2)
-        let height = max(0, size.height - margin * 2)
-        let surfaceWidth = compact && !transitioning ? 48 + (width - 48) * min(1, max(0, reveal)) : width
-        return CGRect(x: margin + (onRight ? width - surfaceWidth : 0), y: margin, width: surfaceWidth, height: height)
-    }
-
-    static func surfacePath(size: CGSize, compact: Bool, transitioning: Bool, onRight: Bool, reveal: CGFloat) -> CGPath {
-        RoundedRectangle(cornerRadius: compact ? 24 : DotistDesign.windowCornerRadius, style: .continuous)
-            .path(in: surfaceRect(size: size, compact: compact, transitioning: transitioning, onRight: onRight, reveal: reveal)).cgPath
-    }
-
-    static func image(size: CGSize, scale: CGFloat, compact: Bool, transitioning: Bool,
-                      onRight: Bool, reveal: CGFloat) -> CGImage? {
-        guard size.width > 0, size.height > 0, scale > 0,
-              let context = CGContext(data: nil, width: Int(ceil(size.width * scale)), height: Int(ceil(size.height * scale)),
-                                      bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        context.scaleBy(x: scale, y: scale)
-        let path = surfacePath(size: size, compact: compact, transitioning: transitioning, onRight: onRight, reveal: reveal)
-        for (opacity, blur, offset) in [(0.22, 18.0, 8.0), (0.12, 3.0, 1.0)] {
-            context.saveGState()
-            context.setShadow(offset: CGSize(width: 0, height: -offset), blur: blur,
-                              color: CGColor(gray: 0, alpha: opacity))
-            context.setFillColor(CGColor(gray: 0, alpha: 1))
-            context.addPath(path)
-            context.fillPath()
-            context.restoreGState()
-        }
-        // Clear after BOTH shadows: no source fill, stroke, or inward blur is
-        // allowed in the glass surface, even when windows briefly repaint apart.
-        context.setBlendMode(.clear)
-        context.setShouldAntialias(false)
-        context.addPath(path)
-        context.fillPath()
-        return context.makeImage()
+    func path(in rect: CGRect) -> Path {
+        let width = compact && !transitioning ? 48 + (rect.width - 48) * min(1, max(0, reveal)) : rect.width
+        let surface = CGRect(x: rect.minX + (onRight ? rect.width - width : 0), y: rect.minY, width: width, height: rect.height)
+        return RoundedRectangle(cornerRadius: compact ? 24 : DotistDesign.windowCornerRadius, style: .continuous).path(in: surface)
     }
 }
 
@@ -546,8 +467,12 @@ struct FloatingPanelView<Content: View>: View {
                     .accessibilityHidden(!motion.bubble)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topTrailing)
-            .background(FloatingSurface(model: model, motion: motion, size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID)))
-            .clipped()
+            .background(FloatingSurface(opacity: model.settings.opacity, frost: model.settings.frost,
+                compact: motion.bubble, transitioning: motion.animationInProgress, onRight: motion.bubbleOnRight,
+                size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID)))
+            .clipShape(FloatingPanelShape(compact: motion.bubble, transitioning: motion.animationInProgress,
+                onRight: motion.bubbleOnRight, reveal: hoverReveal))
+            .background(WindowShadowInvalidation())
         }
         .onAppear { motion.refreshShadow() }
         .onChange(of: model.settings) { motion.refreshShadow() }
@@ -562,12 +487,10 @@ struct FloatingPanelView<Content: View>: View {
             // same transaction, then shrink the window after both have settled.
             if reduceMotion {
                 hoverReveal = active ? 1 : 0
-                motion.setShadowReveal(hoverReveal)
                 motion.finishHover(active)
             } else {
                 withAnimation(.easeInOut(duration: 0.26), completionCriteria: .removed) {
                     hoverReveal = active ? 1 : 0
-                    motion.setShadowReveal(hoverReveal)
                 } completion: {
                     motion.finishHover(active)
                 }
@@ -577,17 +500,25 @@ struct FloatingPanelView<Content: View>: View {
     }
 }
 
-private struct FloatingSurface: View {
-    @ObservedObject var model: AppModel
-    @ObservedObject var motion: PanelMotion
+struct FloatingSurface: View, Animatable {
+    let opacity: UInt8
+    let frost: UInt8
+    let compact: Bool
+    let transitioning: Bool
+    let onRight: Bool
     let size: CGSize
-    let reveal: CGFloat
+    var reveal: CGFloat
     let color: DotistGroupColor
+    var animatableData: CGFloat {
+        get { reveal }
+        set { reveal = newValue }
+    }
 
     var body: some View {
-        FloatingPanelMaterial(opacity: model.settings.opacity, frost: model.settings.frost, compact: motion.bubble, color: color)
-            .frame(width: motion.bubble && !motion.animationInProgress ? 48 + (size.width - 48) * reveal : size.width, height: size.height)
-            .frame(width: size.width, height: size.height, alignment: motion.bubbleOnRight ? .topTrailing : .topLeading)
+        FloatingPanelMaterial(opacity: opacity, frost: frost, compact: compact, color: color)
+            .frame(width: compact && !transitioning ? 48 + (size.width - 48) * min(1, max(0, reveal)) : size.width, height: size.height)
+            .frame(width: size.width, height: size.height, alignment: onRight ? .topTrailing : .topLeading)
+            .clipShape(FloatingPanelShape(compact: compact, transitioning: transitioning, onRight: onRight, reveal: reveal))
     }
 }
 

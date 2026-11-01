@@ -56,12 +56,12 @@ final class PanelFeedbackRevisionTests: XCTestCase {
 
     func testSelectedFilterFontAndReservedSlotsAreStableInEveryLanguage() async throws {
         _ = NSApplication.shared
-        XCTAssertEqual(TaskDateFilterMetrics.size(selected: true), 15)
-        XCTAssertEqual(TaskDateFilterMetrics.size(selected: false), 13)
+        XCTAssertEqual(TaskDateFilterMetrics.size(selected: true), 17)
+        XCTAssertEqual(TaskDateFilterMetrics.size(selected: false), 14)
         XCTAssertEqual(TaskDateFilterMetrics.weight(selected: true), .medium)
         XCTAssertEqual(TaskDateFilterMetrics.weight(selected: false), .regular)
         for (language, title) in [("zh-CN", "已逾期"), ("en", "Tomorrow"), ("ja", "すべて"), ("zh-Hant", "今天")] {
-            let expected = ceil((title as NSString).size(withAttributes: [.font: DotistDesign.nativeFont(15, weight: .medium, language: language)]).width)
+            let expected = ceil((title as NSString).size(withAttributes: [.font: DotistDesign.nativeFont(17, weight: .medium, language: language)]).width)
             XCTAssertEqual(TaskDateFilterMetrics.slotWidth(title: title, language: language), expected)
             var widths: [CGFloat] = []
             for selected in [false, true] {
@@ -192,8 +192,8 @@ final class PanelFeedbackRevisionTests: XCTestCase {
     func testSelectedFilterAndGroupDisclosureKeepOpticalCenterWithinHalfPoint() throws {
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         DotistDesign.registerFonts(in: repo.appendingPathComponent(".cache/native-migration/fonts"))
-        func render<V: View>(_ view: V, width: CGFloat) throws -> NSBitmapImageRep {
-            let renderer = ImageRenderer(content: view.frame(width: width, height: 30).environment(\.colorScheme, .light).background(Color.white))
+        func render<V: View>(_ view: V, width: CGFloat, height: CGFloat = 30) throws -> NSBitmapImageRep {
+            let renderer = ImageRenderer(content: view.frame(width: width, height: height).environment(\.colorScheme, .light).background(Color.white))
             renderer.scale = 2
             return NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
         }
@@ -212,8 +212,8 @@ final class PanelFeedbackRevisionTests: XCTestCase {
         }
         for (language, title) in [("zh-CN", "工作"), ("en", "Work"), ("ja", "仕事"), ("zh-Hant", "工作")] {
             for selected in [false, true] {
-                let rep = try render(DraggableFilterButton(title: title, selected: selected, language: language, choose: {}), width: 100)
-                XCTAssertEqual(try center(rep, xRange: 0..<100), 15, accuracy: 0.5)
+                let rep = try render(DraggableFilterButton(title: title, selected: selected, language: language, choose: {}), width: 100, height: 34)
+                XCTAssertEqual(try center(rep, xRange: 0..<100), 17, accuracy: 0.5)
             }
             let textWidth = ceil((title as NSString).size(withAttributes: [.font: DotistDesign.nativeFont(15, weight: .semibold, serif: true, language: language)]).width)
             for collapsed in [true, false] {

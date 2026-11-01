@@ -12,12 +12,19 @@ mkdir -p "$cache_dir/fonts" "$scratch_dir" "$project_dir/.cache/native-consolida
 export CLANG_MODULE_CACHE_PATH="$project_dir/.cache/native-consolidation/clang"
 export SWIFTPM_MODULECACHE_OVERRIDE="$project_dir/.cache/native-consolidation/swift-modules"
 font_version=6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec
-while read -r name checksum path; do
+while read -r name checksum path license_checksum license_url; do
   file="$cache_dir/fonts/$name.ttf"
-  if [[ ! -f "$file" ]]; then curl --fail --location --silent --show-error "https://raw.githubusercontent.com/google/fonts/$font_version/ofl/$path" --output "$file"; fi
+  if [[ "$path" == https://* ]]; then
+    font_url="$path"
+  else
+    font_url="https://raw.githubusercontent.com/google/fonts/$font_version/ofl/$path"
+    license_url="https://raw.githubusercontent.com/google/fonts/$font_version/ofl/${path%%/*}/OFL.txt"
+  fi
+  if [[ ! -f "$file" ]]; then curl --fail --location --silent --show-error "$font_url" --output "$file"; fi
   printf '%s  %s\n' "$checksum" "$file" | shasum -a 256 -c - >/dev/null
   license="$cache_dir/fonts/$name-OFL.txt"
-  if [[ ! -f "$license" ]]; then curl --fail --location --silent --show-error "https://raw.githubusercontent.com/google/fonts/$font_version/ofl/${path%%/*}/OFL.txt" --output "$license"; fi
+  if [[ ! -f "$license" ]]; then curl --fail --location --silent --show-error "$license_url" --output "$license"; fi
+  if [[ -n "$license_checksum" ]]; then printf '%s  %s\n' "$license_checksum" "$license" | shasum -a 256 -c - >/dev/null; fi
 done < native/scripts/fonts.tsv
 sparkle_framework="$(bash native/scripts/prepare-sparkle.sh)"
 export DOTIST_SPARKLE_XCFRAMEWORK='../.cache/native-migration/deps/Sparkle-2.9.6/Sparkle.xcframework'
@@ -32,8 +39,10 @@ cp "$product/DotistNative" "$app/Contents/MacOS/dotist"
 cp native/Sources/DotistApp/Resources/*.json "$app/Contents/Resources/"
 cp native/Assets/menubar.png "$app/Contents/Resources/menubar.png"
 cp native/Assets/icon.icns "$app/Contents/Resources/icon.icns"
-for font in "$cache_dir"/fonts/*.ttf; do cp "$font" "$app/Contents/Resources/Fonts/"; done
-for license in "$cache_dir"/fonts/*-OFL.txt; do cp "$license" "$app/Contents/Resources/Licenses/"; done
+while read -r name checksum path license_checksum license_url; do
+  cp "$cache_dir/fonts/$name.ttf" "$app/Contents/Resources/Fonts/"
+  cp "$cache_dir/fonts/$name-OFL.txt" "$app/Contents/Resources/Licenses/"
+done < native/scripts/fonts.tsv
 for dependency in "$scratch_dir"/checkouts/*; do
   for license in "$dependency"/LICENSE "$dependency"/LICENSE.txt "$dependency"/LICENSE.md "$dependency"/NOTICE "$dependency"/NOTICE.txt; do
     if [[ -f "$license" ]]; then cp "$license" "$app/Contents/Resources/Licenses/$(basename "$dependency")-$(basename "$license")"; fi

@@ -40,7 +40,7 @@ struct QuickAddWindow: View {
                 OpticalText(title: model.error.map { model.text($0) } ?? model.text("回车添加 · Esc 关闭 · Tab 换分组"), size: 12, language: model.language).foregroundColor(model.error == nil ? DotistDesign.faint : DotistDesign.danger).lineLimit(1)
             }.frame(height: 24)
         }.padding(.horizontal, 22).padding(.vertical, 16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-            .foregroundColor(DotistDesign.ink).background(WindowMaterial(opacity: model.settings.opacity, frost: model.settings.frost)).cornerRadius(18).modifier(DotistTheme(theme: model.settings.theme))
+            .foregroundColor(DotistDesign.ink).background(WindowMaterial(opacity: model.settings.opacity, frost: model.settings.frost)).cornerRadius(18).background(WindowShadowInvalidation()).modifier(DotistTheme(theme: model.settings.theme))
     }
     private func cycle(_ step: Int) {
         let index = groupIDs.firstIndex(of: category) ?? 0

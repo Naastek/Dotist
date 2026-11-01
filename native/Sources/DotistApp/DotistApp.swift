@@ -28,23 +28,13 @@ struct DotistApplication {
 final class DotistPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
-
-    // NSWindow moves child windows during super's frame update. Synchronizing in
-    // didMove alone can therefore apply the parent's displacement twice.
-    var synchronizePanelShadow: (() -> Void)?
-    // animator() is an Objective-C forwarding proxy, not a DotistPanel. Swift
-    // direct dispatch would read our stored closure from the proxy's memory.
-    dynamic override func setFrame(_ frameRect: NSRect, display flag: Bool) {
-        super.setFrame(frameRect, display: flag)
-        synchronizePanelShadow?()
-    }
-    dynamic override func setFrameOrigin(_ point: NSPoint) {
-        super.setFrameOrigin(point)
-        synchronizePanelShadow?()
-    }
 }
 
 final class QuickPanel: NSPanel {
+    override init(contentRect: NSRect, styleMask: NSWindow.StyleMask, backing: NSWindow.BackingStoreType, defer flag: Bool) {
+        super.init(contentRect: contentRect, styleMask: styleMask, backing: backing, defer: flag)
+        hasShadow = true
+    }
     override var canBecomeKey: Bool { true }
     override func cancelOperation(_ sender: Any?) { orderOut(sender) }
 }
@@ -109,7 +99,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         panel.minSize = NSSize(width: 320, height: 440)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = false // PanelMotion supplies the exterior-only shadow.
+        panel.hasShadow = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
         panel.level = model.settings.alwaysOnTop ? .floating : .normal
         panel.isMovableByWindowBackground = true
@@ -439,6 +429,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             window.titleVisibility = .hidden
             window.isOpaque = false
             window.backgroundColor = .clear
+            window.hasShadow = true
             window.isReleasedWhenClosed = false
             window.appearance = panel.appearance
             window.delegate = self
@@ -478,6 +469,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             window.titleVisibility = .hidden
             window.isOpaque = false
             window.backgroundColor = .clear
+            window.hasShadow = true
             window.level = .floating
             window.isReleasedWhenClosed = false
             window.appearance = panel.appearance
@@ -492,12 +484,13 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
 
     private func installContent<Content: View>(_ content: Content, in window: NSWindow) {
         let container = NSView(frame: window.contentView?.bounds ?? .zero)
-        let hosting = DotistHostingView(rootView: content)
+        let hosting = DotistHostingView(rootView: ShadowTrackedContent(model: model, content: content))
         hosting.sizingOptions = []
         hosting.frame = container.bounds
         hosting.autoresizingMask = [.width, .height]
         container.addSubview(hosting)
         window.contentView = container
+        window.invalidateShadow()
     }
 
     func resetWindowSize() {
@@ -528,6 +521,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         if let window = quickWindow {
             model.error = nil
             window.contentView = DotistHostingView(rootView: QuickAddWindow(model: model) { [weak window] in window?.orderOut(nil) })
+            window.invalidateShadow()
         }
         if let area = (panel.screen ?? NSScreen.main)?.visibleFrame {
             quickWindow?.setFrameOrigin(NSPoint(x: area.midX - 280, y: area.maxY - area.height * 0.2 - 112))

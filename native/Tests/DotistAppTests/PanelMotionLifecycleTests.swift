@@ -22,11 +22,7 @@ final class PanelMotionLifecycleTests: XCTestCase {
 
     func testAnimatorProxyDeliversFrameChangesToTheRealPanel() async throws {
         let panel = panel()
-        defer { panel.synchronizePanelShadow = nil; panel.close() }
-        var frames: [NSRect] = []
-        panel.synchronizePanelShadow = { [weak panel] in
-            if let panel { frames.append(panel.frame) }
-        }
+        defer { panel.close() }
         let target = NSRect(x: 150, y: 180, width: 48, height: 48)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0
@@ -34,43 +30,40 @@ final class PanelMotionLifecycleTests: XCTestCase {
         } completionHandler: {}
         try await Task.sleep(for: .milliseconds(150))
         XCTAssertEqual(panel.frame, target)
-        XCTAssertTrue(frames.contains(target), "The hook must execute on the real panel, never read Swift fields from an animator proxy")
+        XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
         let origin = NSPoint(x: 210, y: 240)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0
             panel.animator().setFrameOrigin(origin)
         } completionHandler: {}
         XCTAssertEqual(panel.frame.origin, origin)
-        XCTAssertEqual(frames.last?.origin, origin)
+        XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
     }
 
-    func testClosingPanelDisconnectsItsShadowWithoutAnExplicitStop() throws {
+    func testClosingPanelStopsMotionWithoutCreatingShadowWindows() throws {
         let model = try model()
         let panel = panel()
         let motion = PanelMotion(model: model, panel: panel, size: panel.frame.size, title: { "" })
         motion.refreshShadow()
-        let shadow = try XCTUnwrap(panel.childWindows?.first)
+        XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
         panel.close()
-        XCTAssertNil(panel.synchronizePanelShadow)
-        XCTAssertNil(shadow.parent)
         XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
         motion.refreshShadow()
-        XCTAssertTrue(panel.childWindows?.isEmpty ?? true, "A closed panel must not reattach the shadow")
+        XCTAssertTrue(panel.childWindows?.isEmpty ?? true, "A closed panel must not create a shadow window")
         motion.stop()
     }
 
-    func testReleasingMotionDisconnectsTheShadowWhileThePanelSurvives() throws {
+    func testReleasingMotionLeavesNoShadowWindowsWhileThePanelSurvives() throws {
         let model = try model()
         let panel = panel()
         defer { panel.close() }
         var motion: PanelMotion? = PanelMotion(model: model, panel: panel, size: panel.frame.size, title: { "" })
         let released = WeakBox(try XCTUnwrap(motion))
         motion?.refreshShadow()
-        let shadow = try XCTUnwrap(panel.childWindows?.first)
+        XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
         motion = nil
         XCTAssertNil(released.value)
-        XCTAssertNil(panel.synchronizePanelShadow)
-        XCTAssertNil(shadow.parent)
+        XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
     }
 
     func testStaleHoverRevealCompletionCannotConsumeTheRetraction() throws {
@@ -134,17 +127,16 @@ final class PanelMotionLifecycleTests: XCTestCase {
                         } completionHandler: {}
                         pendingReleases.append((WeakBox(currentPanel), WeakBox(motion)))
                         currentPanel.close()
-                        XCTAssertNil(currentPanel.synchronizePanelShadow)
                         XCTAssertTrue(currentPanel.childWindows?.isEmpty ?? true)
                     }
                     motion = nil
                     currentPanel = nil
                 case 6:
-                    // No explicit stop: releasing the owner must detach its shadow.
+                    // No explicit stop: delayed work must not retain its owner.
                     let survivor = currentPanel
                     let released = motion.map(WeakBox.init)
                     motion = nil
-                    if released?.value == nil { XCTAssertNil(survivor?.synchronizePanelShadow) }
+                    if released?.value == nil { XCTAssertTrue(survivor?.childWindows?.isEmpty ?? true) }
                     survivor?.close()
                     currentPanel = nil
                 default:

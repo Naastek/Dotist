@@ -3,9 +3,24 @@ import CoreText
 import DotistCore
 import SwiftUI
 
+/// Optical labels also observe this object when their parent inputs are unchanged.
+final class DotistTypography: ObservableObject {
+    static let shared = DotistTypography()
+    @Published var preferences = DotistFontPreferences()
+}
+
 enum DotistDesign {
     static let windowCornerRadius: CGFloat = 20
     private static let fonts = NSCache<NSString, NSFont>()
+    static var fontPreferences: DotistFontPreferences {
+        get { DotistTypography.shared.preferences }
+        set {
+            guard newValue != fontPreferences else { return }
+            fonts.removeAllObjects()
+            DotistTypography.shared.preferences = newValue
+        }
+    }
+    static var fontCacheKey: String { fontPreferences.cacheKey }
     static let ink = dynamic(0x1c1c1f, 0xeeeef0)
     static let muted = dynamic(0x5b5b61, 0xc0c0c6, highLight: 0x414147, highDark: 0xd8d8dd)
     static let faint = dynamic(0x76767c, 0x8e8e96, highLight: 0x505056, highDark: 0xc8c8cf)
@@ -45,7 +60,7 @@ enum DotistDesign {
     /// Registers fonts for this process only; the user's installed fonts are never changed.
     static func registerFonts(in directory: URL? = nil) {
         guard let directory = directory ?? Bundle.main.resourceURL?.appendingPathComponent("Fonts", isDirectory: true) else { return }
-        for name in ["SourceSans3", "SourceSerif4", "NotoSansSC", "NotoSansTC", "NotoSansJP", "NotoSerifSC", "NotoSerifTC", "NotoSerifJP"] {
+        for name in ["Newsreader", "AtkinsonHyperlegibleNext", "ChironSungHK", "SourceSans3", "SourceSerif4", "NotoSansSC", "NotoSansTC", "NotoSansJP", "NotoSerifSC", "NotoSerifTC", "NotoSerifJP"] {
             let url = directory.appendingPathComponent("\(name).ttf")
             if FileManager.default.fileExists(atPath: url.path) { CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil) }
         }
@@ -64,19 +79,69 @@ enum DotistDesign {
     static func font(_ size: CGFloat, weight: NSFont.Weight = .regular, serif: Bool = false, language: String) -> Font {
         Font(nativeFont(size, weight: weight, serif: serif, language: language))
     }
-    static func nativeFont(_ size: CGFloat, weight: NSFont.Weight = .regular, serif: Bool = false, language: String) -> NSFont {
-        let source = serif ? "Source Serif 4" : "Source Sans 3"
-        let region = language.hasPrefix("ja") ? "JP" : ["zh-TW", "zh-Hant", "zh-HK"].contains(where: { language.hasPrefix($0) }) ? "TC" : "SC"
-        let key = "\(size)|\(weight.rawValue)|\(serif)|\(region)" as NSString
+    static func nativeFont(_ size: CGFloat, weight: NSFont.Weight = .regular, serif: Bool = false, language: String, preferences: DotistFontPreferences? = nil) -> NSFont {
+        let preferences = preferences ?? fontPreferences
+        let region = language.hasPrefix("ja") ? "JP" : ["zh-HK", "zh-Hant-HK"].contains(where: { language.hasPrefix($0) }) ? "HK" : ["zh-TW", "zh-Hant"].contains(where: { language.hasPrefix($0) }) ? "TC" : "SC"
+        let key = "\(preferences.cacheKey)|\(size)|\(weight.rawValue)|\(serif)|\(region)" as NSString
         if let cached = fonts.object(forKey: key) { return cached }
-        let fallback = "Noto \(serif ? "Serif" : "Sans") \(region)"
-        let cascade = NSFontDescriptor(fontAttributes: [.family: fallback, .traits: [NSFontDescriptor.TraitKey.weight: weight.rawValue]])
-        let descriptor = NSFontDescriptor(fontAttributes: [.family: source, .traits: [NSFontDescriptor.TraitKey.weight: weight.rawValue], .cascadeList: [cascade]])
-        // CoreText font matching is expensive during live resize. The descriptor
-        // is immutable, so reuse the exact registered font for each design token.
-        let font = NSFont(descriptor: descriptor, size: size) ?? NSFont.systemFont(ofSize: size, weight: weight)
+        let latin = serif ? preferences.serifLatin : preferences.sansLatin
+        let source = serif ? "Source Serif 4" : "Source Sans 3"
+        let primary = serif ? "Newsreader" : "Atkinson Hyperlegible Next"
+        let system = systemFont(size, weight: weight, serif: serif)
+        let candidates = latin == "system" ? [] : latin == (serif ? "source-serif-4" : "source-sans-3") ? [source, primary] : [primary, source]
+        let base = candidates.lazy.compactMap { familyFont($0, size: size, weight: weight) }.first ?? system
+        let cascade = cjkFamilies(serif: serif, region: region, preferences: preferences).compactMap {
+            familyFont($0, size: size, weight: weight)?.fontDescriptor
+        }
+        let descriptor = base.fontDescriptor.addingAttributes([.cascadeList: cascade])
+        let font = NSFont(descriptor: descriptor, size: size) ?? base
         fonts.setObject(font, forKey: key)
         return font
+    }
+
+    static func cjkFamilies(serif: Bool, region: String, preferences: DotistFontPreferences) -> [String] {
+        let noto = "Noto \(serif ? "Serif" : "Sans") \(region == "HK" ? "TC" : region)"
+        let system = serif ? (region == "SC" ? "Songti SC" : "Songti TC") : "PingFang \(region == "JP" ? "TC" : region)"
+        let choice = serif ? preferences.serifCjk : preferences.sansCjk
+        // Chiron has an HK glyph set only. Keep the language's native glyph
+        // shapes in simplified Chinese and Japanese instead of substituting HK.
+        if serif && choice == "chiron-sung-hk" && ["TC", "HK"].contains(region) { return ["Chiron Sung HK VF", noto, system] }
+        if choice == "system" && region != "JP" { return [system, noto] }
+        return [noto, region == "JP" ? (serif ? "Hiragino Mincho ProN" : "Hiragino Sans") : system]
+    }
+
+    private static func systemFont(_ size: CGFloat, weight: NSFont.Weight, serif: Bool) -> NSFont {
+        let font = NSFont.systemFont(ofSize: size, weight: weight)
+        guard serif, let descriptor = font.fontDescriptor.withDesign(.serif) else { return font }
+        return NSFont(descriptor: descriptor, size: size) ?? font
+    }
+
+    /// Reject CoreText's silent substitution for unavailable families. Variable
+    /// fonts use explicit OpenType weights, and opsz follows the requested size.
+    static func familyFont(_ family: String, size: CGFloat, weight: NSFont.Weight) -> NSFont? {
+        let descriptor = NSFontDescriptor(fontAttributes: [.family: family, .traits: [NSFontDescriptor.TraitKey.weight: weight.rawValue]])
+        guard let base = NSFont(descriptor: descriptor, size: size), base.familyName == family else { return nil }
+        let axes = CTFontCopyVariationAxes(base as CTFont) as? [[String: Any]] ?? []
+        var variations: [NSNumber: CGFloat] = [:]
+        for axis in axes {
+            guard let id = axis[kCTFontVariationAxisIdentifierKey as String] as? NSNumber,
+                  let minimum = axis[kCTFontVariationAxisMinimumValueKey as String] as? CGFloat,
+                  let maximum = axis[kCTFontVariationAxisMaximumValueKey as String] as? CGFloat else { continue }
+            let value: CGFloat
+            switch id.uint32Value {
+            case 0x77676874: value = openTypeWeight(weight) // wght
+            case 0x6f70737a: value = size // opsz
+            default: continue
+            }
+            variations[id] = min(maximum, max(minimum, value))
+        }
+        guard !variations.isEmpty else { return base }
+        return NSFont(descriptor: descriptor.addingAttributes([NSFontDescriptor.AttributeName(kCTFontVariationAttribute as String): variations]), size: size) ?? base
+    }
+
+    private static func openTypeWeight(_ weight: NSFont.Weight) -> CGFloat {
+        let stops: [(NSFont.Weight, CGFloat)] = [(.ultraLight, 100), (.thin, 200), (.light, 300), (.regular, 400), (.medium, 500), (.semibold, 600), (.bold, 700), (.heavy, 800), (.black, 900)]
+        return stops.min(by: { abs($0.0.rawValue - weight.rawValue) < abs($1.0.rawValue - weight.rawValue) })?.1 ?? 400
     }
 }
 
@@ -156,6 +221,7 @@ struct DotistActionStyle: ButtonStyle {
 }
 
 struct DotistGlassTabs: View {
+    @ObservedObject private var typography = DotistTypography.shared
     @Binding var selection: String
     let options: [(String, String)]
     let language: String

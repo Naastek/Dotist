@@ -16,8 +16,16 @@ enum SideTabGeometry {
     static let shadowInset: CGFloat = 0
     static var stride: CGFloat { height + spacing }
 
-    static func isRight(panelMinX: CGFloat, visibleMinX: CGFloat, expandedWidth: CGFloat) -> Bool {
-        panelMinX - expandedWidth < visibleMinX
+    static let modeHysteresis: CGFloat = 80
+
+    static func expandsInward(availableSpace: CGFloat, expandedWidth: CGFloat, wasInward: Bool) -> Bool {
+        wasInward ? availableSpace <= expandedWidth + modeHysteresis : availableSpace < expandedWidth
+    }
+    static func x(panel: CGRect, width: CGFloat, inward: Bool, visibleMinX: CGFloat?) -> CGFloat {
+        inward ? max(panel.minX - collapsedWidth, visibleMinX ?? panel.minX) : panel.minX - width
+    }
+    static func childOrder(inward: Bool, expanded: Bool, progress: CGFloat) -> NSWindow.OrderingMode {
+        inward && (expanded || progress > 0) ? .above : .below
     }
     static func expandedWidth(textWidth: CGFloat) -> CGFloat { max(48, ceil(textWidth) + 28) }
     static func expandedWidth(name: String, language: String) -> CGFloat {
@@ -27,14 +35,14 @@ enum SideTabGeometry {
             text.size(withAttributes: [.font: DotistDesign.nativeFont(13, weight: .semibold, serif: true, language: language)]).width))
     }
     static func width(expanded: Bool, fullWidth: CGFloat) -> CGFloat { expanded ? fullWidth : collapsedWidth }
-    static func frame(panel: CGRect, index: Int, width: CGFloat, right: Bool, offsetY: CGFloat = 0) -> CGRect {
-        CGRect(x: right ? panel.maxX : panel.minX - width,
+    static func frame(panel: CGRect, index: Int, width: CGFloat, inward: Bool, visibleMinX: CGFloat? = nil, offsetY: CGFloat = 0) -> CGRect {
+        CGRect(x: x(panel: panel, width: width, inward: inward, visibleMinX: visibleMinX),
                y: panel.maxY - topInset - CGFloat(index) * stride - height + offsetY,
                width: width, height: height)
     }
-    static func windowFrame(panel: CGRect, count: Int, width: CGFloat, right: Bool) -> CGRect {
+    static func windowFrame(panel: CGRect, count: Int, width: CGFloat, inward: Bool, visibleMinX: CGFloat? = nil) -> CGRect {
         let total = CGFloat(max(1, count)) * stride - spacing
-        return CGRect(x: right ? panel.maxX : panel.minX - width,
+        return CGRect(x: x(panel: panel, width: width, inward: inward, visibleMinX: visibleMinX),
                       y: panel.maxY - topInset - total, width: width, height: total)
     }
     /// One sample drives the window, glass geometry, text reveal and mouse regions.
@@ -43,13 +51,13 @@ enum SideTabGeometry {
         let tabs: [CGRect]
         let textOpacity: Double
     }
-    static func snapshot(panel: CGRect, fullWidths: [CGFloat], progress: CGFloat, right: Bool) -> Snapshot {
+    static func snapshot(panel: CGRect, fullWidths: [CGFloat], progress: CGFloat, inward: Bool, visibleMinX: CGFloat? = nil) -> Snapshot {
         let progress = min(1, max(0, progress))
         let widths = fullWidths.map { collapsedWidth + ($0 - collapsedWidth) * progress }
-        let bounds = windowFrame(panel: panel, count: widths.count, width: widths.max() ?? collapsedWidth, right: right)
+        let bounds = windowFrame(panel: panel, count: widths.count, width: widths.max() ?? collapsedWidth, inward: inward, visibleMinX: visibleMinX)
             .insetBy(dx: -shadowInset, dy: -shadowInset)
         return Snapshot(window: bounds, tabs: widths.enumerated().map {
-            frame(panel: panel, index: $0.offset, width: $0.element, right: right)
+            frame(panel: panel, index: $0.offset, width: $0.element, inward: inward, visibleMinX: visibleMinX)
         }, textOpacity: Double(progress))
     }
     static func isDrag(_ delta: CGPoint) -> Bool { hypot(delta.x, delta.y) > 4 }
@@ -63,6 +71,22 @@ enum SideTabGeometry {
         result.remove(at: source)
         result.insert(id, at: min(max(0, index), result.count))
         return result
+    }
+}
+
+/// Latch the requested direction independently of the displayed direction. Small
+/// reversals while retracting cannot cancel a switch or flip the shape mid-flight.
+struct SideTabPlacement {
+    private(set) var inward = false
+    private(set) var requestedInward = false
+    private var initialized = false
+    var needsCollapse: Bool { inward != requestedInward }
+
+    mutating func update(availableSpace: CGFloat, expandedWidth: CGFloat, progress: CGFloat, canSwitch: Bool = true) {
+        requestedInward = SideTabGeometry.expandsInward(availableSpace: availableSpace,
+            expandedWidth: expandedWidth, wasInward: initialized && requestedInward)
+        if !initialized || (progress == 0 && canSwitch) { inward = requestedInward }
+        initialized = true
     }
 }
 
@@ -86,11 +110,11 @@ struct SideTabExpansion {
 }
 
 private struct SideTabShape: Shape {
-    let right: Bool
+    let inward: Bool
     func path(in rect: CGRect) -> Path {
         let r = min(8, rect.width, rect.height / 2)
         var p = Path()
-        if right {
+        if inward {
             p.move(to: .init(x: 0, y: 0)); p.addLine(to: .init(x: rect.maxX - r, y: 0))
             p.addQuadCurve(to: .init(x: rect.maxX, y: r), control: .init(x: rect.maxX, y: 0))
             p.addLine(to: .init(x: rect.maxX, y: rect.maxY - r))
@@ -120,7 +144,7 @@ private struct SideTabLayout: Equatable, Identifiable {
 private final class SideTabPresentation: ObservableObject {
     @Published var rows: [SideTabLayout] = []
     @Published var size: CGSize = .zero
-    @Published var right = false
+    @Published var inward = false
     @Published var textOpacity = 0.0
     @Published var hovered: String?
     @Published var visible = false
@@ -148,14 +172,14 @@ extension EnvironmentValues {
 private struct SideTabBackground: View {
     let color: DotistGroupColor
     let selected: Bool
-    let right: Bool
+    let inward: Bool
     @Environment(\.sideTabSurfaceStyle) private var style
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let shape = SideTabShape(right: right)
+        let shape = SideTabShape(inward: inward)
         ZStack {
             // This underlay also protects contrast if a glass host loses sampling.
             shape.fill(DotistDesign.paper.opacity(reduceTransparency || contrast == .increased ? 1 : selected ? 0.92 : 0.85))
@@ -164,7 +188,7 @@ private struct SideTabBackground: View {
                 Color.clear
                     .glassEffect(.regular.tint(DotistTheme.tint(color, scheme).opacity(selected ? 1 : 0.5)), in: shape)
             }
-            shape.stroke(DotistDesign.rule, lineWidth: 0.5)
+            shape.stroke(DotistDesign.faint.opacity(selected ? 0.45 : 0.35), lineWidth: 0.75)
         }
         .allowsHitTesting(false)
     }
@@ -177,6 +201,8 @@ struct SideTabLabel: View {
     let language: String
     let selected: Bool
     let hovered: Bool
+    // Compatibility with the optical label harness: this is the reveal direction,
+    // never a choice of which side of the panel hosts the tabs.
     let right: Bool
     let width: CGFloat
     let fullWidth: CGFloat
@@ -202,15 +228,15 @@ private struct SideTabContent: View {
     let color: DotistGroupColor
     let selected: Bool
     let hovered: Bool
-    let right: Bool
+    let inward: Bool
     let textOpacity: Double
 
     var body: some View {
-        ZStack(alignment: right ? .leading : .trailing) {
-            SideTabBackground(color: color, selected: selected, right: right)
+        ZStack(alignment: inward ? .leading : .trailing) {
+            SideTabBackground(color: color, selected: selected, inward: inward)
                 .frame(width: row.rect.width, height: SideTabGeometry.height)
             SideTabLabel(name: row.name, language: language, selected: selected,
-                         hovered: hovered, right: right, width: row.rect.width,
+                         hovered: hovered, right: inward, width: row.rect.width,
                          fullWidth: row.fullWidth, textOpacity: textOpacity)
         }
         .frame(width: row.rect.width, height: SideTabGeometry.height)
@@ -226,7 +252,7 @@ private struct SideTabsCanvas: View {
     let language: String
     let selectedGroupID: String?
     let hovered: String?
-    let right: Bool
+    let inward: Bool
     let textOpacity: Double
     let color: (String?) -> DotistGroupColor
     var pointer: ((String, NSEvent.EventType, CGPoint) -> Void)?
@@ -239,7 +265,7 @@ private struct SideTabsCanvas: View {
             ForEach(rows) { row in
                 SideTabContent(row: row, language: language, color: color(row.groupID),
                     selected: selectedGroupID == row.groupID, hovered: hovered == row.id,
-                    right: right, textOpacity: textOpacity)
+                    inward: inward, textOpacity: textOpacity)
                     .overlay {
                         if let pointer {
                             SideTabPointer { type, location in pointer(row.id, type, location) }
@@ -271,7 +297,7 @@ private struct SideTabsView: View {
 
     var body: some View {
         SideTabsCanvas(rows: presentation.rows, size: presentation.size, language: model.language,
-            selectedGroupID: state.groupID, hovered: presentation.hovered, right: presentation.right,
+            selectedGroupID: state.groupID, hovered: presentation.hovered, inward: presentation.inward,
             textOpacity: presentation.textOpacity, color: { model.themeColor(forGroup: $0) },
             pointer: pointer, select: { state.groupID = $0 })
             .environment(\.sideTabSurfaceStyle, .paper)
@@ -288,17 +314,17 @@ struct SideTabsSnapshot {
     let tabs: [CGRect]
 
     static func render(names: [String], language: String, scheme: ColorScheme,
-                       right: Bool, expanded: Bool, showLabels: Bool = true) -> SideTabsSnapshot? {
+                       inward: Bool, expanded: Bool, showLabels: Bool = true) -> SideTabsSnapshot? {
         let widths = names.map { SideTabGeometry.expandedWidth(name: $0, language: language) }
         let panel = CGRect(x: widths.max() ?? 48, y: 0, width: 364, height: 620)
-        let sample = SideTabGeometry.snapshot(panel: panel, fullWidths: widths, progress: expanded ? 1 : 0, right: right)
+        let sample = SideTabGeometry.snapshot(panel: panel, fullWidths: widths, progress: expanded ? 1 : 0, inward: inward)
         let rows = names.enumerated().map { index, name in
             SideTabLayout(id: String(index), groupID: String(index), name: name,
                 rect: sample.tabs[index].offsetBy(dx: -sample.window.minX, dy: -sample.window.minY),
                 fullWidth: widths[index], dragged: false)
         }
         let content = SideTabsCanvas(rows: rows, size: sample.window.size, language: language,
-            selectedGroupID: "0", hovered: nil, right: right, textOpacity: showLabels ? sample.textOpacity : 0,
+            selectedGroupID: "0", hovered: nil, inward: inward, textOpacity: showLabels ? sample.textOpacity : 0,
             color: { _ in .teal })
             .environment(\.sideTabSurfaceStyle, .paper)
             .environment(\.colorScheme, scheme)
@@ -340,7 +366,16 @@ private struct SideTabPointer: NSViewRepresentable {
 }
 
 private final class SideTabHostingView<Content: View>: NSHostingView<Content> {
+    var screenHitRects: [CGRect]?
     override var isOpaque: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if let screenHitRects, let window {
+            let windowPoint = superview?.convert(point, to: nil) ?? point
+            let screenPoint = window.convertPoint(toScreen: windowPoint)
+            guard screenHitRects.contains(where: { $0.contains(screenPoint) }) else { return nil }
+        }
+        return super.hitTest(point)
+    }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
@@ -375,6 +410,9 @@ final class SideTabsController: NSObject {
     private var pendingOrder: [String]?
     private var measuredWidths: [String: CGFloat] = [:]
     private var stopped = false
+    private var placement = SideTabPlacement()
+    private var childOrder: NSWindow.OrderingMode = .below
+    private var restingHost: SideTabHostingView<SideTabsView>?
 
     init(parent: NSPanel, model: AppModel, state: TaskPanelState, motion: PanelMotion) {
         self.parent = parent; self.model = model; self.state = state; self.motion = motion
@@ -394,6 +432,17 @@ final class SideTabsController: NSObject {
         window.acceptsMouseMovedEvents = true
         parent.acceptsMouseMovedEvents = true
         window.contentView = host
+        // The actual tab window rests below the parent. At the screen edge its
+        // 10pt ear would be covered by the panel, so paint just that resting ear
+        // in the parent's content view, using the same tree and native capture.
+        // This host disappears as soon as the child is promoted for expansion.
+        let resting = SideTabHostingView(rootView: host.rootView)
+        resting.identifier = NSUserInterfaceItemIdentifier("dotist.side-tabs-rest")
+        resting.sizingOptions = []
+        resting.safeAreaRegions = []
+        resting.isHidden = true
+        restingHost = resting
+        parent.contentView?.addSubview(resting)
         parent.addChildWindow(window, ordered: .below)
         for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification, NSWindow.didChangeScreenNotification,
                      NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification] {
@@ -428,6 +477,7 @@ final class SideTabsController: NSObject {
         observers.forEach(NotificationCenter.default.removeObserver); observers.removeAll()
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }; localMonitor = nil
         if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }; globalMonitor = nil
+        restingHost?.removeFromSuperview(); restingHost = nil
         parent.removeChildWindow(window); window.close()
     }
 
@@ -477,7 +527,7 @@ final class SideTabsController: NSObject {
         }
         let widths = items.map { item -> CGFloat in
             let name = model.text(item.name)
-            let key = "\(model.language)|\(name)"
+            let key = "\(DotistDesign.fontCacheKey)|\(model.language)|\(name)"
             if let measured = measuredWidths[key] { return measured }
             let measured = SideTabGeometry.expandedWidth(name: name, language: model.language)
             measuredWidths[key] = measured
@@ -485,18 +535,22 @@ final class SideTabsController: NSObject {
         }
         let maxWidth = widths.max() ?? SideTabGeometry.collapsedWidth
         let frame = parent.frame
-        let right = SideTabGeometry.isRight(panelMinX: frame.minX,
-            visibleMinX: (parent.screen ?? NSScreen.main)?.visibleFrame.minX ?? frame.minX, expandedWidth: maxWidth + SideTabGeometry.shadowInset)
-        let visible = parent.isVisible && parent.isOnActiveSpace && !motion.bubble && !motion.animationInProgress
+        let visibleMinX = (parent.screen ?? NSScreen.main)?.visibleFrame.minX ?? frame.minX
         let now = CACurrentMediaTime()
+        placement.update(availableSpace: frame.minX - visibleMinX, expandedWidth: maxWidth,
+            progress: expansion.progress(at: now), canSwitch: press == nil)
+        var inward = placement.inward
+        let visible = parent.isVisible && parent.isOnActiveSpace && !motion.bubble && !motion.animationInProgress
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let current = SideTabGeometry.snapshot(panel: frame, fullWidths: widths,
-            progress: expansion.progress(at: now), right: right)
+            progress: expansion.progress(at: now), inward: inward, visibleMinX: visibleMinX)
         let sensor = SideTabGeometry.windowFrame(panel: frame, count: items.count,
-            width: expanded ? maxWidth : SideTabGeometry.collapsedWidth, right: right)
+            width: expanded ? maxWidth : SideTabGeometry.collapsedWidth, inward: inward, visibleMinX: visibleMinX)
         let overTab = current.tabs.contains { $0.contains(mouse) }
         if !visible {
             expanded = false; collapseWork?.cancel(); collapseWork = nil; cancelDrag()
+        } else if placement.needsCollapse && press == nil {
+            expanded = false; collapseWork?.cancel(); collapseWork = nil
         } else if press != nil || overTab || (expanded && sensor.contains(mouse)) {
             expanded = true; collapseWork?.cancel(); collapseWork = nil
         } else if expanded && collapseWork == nil {
@@ -513,8 +567,14 @@ final class SideTabsController: NSObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + SideTabGeometry.collapseDelay, execute: work)
         }
         expansion.setExpanded(expanded, at: now, reduceMotion: reduceMotion || !visible)
+        if placement.needsCollapse && expansion.progress(at: now) == 0 && press == nil {
+            // Reduced motion can finish retraction in this call. Apply the new
+            // collapsed anchor before compositing, avoiding an offscreen frame.
+            placement.update(availableSpace: frame.minX - visibleMinX, expandedWidth: maxWidth, progress: 0)
+            inward = placement.inward
+        }
         let sample = SideTabGeometry.snapshot(panel: frame, fullWidths: widths,
-            progress: expansion.progress(at: now), right: right)
+            progress: expansion.progress(at: now), inward: inward, visibleMinX: visibleMinX)
         let bounds = sample.window
         // AppKit moves child windows with the parent. Compare the actual frame,
         // then update frame + SwiftUI layout from the very same animation sample.
@@ -526,14 +586,14 @@ final class SideTabsController: NSObject {
             let lifted = dragging && preview != nil && press?.id == item.id
             let slot = lifted ? (press!.order.firstIndex(of: item.id)! + 1) : index
             let rect = SideTabGeometry.frame(panel: frame, index: slot,
-                width: sample.tabs[index].width, right: right,
+                width: sample.tabs[index].width, inward: inward, visibleMinX: visibleMinX,
                 offsetY: lifted ? deltaY : 0)
             hitRects.append(rect)
             return SideTabLayout(id: item.id, groupID: item.groupID, name: model.text(item.name),
                 rect: rect.offsetBy(dx: -bounds.minX, dy: -bounds.minY), fullWidth: widths[index], dragged: lifted)
         }
         if presentation.size != bounds.size { presentation.size = bounds.size }
-        if presentation.right != right { presentation.right = right }
+        if presentation.inward != inward { presentation.inward = inward }
         if presentation.textOpacity != sample.textOpacity { presentation.textOpacity = sample.textOpacity }
         if presentation.rows != rows { presentation.rows = rows }
         // Resolve the new SwiftUI layout before the resized child is composited.
@@ -543,9 +603,24 @@ final class SideTabsController: NSObject {
         if presentation.visible != visible { presentation.visible = visible }
         window.ignoresMouseEvents = !visible || (press == nil && !hitRects.contains { $0.contains(mouse) })
         window.alphaValue = visible ? parent.alphaValue : 0
+        let ordering = SideTabGeometry.childOrder(inward: inward, expanded: expanded,
+            progress: expansion.progress(at: now))
+        if let restingHost {
+            restingHost.frame = parent.contentView?.convert(parent.convertFromScreen(bounds), from: nil) ?? .zero
+            restingHost.screenHitRects = hitRects
+            restingHost.isHidden = !visible || !inward || ordering == .above || bounds.maxX <= frame.minX
+            restingHost.layoutSubtreeIfNeeded()
+        }
         if visible {
-            if window.parent !== parent { parent.addChildWindow(window, ordered: .below) }
-            if !window.isVisible { window.order(.below, relativeTo: parent.windowNumber) }
+            if window.parent !== parent || childOrder != ordering {
+                // AppKit preserves the ordering relationship established by
+                // addChildWindow; order(relativeTo:) cannot change that side.
+                // Reattach synchronously without hiding either window.
+                window.parent?.removeChildWindow(window)
+                parent.addChildWindow(window, ordered: ordering)
+            }
+            if !window.isVisible { window.order(ordering, relativeTo: parent.windowNumber) }
+            childOrder = ordering
         } else {
             // Frames continue synchronizing while collapsed or animating. On expansion
             // there is never a stale child frame to flash at the old panel location.

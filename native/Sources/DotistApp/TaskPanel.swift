@@ -96,7 +96,7 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
         panel.minSize = NSSize(width: 320, height: 440)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = false // PanelMotion supplies the exterior-only shadow.
+        panel.hasShadow = true
         panel.isReleasedWhenClosed = false
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .fullScreenDisallowsTiling]

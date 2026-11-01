@@ -62,8 +62,10 @@ struct SettingsWindow: View {
                         OpticalSymbol(name: "xmark", size: 10).frame(width: 18, height: 22)
                     }.buttonStyle(.plain).accessibilityLabel(model.text("清除"))
                 }
-            }.padding(.horizontal, 11).frame(height: 34).glassEffect(.regular, in: .capsule)
-                .padding(.horizontal, 12)
+            }.padding(.horizontal, 12).frame(height: 34)
+                // Glass is only the backdrop: a native NSTextField inside the effect graph is composited twice.
+                .background { Color.clear.glassEffect(.regular, in: .capsule) }
+                .padding(.horizontal, 14)
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 3) {
@@ -71,11 +73,7 @@ struct SettingsWindow: View {
                             Button {
                                 active = module; searchTarget = nil; emphasized = nil; searchRequest = UUID()
                             } label: {
-                                HStack(spacing: 10) {
-                                    OpticalText(title: model.text(module.title), size: 13, weight: active == module ? .semibold : .regular, language: model.language)
-                                        .foregroundStyle(active == module ? DotistDesign.ink : DotistDesign.muted)
-                                    Spacer(minLength: 0)
-                                }.padding(.horizontal, 15).frame(height: 38).contentShape(Rectangle())
+                                SettingsNavRow(title: model.text(module.title), language: model.language, selected: active == module)
                             }.buttonStyle(.plain).modifier(DotistFocusRing())
                                 .accessibilityAddTraits(active == module ? .isSelected : [])
                                 .accessibilityIdentifier("settings-module-" + module.rawValue)
@@ -168,6 +166,16 @@ struct SettingsWindow: View {
                 }
                 numberRow("磨砂程度", value: Double(model.settings.frost), range: 0...100, unit: "%") { $0.frost = UInt8($1.rounded()) }
             }
+            settingsGroup("字体") {
+                ForEach(DotistFontRole.allCases, id: \.rawValue) { role in fontRow(role) }
+                settingRow("恢复默认字体") {
+                    Button(model.text(DotistFontRole.restoreDefaultsTitle)) {
+                        update { patch in
+                            for role in DotistFontRole.allCases { role.set(role.defaultValue, in: &patch) }
+                        }
+                    }.buttonStyle(.plain).foregroundStyle(DotistDesign.accent).modifier(DotistFocusRing())
+                }
+            }.id(rowID("字体"))
             settingsGroup("颜色主题", footer: "分组未设置颜色时使用「全部」的默认颜色。") {
                 settingRow("全部（默认颜色）") {
                     SettingsColorPalette(model: model, selected: DotistGroupColor(rawValue: model.settings.allColor), identifier: "settings-all-color") { color in
@@ -416,6 +424,17 @@ struct SettingsWindow: View {
     private func numericValue(_ value: String) -> some View {
         OpticalText(title: value, size: 13, language: model.language).monospacedDigit().frame(width: 56, alignment: .trailing).foregroundStyle(DotistDesign.muted)
     }
+    private func fontRow(_ role: DotistFontRole) -> some View {
+        settingRow(role.title) {
+            Picker(model.text(role.title), selection: Binding(get: { role.value(in: model.settings) }, set: { value in update { role.set(value, in: &$0) } })) {
+                ForEach(role.choices, id: \.self) { value in Text(model.text(role.label(value))).tag(value) }
+            }.pickerStyle(.menu).labelsHidden().frame(width: 190).modifier(DotistFocusRing())
+                .accessibilityIdentifier("settings-font-" + role.rawValue)
+            OpticalText(title: model.text(DotistFontRole.previewText), size: 13, serif: role.isSerif,
+                        language: role == .serifCjk && role.value(in: model.settings) == "chiron-sung-hk" ? "zh-HK" : model.language)
+                .lineLimit(1).frame(width: 110, alignment: .leading)
+        }
+    }
     private func settingMenu(_ label: String, value: String, options: [(String, String)], choose: @escaping (String) -> Void) -> some View {
         Menu {
             ForEach(options, id: \.0) { id, title in
@@ -476,5 +495,27 @@ struct SettingsWindow: View {
     private func setFilter(_ id: String, enabled: Bool) {
         let values = enabled ? model.settings.filters + [id] : model.settings.filters.filter { $0 != id }
         update { $0.filters = values; if !values.contains(model.settings.defaultFilter) { $0.defaultFilter = values.first } }
+    }
+}
+
+
+/// Sidebar row with an affordance: a soft plate on hover and a firmer one when selected.
+private struct SettingsNavRow: View {
+    let title: String
+    let language: String
+    let selected: Bool
+    @State private var hovering = false
+    var body: some View {
+        HStack(spacing: 0) {
+            OpticalText(title: title, size: 13, weight: selected ? .semibold : .regular, language: language)
+                .foregroundStyle(selected || hovering ? DotistDesign.ink : DotistDesign.muted)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).frame(height: 34)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(DotistDesign.rule.opacity(selected ? 0.22 : hovering ? 0.12 : 0)))
+        .padding(.horizontal, 14)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.1), value: hovering)
     }
 }

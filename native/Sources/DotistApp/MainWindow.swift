@@ -36,6 +36,10 @@ struct MainWindow: View {
     @State private var draftParent: String?
     @State private var draftHeight: CGFloat = 20
     @State private var draftSaving = false
+    @State private var emptyDraft: TaskEmptyState?
+    @State private var emptyAddHovered = false
+    @State private var emptyDraftSession: UUID?
+    @State private var emptyStateHeight: CGFloat = 0
     @State private var editedTitle = ""
     @State private var editSaving = false
     @State private var editHeight: CGFloat = 20
@@ -156,6 +160,8 @@ struct MainWindow: View {
         .onChange(of: model.tagDescription) { _ in
             if let tag = state.activeTag, !model.tagCounts.contains(where: { $0.tag == tag && $0.open > 0 }) { state.activeTag = nil }
         }
+        .onChange(of: customDateRange) { _ in if emptyDraft != nil { leaveInputs() } }
+        .onChange(of: state.activeTag) { _ in if emptyDraft != nil { leaveInputs() } }
         .onChange(of: model.scope) { scope in if primary { state.scope = scope } }
         .onChange(of: state.scope) { scope in cancelReorder(); leaveInputs(); selection.update { $0.clear() }; if primary { model.scope = scope } }
         .onChange(of: model.scopeNavigation) { _ in
@@ -179,10 +185,25 @@ struct MainWindow: View {
                 ScrollView {
                     // An eager stack keeps the gesture source alive while auto-scrolling
                     // beyond the viewport. A lazy stack may recycle it mid-drag.
-                    VStack(alignment: .leading, spacing: 0) {
-                        listSections
-                    }.padding(.horizontal, 16).padding(.bottom, 12)
-                        .frame(minHeight: space.size.height, alignment: .topLeading)
+                    VStack(alignment: .leading, spacing: 0) { listSections }
+                        // The viewport owns surplus height. Never propose that
+                        // height to sections or their minimum-height row labels.
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.bottom, 12)
+                        .frame(minHeight: max(space.size.height, showsEmptyState ? emptyStateHeight : 0), alignment: .topLeading)
+                        .overlay(alignment: .topLeading) {
+                            if showsEmptyState {
+                                emptyState(viewportHeight: space.size.height)
+                                    .background(GeometryReader { geometry in
+                                        Color.clear.preference(key: TaskEmptyStateHeightKey.self, value: geometry.size.height)
+                                    })
+                            }
+                        }
+                        // Keep an overflowing empty block scrollable in short
+                        // windows without letting it size the section stack.
+                        .onPreferenceChange(TaskEmptyStateHeightKey.self) { emptyStateHeight = $0 }
+                        .padding(.horizontal, 16)
                         .background(WindowDragArea())
                         .background(TaskReorderScrollBridge(runtime: reorderRuntime))
                 }
@@ -212,9 +233,93 @@ struct MainWindow: View {
     }
 
     @ViewBuilder private var listSections: some View {
-        if state.scope == "all" { allGroups }
+        if state.scope == "all" && customDateRange == nil {
+            if !showsEmptyState { allGroups }
+        }
         else if state.scope == "today" && customStart == nil { todayList }
         else { filteredTasks }
+    }
+
+    private var emptyStateContext: TaskEmptyState {
+        TaskEmptyState(scope: state.scope, groupID: state.groupID, customRange: customDateRange)
+    }
+
+    private var showsEmptyState: Bool {
+        if customDateRange == nil && state.scope == "all" { return panelTasks.isEmpty }
+        if customDateRange == nil && state.scope == "today" {
+            let sections = model.todayTaskSections(groupID: state.groupID, tag: state.activeTag)
+            return sections.today.matches.isEmpty && sections.overdue.matches.isEmpty
+                && !(upcomingOpen && !sections.upcoming.matches.isEmpty)
+                && !(todayDoneOpen && !sections.completed.matches.isEmpty)
+        }
+        let result = dateFilterResult()
+        guard result.matches.isEmpty else { return false }
+        let showsCompletedRows = todayDoneOpen && !dateFilterResult(completed: true).matches.isEmpty
+            && (customDateRange != nil || !["all", "overdue", "undated", "done"].contains(state.scope))
+        return !showsCompletedRows
+    }
+
+    // Folded auxiliary sections retain their original position. The empty-state
+    // block stays below their hit boxes, even in a short resized window.
+    private var emptyStateMinimumTop: CGFloat {
+        if customDateRange == nil && state.scope == "today" {
+            let sections = model.todayTaskSections(groupID: state.groupID, tag: state.activeTag)
+            let count = (sections.upcoming.matches.isEmpty ? 0 : 1) + (sections.completed.matches.isEmpty ? 0 : 1)
+            return count == 0 ? 0 : CGFloat(count * 28 + (count - 1) * 20 + 16)
+        }
+        if (customDateRange != nil || !["all", "overdue", "undated", "done"].contains(state.scope)),
+           !dateFilterResult(completed: true).matches.isEmpty { return 44 }
+        return 0
+    }
+
+    private func emptyState(viewportHeight: CGFloat) -> some View {
+        let context = emptyStateContext
+        return TaskEmptyStateLayout(viewportHeight: viewportHeight, minimumTop: emptyStateMinimumTop) {
+            TaskEmptyStateContent(title: model.text(context.title), hint: context.hint.map { model.text($0) }, language: model.language) {
+                if context.allowsAdding {
+                    if let session = emptyDraftSession, emptyDraft != nil {
+                        TaskRowLayout(depth: 0) {
+                            TaskCheckmark(depth: 0, completed: false, children: [], emphasized: false)
+                            TaskEditor(text: $draftTitle, height: $draftHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("任务内容"),
+                                       commit: { saveEmptyDraft(continuing: true) }, cancel: { clearInputs() }, indent: { _ in },
+                                       blur: { saveEmptyDraft(continuing: false, session: session) })
+                                .id(session).frame(height: draftHeight)
+                            Color.clear.frame(width: 0, height: 0)
+                        }.background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(0.18)).padding(.horizontal, -6))
+                    } else {
+                        Button {
+                            clearInputs()
+                            emptyDraft = context
+                            emptyDraftSession = UUID()
+                        } label: {
+                            TaskEmptyAddLabel(title: model.text(TaskEmptyState.addTitle), language: model.language)
+                                .contentShape(Rectangle())
+                        }.buttonStyle(.plain).modifier(DotistFocusRing())
+                            .background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(emptyAddHovered ? 0.10 : 0)).padding(.horizontal, -6))
+                            .onHover { emptyAddHovered = $0 }
+                            .accessibilityLabel(Text(model.text(TaskEmptyState.addAccessibilityLabel)))
+                            .accessibilityIdentifier("empty-state-add")
+                    }
+                }
+            }
+        }.accessibilityElement(children: .contain)
+    }
+
+    private func saveEmptyDraft(continuing: Bool, session: UUID? = nil) {
+        guard let context = emptyDraft, let currentSession = emptyDraftSession,
+              session == nil || session == currentSession, !draftSaving else { return }
+        guard let title = TaskDraftFlow.titleToSave(draftTitle) else { clearInputs(); return }
+        draftSaving = true
+        var created: DotistTask?
+        model.change(completed: {
+            draftSaving = false
+            guard emptyDraftSession == currentSession else { return }
+            let continueHere = continuing && emptyStateContext == context
+            clearInputs()
+            if continueHere, let created { startDraft(after: created) }
+        }, failed: { draftSaving = false; showNotice(model.error ?? model.text("无法保存任务")); model.error = nil }) {
+            created = try $0.addTask(title: title, category: context.groupID, dueDate: context.dueDate)
+        }
     }
 
     @ViewBuilder private var listMenu: some View {
@@ -650,7 +755,8 @@ struct MainWindow: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 16) {
                     ForEach(model.settings.filters, id: \.self) { id in
-                        DraggableFilterButton(title: model.text(filterLabel(id)), selected: customStart == nil && state.scope == id, language: model.language) {
+                        DraggableFilterButton(title: model.text(filterLabel(id)), selected: customStart == nil && state.scope == id, language: model.language,
+                                              distance: TaskDateFilterMetrics.distance(of: id, selected: customStart == nil ? state.scope : nil, in: model.settings.filters)) {
                             state.scope = id; customStart = nil; customEnd = nil
                         }.accessibilityIdentifier("date-filter:\(id)")
                     }
@@ -665,7 +771,7 @@ struct MainWindow: View {
                         customEnd = end
                     }, close: { showCalendar = false })
                 }
-        }.padding(.leading, 16).padding(.trailing, 11).frame(height: 30).background(WindowDragArea())
+        }.padding(.leading, 16).padding(.trailing, 11).frame(height: TaskDateFilterMetrics.rowHeight).background(WindowDragArea())
     }
 
     private func toolbarButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
@@ -820,14 +926,11 @@ struct MainWindow: View {
     @ViewBuilder private var filteredTasks: some View {
         let result = dateFilterResult()
         if customDateRange == nil && state.scope == "overdue" {
-            if result.matches.isEmpty { Text(model.text("没有逾期的任务。")).font(font(12)).foregroundColor(DotistDesign.muted) }
-            else { todaySection("已逾期", result: result) }
+            if !result.matches.isEmpty { todaySection("已逾期", result: result) }
         } else if customDateRange == nil && state.scope == "undated" {
-            if result.matches.isEmpty { Text(model.text("每个任务都有到期日。")).font(font(12)).foregroundColor(DotistDesign.muted) }
-            else { flatRows(result.tasks, contextIDs: result.contextIDs) }
+            if !result.matches.isEmpty { flatRows(result.tasks, contextIDs: result.contextIDs) }
         } else if customDateRange == nil && state.scope == "done" {
-            if result.matches.isEmpty { Text(model.text("还没有完成的任务。")).font(font(12)).foregroundColor(DotistDesign.muted) }
-            else { todaySection("已完成", result: result) }
+            if !result.matches.isEmpty { todaySection("已完成", result: result) }
         } else {
             let dates = Array(Set(result.matches.compactMap(\.dueDate))).sorted()
             let done = dateFilterResult(completed: true)
@@ -835,7 +938,6 @@ struct MainWindow: View {
                 ForEach(dates, id: \.self) { date in
                     todaySection(model.dueLabel(date), result: dateFilterResult(range: TaskDateRange(date, date)), hideDue: true)
                 }
-                if dates.isEmpty { Text(model.text("所选日期范围内没有未完成任务。")).font(font(12)).foregroundColor(DotistDesign.muted) }
                 if !done.matches.isEmpty {
                     Button { todayDoneOpen.toggle() } label: {
                         DisclosureRow(title: model.text("已完成"), expanded: todayDoneOpen, language: model.language)
@@ -856,9 +958,6 @@ struct MainWindow: View {
         return VStack(alignment: .leading, spacing: 20) {
             if !sections.overdue.matches.isEmpty { todaySection("已逾期", result: sections.overdue) }
             if !sections.today.matches.isEmpty { flatRows(sections.today.tasks, hideDue: true, contextIDs: sections.today.contextIDs) }
-            if sections.overdue.matches.isEmpty && sections.today.matches.isEmpty {
-                Text(model.text("今天没有要做的事。")).font(font(12)).foregroundColor(DotistDesign.muted)
-            }
             if !sections.upcoming.matches.isEmpty {
                 Button { upcomingOpen.toggle() } label: {
                     DisclosureRow(title: model.text("接下来 {n} 天").replacingOccurrences(of: "{n}", with: "7"), expanded: upcomingOpen, language: model.language)
@@ -936,7 +1035,6 @@ struct MainWindow: View {
                         .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || drag != nil || model.dragId != nil ? nil : .easeInOut(duration: 0.1), value: background)
                 }
         }
-        .frame(minHeight: sub ? 28 : 32)
         .contentShape(Rectangle())
         .onKeyPress(keys: [.return, .space, .tab, .escape, .upArrow, .downArrow], phases: .down) { press in
             handleRowKey(press, task: task, previous: previous, allTasks: allTasks)
@@ -1016,6 +1114,7 @@ struct MainWindow: View {
                     }
                     Spacer(minLength: 0)
                 }.frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .mask { if fadeWidth > 0 { TaskTitleFade(trailing: fadeWidth, rowRight: listViewport.maxX - 16) } else { Rectangle() } }
                     .contentShape(Rectangle())
                     .onTapGesture { clickRow(task) }
@@ -1096,7 +1195,7 @@ struct MainWindow: View {
     }
 
     private func handleUndoShortcut(redo: Bool) -> Bool {
-        guard !composerFocused, editing == nil, draftAfter == nil, addingToGroup == nil else { return false }
+        guard !composerFocused, editing == nil, draftAfter == nil, addingToGroup == nil, emptyDraft == nil else { return false }
         if redo {
             guard model.canRedoAction else { return false }
             model.redoLast()
@@ -1168,7 +1267,8 @@ struct MainWindow: View {
     }
 
     private func leaveInputs() {
-        if let id = editing, let task = model.tasks.first(where: { $0.id == id }) {
+        if emptyDraft != nil { saveEmptyDraft(continuing: false) }
+        else if let id = editing, let task = model.tasks.first(where: { $0.id == id }) {
             saveEditing(task) { clearInputs() }
         } else if let id = draftAfter, let task = model.tasks.first(where: { $0.id == id }) {
             saveDraft(after: task, continueEditing: false)
@@ -1180,6 +1280,7 @@ struct MainWindow: View {
     private func clearEditing() { editing = nil; editedTitle = ""; editHeight = 20; pendingEdit = nil }
     private func clearDraft() { draftAfter = nil; draftTitle = ""; draftParent = nil; draftHeight = 20 }
     private func clearInputs() {
+        emptyDraft = nil; emptyDraftSession = nil
         clearDraft(); clearEditing(); addingToGroup = nil; groupTitles.removeAll()
     }
 
@@ -1253,13 +1354,13 @@ struct MainWindow: View {
 
     private var composerBar: some View {
         let selectedID = dropGroupIDs.contains(category) ? category : DotistGroup.inboxID
-        let selectedName = model.groupDisplayName(selectedID)
+        let selectedName = model.composerGroupDisplayName(selectedID)
         let shownDue = dueDate?.dotistDay
         return ComposerLayout {
             Menu {
                 Picker(model.text("分组"), selection: $category) {
                     ForEach(dropGroupIDs, id: \.self) { id in
-                        Text(model.groupDisplayName(id)).font(font(13, serif: true)).tag(id)
+                        Text(model.composerGroupDisplayName(id)).font(font(13, serif: true)).tag(id)
                     }
                 }.pickerStyle(.inline)
                 Divider()
@@ -1354,21 +1455,68 @@ struct MainWindow: View {
     }
 }
 
+struct TaskEmptyAddLabel: View {
+    let title: String
+    let language: String
+    var body: some View {
+        TaskRowLayout(depth: 0) {
+            TaskCheckmark(depth: 0, completed: false, children: [], emphasized: false)
+            OpticalText(title: title, size: 13, language: language)
+                .foregroundStyle(DotistDesign.faint).lineLimit(1).truncationMode(.tail)
+            Color.clear.frame(width: 0, height: 0)
+        }
+    }
+}
+
+private struct TaskEmptyStateHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+/// Shared presentation keeps translated text constrained to the list width.
+struct TaskEmptyStateContent<AddRow: View>: View {
+    let title: String
+    let hint: String?
+    let language: String
+    @ViewBuilder var addRow: () -> AddRow
+    var body: some View {
+        VStack(spacing: 12) {
+            VStack(spacing: 8) {
+                OpticalText(title: title, size: 15, weight: .medium, language: language)
+                    .foregroundStyle(DotistDesign.ink).lineLimit(1).truncationMode(.tail)
+                    .accessibilityIdentifier("empty-state-title")
+                if let hint {
+                    OpticalText(title: hint, size: 12, language: language)
+                        .foregroundStyle(DotistDesign.faint).lineLimit(1).truncationMode(.tail)
+                }
+            }.frame(maxWidth: .infinity)
+            addRow()
+        }
+    }
+}
+
 struct DraggableFilterButton: View {
     let title: String
     let selected: Bool
     let language: String
+    var distance: Int = 0
     let choose: () -> Void
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @FocusState private var focused: Bool
     @State private var hovering = false
     @State private var origin: (mouse: NSPoint, window: NSPoint)?
 
     var body: some View {
         Button { if origin == nil { choose() } } label: {
             OpticalText(title: title, size: TaskDateFilterMetrics.size(selected: selected), weight: TaskDateFilterMetrics.weight(selected: selected), language: language)
-                .foregroundColor(selected ? DotistDesign.ink : hovering ? DotistDesign.muted : DotistDesign.faint)
+                .foregroundColor(focused ? DotistDesign.accent : selected ? DotistDesign.ink : hovering ? DotistDesign.muted : DotistDesign.faint)
+                .opacity(TaskDateFilterMetrics.opacity(distance: distance, hovered: hovering, focused: focused,
+                                                       increasedContrast: contrast == .increased, voiceOver: voiceOver))
                 .lineLimit(1)
-                .frame(width: TaskDateFilterMetrics.slotWidth(title: title, language: language), height: 30)
-        }.buttonStyle(.plain).modifier(DotistFocusRing()).onHover { hovering = $0 }
+                .frame(width: TaskDateFilterMetrics.slotWidth(title: title, language: language), height: TaskDateFilterMetrics.rowHeight)
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).focused($focused).focusEffectDisabled().onHover { hovering = $0 }
             .accessibilityAddTraits(selected ? .isSelected : [])
             .highPriorityGesture(DragGesture(minimumDistance: 4)
                 .onChanged { value in

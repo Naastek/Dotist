@@ -10,7 +10,9 @@ final class AppModel: ObservableObject {
     struct UndoEntry { let id: String; let title: String; let group: Bool }
     @Published private(set) var tasks: [DotistTask]
     @Published private(set) var groups: [DotistGroup]
-    @Published private(set) var settings: DotistSettings
+    @Published private(set) var settings: DotistSettings {
+        didSet { DotistDesign.fontPreferences = settings.fontPreferences }
+    }
     @Published private(set) var tagDescription: DotistTagDescription
     @Published private(set) var activeTag: String?
     @Published private var taggedTasks: [DotistTask] = []
@@ -70,6 +72,7 @@ final class AppModel: ObservableObject {
            let extra = try? JSONDecoder().decode([String: [String: String]].self, from: data) {
             for (language, values) in extra { dictionary[language, default: [:]].merge(values) { _, new in new } }
         }
+        DotistDesign.fontPreferences = settings.fontPreferences
         rebuildIndexes()
         // A stationary panel must recompute relative filters at midnight and
         // when the system changes its time zone or calendar preferences.
@@ -122,6 +125,11 @@ final class AppModel: ObservableObject {
     func groupDisplayName(_ id: String?) -> String {
         guard let id, id != DotistGroup.inboxID else { return text("无分组") }
         return groupsByID[id]?.name ?? text("无分组")
+    }
+    /// The composer uses All for its implicit inbox; other surfaces keep No Group.
+    func composerGroupDisplayName(_ id: String?) -> String {
+        guard let id, id != DotistGroup.inboxID else { return text("全部") }
+        return groupDisplayName(id)
     }
     func themeColor(forGroup id: String?) -> DotistGroupColor {
         let fallback = DotistGroupColor(rawValue: settings.allColor)

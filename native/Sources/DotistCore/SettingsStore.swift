@@ -65,6 +65,10 @@ final class SettingsStore: @unchecked Sendable {
             var next = value
         if let value = patch.theme { next.theme = value }
         if let value = patch.language { next.language = value }
+        if let value = patch.fontSerifLatin { next.fontSerifLatin = value }
+        if let value = patch.fontSansLatin { next.fontSansLatin = value }
+        if let value = patch.fontSerifCjk { next.fontSerifCjk = value }
+        if let value = patch.fontSansCjk { next.fontSansCjk = value }
         if let value = patch.opacity { next.opacity = value }
         if let value = patch.frost { next.frost = value }
         if let value = patch.alwaysOnTop { next.alwaysOnTop = value }
@@ -114,6 +118,11 @@ final class SettingsStore: @unchecked Sendable {
 
     private static func normalized(_ settings: DotistSettings) throws -> DotistSettings {
         var next = settings
+        let fonts = next.fontPreferences
+        next.fontSerifLatin = fonts.serifLatin
+        next.fontSansLatin = fonts.sansLatin
+        next.fontSerifCjk = fonts.serifCjk
+        next.fontSansCjk = fonts.sansCjk
         next.allColor = DotistGroupColor(rawValue: next.allColor).rawValue
         var seenTags: Set<String> = []
         next.tagOrder = next.tagOrder.filter { !$0.isEmpty && seenTags.insert($0).inserted }

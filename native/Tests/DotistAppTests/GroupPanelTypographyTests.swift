@@ -22,7 +22,7 @@ final class GroupPanelTypographyTests: XCTestCase {
             for serif in [false, true] {
                 for weight in [NSFont.Weight.regular, .semibold] {
                     let font = DotistDesign.nativeFont(13, weight: weight, serif: serif, language: language)
-                    XCTAssertEqual(font.familyName, serif ? "Source Serif 4" : "Source Sans 3")
+                    XCTAssertEqual(font.familyName, serif ? "Newsreader" : "Atkinson Hyperlegible Next")
                     let chinese = CTFontCreateForString(font as CTFont, "中文" as CFString, CFRange(location: 0, length: 2))
                     XCTAssertEqual(CTFontCopyFamilyName(chinese) as String, "Noto \(serif ? "Serif" : "Sans") \(region)", "\(language), serif=\(serif)")
                 }

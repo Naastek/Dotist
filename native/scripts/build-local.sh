@@ -64,6 +64,15 @@ if info.get("CFBundleIdentifier") != "dev.codex.dotist-native-qa":
     raise SystemExit("Expected an isolated native QA bundle")
 if info.get("LSMinimumSystemVersion") != json.loads(Path('native/app.json').read_text())['minimumMacOS']:
     raise SystemExit("QA minimum macOS does not match native/app.json; rebuild the QA application")
+import hashlib
+for row in Path('native/scripts/fonts.tsv').read_text().splitlines():
+    name, checksum, *source = row.split()
+    font = app / 'Contents/Resources/Fonts' / (name + '.ttf')
+    license = app / 'Contents/Resources/Licenses' / (name + '-OFL.txt')
+    if not font.is_file() or hashlib.sha256(font.read_bytes()).hexdigest() != checksum:
+        raise SystemExit(f'Missing or invalid packaged font: {name}; rebuild the QA application')
+    if not license.is_file() or (len(source) > 1 and hashlib.sha256(license.read_bytes()).hexdigest() != source[1]):
+        raise SystemExit(f'Missing or invalid packaged font license: {name}; rebuild the QA application')
 for relative in ("Contents/MacOS/dotist",
                  "Contents/Resources/icon.icns", "Contents/Frameworks/Sparkle.framework"):
     if not (app / relative).exists():

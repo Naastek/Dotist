@@ -36,7 +36,7 @@ struct SettingsSearchEntry: Identifiable, Equatable {
 enum SettingsSearchIndex {
     static let entries: [SettingsSearchEntry] = {
         let rows: [(SettingsModule, [String])] = [
-            (.appearance, ["主题", "玻璃预设", "透明程度", "磨砂程度", "失焦淡出", "淡出前等待", "淡出用时", "淡出后的不透明度", "全部（默认颜色）"]),
+            (.appearance, ["主题", "玻璃预设", "透明程度", "磨砂程度", "字体", "西文衬线", "西文无衬线", "中文衬线", "中文无衬线", "恢复默认字体", "失焦淡出", "淡出前等待", "淡出用时", "淡出后的不透明度", "全部（默认颜色）"]),
             (.general, ["语言", "显示在 Dock", "显示在菜单栏", "开机启动", "悬停显示详情", "窗口大小", "固定窗口", "自动收起", "收起等待时间", "窗口置顶", "分组", "标签"]),
             (.filters, ["启动时打开", "筛选器"]),
             (.menubar, ["显示内容", "日期透视", "分组", "轮播间隔", "左键点击", "右键点击"]),
@@ -91,6 +91,12 @@ enum SettingsSearchIndex {
     }
     private static func aliases(_ title: String) -> [String] {
         switch title {
+        case "字体": return ["Fonts Typeface フォント 字型 字體"]
+        case "西文衬线": return ["Fonts Latin serif 西文襯線 欧文セリフ Newsreader Source Serif New York 系统 系統 システム system"]
+        case "西文无衬线": return ["Fonts Latin sans serif 西文無襯線 欧文サンセリフ Atkinson Hyperlegible Next Source Sans SF Pro 系统 系統 システム system"]
+        case "中文衬线": return ["Fonts CJK serif 中文襯線 CJKセリフ 思源宋体 思源宋體 Noto Serif Chiron Sung HK 昭源宋体 昭源宋體 Songti 系统 系統 システム system"]
+        case "中文无衬线": return ["Fonts CJK sans serif 中文無襯線 CJKサンセリフ 思源黑体 思源黑體 Noto Sans PingFang 苹方 蘋方 系统 系統 システム system"]
+        case "恢复默认字体": return ["Restore default fonts フォントを初期設定に戻す 恢復預設字體"]
         case "全部（默认颜色）": return ["默认颜色 預設顏色 デフォルトカラー All default color colour 全部 颜色主题 顏色主題 カラーテーマ"]
         case "颜色": return ["Color Colour カラー 顏色"]
         case "语言": return ["language locale 言語 語言 English 日本語 简体中文 繁體中文 跟随系统 跟隨系統"]
@@ -101,9 +107,52 @@ enum SettingsSearchIndex {
     }
 }
 
+extension DotistFontRole {
+    static let restoreDefaultsTitle = "恢复默认字体"
+    static let previewText = "Aa 全部 work"
+    var title: String {
+        switch self {
+        case .serifLatin: return "西文衬线"
+        case .sansLatin: return "西文无衬线"
+        case .serifCjk: return "中文衬线"
+        case .sansCjk: return "中文无衬线"
+        }
+    }
+    var isSerif: Bool { self == .serifLatin || self == .serifCjk }
+    func value(in settings: DotistSettings) -> String {
+        switch self {
+        case .serifLatin: return settings.fontPreferences.serifLatin
+        case .sansLatin: return settings.fontPreferences.sansLatin
+        case .serifCjk: return settings.fontPreferences.serifCjk
+        case .sansCjk: return settings.fontPreferences.sansCjk
+        }
+    }
+    func set(_ value: String, in patch: inout DotistSettingsPatch) {
+        switch self {
+        case .serifLatin: patch.fontSerifLatin = value
+        case .sansLatin: patch.fontSansLatin = value
+        case .serifCjk: patch.fontSerifCjk = value
+        case .sansCjk: patch.fontSansCjk = value
+        }
+    }
+    func label(_ value: String) -> String {
+        switch value {
+        case "newsreader": return "Newsreader"
+        case "atkinson-next": return "Atkinson Hyperlegible Next"
+        case "source-serif-4": return "Source Serif 4"
+        case "source-sans-3": return "Source Sans 3"
+        case "noto-serif": return "思源宋体"
+        case "noto-sans": return "思源黑体"
+        case "chiron-sung-hk": return "昭源宋体"
+        default: return "系统"
+        }
+    }
+}
+
 /// A grouped form container. Row separators belong to the rows so conditional
 /// settings keep the same spacing and baseline when they appear.
 struct SettingsGroup<Content: View>: View {
+    @ObservedObject private var typography = DotistTypography.shared
     let title: String
     let footer: String
     let language: String
@@ -175,6 +224,7 @@ struct SettingsColorPalette: View {
 
 /// Use the same font tokens for AppKit segment labels as for SwiftUI row text.
 struct SettingsSegmentedPicker: NSViewRepresentable {
+    @ObservedObject private var typography = DotistTypography.shared
     @Binding var selection: String
     let options: [(String, String)]
     let label: String

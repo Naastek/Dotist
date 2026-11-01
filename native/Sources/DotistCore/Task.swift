@@ -59,10 +59,46 @@ public struct DotistTagDescription: Decodable, Equatable, Sendable {
     public let counts: [DotistTagCount]
 }
 
+/// Stable persisted IDs; unknown or absent choices always resolve to defaults.
+public enum DotistFontRole: String, CaseIterable, Sendable {
+    case serifLatin, sansLatin, serifCjk, sansCjk
+    public var choices: [String] {
+        switch self {
+        case .serifLatin: return ["newsreader", "source-serif-4", "system"]
+        case .sansLatin: return ["atkinson-next", "source-sans-3", "system"]
+        case .serifCjk: return ["noto-serif", "chiron-sung-hk", "system"]
+        case .sansCjk: return ["noto-sans", "system"]
+        }
+    }
+    public var defaultValue: String { choices[0] }
+    public func normalized(_ value: String?) -> String { value.flatMap { choices.contains($0) ? $0 : nil } ?? defaultValue }
+}
+
+public struct DotistFontPreferences: Equatable, Sendable {
+    public var serifLatin: String
+    public var sansLatin: String
+    public var serifCjk: String
+    public var sansCjk: String
+    public init(serifLatin: String? = nil, sansLatin: String? = nil, serifCjk: String? = nil, sansCjk: String? = nil) {
+        self.serifLatin = DotistFontRole.serifLatin.normalized(serifLatin)
+        self.sansLatin = DotistFontRole.sansLatin.normalized(sansLatin)
+        self.serifCjk = DotistFontRole.serifCjk.normalized(serifCjk)
+        self.sansCjk = DotistFontRole.sansCjk.normalized(sansCjk)
+    }
+    public var cacheKey: String { [serifLatin, sansLatin, serifCjk, sansCjk].joined(separator: "|") }
+}
+
 /// Native preferences persisted next to the task database.
 public struct DotistSettings: Codable, Equatable, Sendable {
     public var theme: String
     public var language: String
+    public var fontSerifLatin: String? = nil
+    public var fontSansLatin: String? = nil
+    public var fontSerifCjk: String? = nil
+    public var fontSansCjk: String? = nil
+    public var fontPreferences: DotistFontPreferences {
+        DotistFontPreferences(serifLatin: fontSerifLatin, sansLatin: fontSansLatin, serifCjk: fontSerifCjk, sansCjk: fontSansCjk)
+    }
     public var opacity: UInt8
     public var frost: UInt8
     public var toggleShortcut: String
@@ -103,6 +139,10 @@ public struct DotistSettings: Codable, Equatable, Sendable {
 public struct DotistSettingsPatch: Encodable, Sendable {
     public var theme: String?
     public var language: String?
+    public var fontSerifLatin: String?
+    public var fontSansLatin: String?
+    public var fontSerifCjk: String?
+    public var fontSansCjk: String?
     public var opacity: UInt8?
     public var frost: UInt8?
     public var alwaysOnTop: Bool?
