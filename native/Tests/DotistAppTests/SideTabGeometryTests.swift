@@ -1,5 +1,6 @@
 import AppKit
 import DotistCore
+import SwiftUI
 import XCTest
 @testable import DotistApp
 
@@ -10,6 +11,48 @@ final class SideTabGeometryTests: XCTestCase {
         XCTAssertEqual(SideTabGeometry.width(expanded: false, fullWidth: 111), 10)
         XCTAssertEqual(SideTabGeometry.width(expanded: true, fullWidth: 111), 111)
     }
+    func testOneExpansionSampleKeepsWindowContentAndTextSynchronized() {
+        let panel = CGRect(x: 500, y: 100, width: 364, height: 620)
+        for right in [false, true] {
+            for step in 0...120 {
+                let progress = CGFloat(step) / 120
+                let sample = SideTabGeometry.snapshot(panel: panel, fullWidths: [48, 111, 180], progress: progress, right: right)
+                XCTAssertEqual(sample.textOpacity, Double(progress), accuracy: 0.000001)
+                XCTAssertEqual(sample.window.width, 10 + 170 * progress + 2 * SideTabGeometry.shadowInset, accuracy: 0.000001)
+                for (index, tab) in sample.tabs.enumerated() {
+                    let fullWidth: CGFloat = [48, 111, 180][index]
+                    XCTAssertEqual(tab.width, 10 + (fullWidth - 10) * progress, accuracy: 0.000001)
+                    XCTAssertEqual(right ? tab.minX : tab.maxX, right ? panel.maxX : panel.minX, accuracy: 0.000001)
+                    XCTAssertTrue(sample.window.contains(tab))
+                    // The first tab and its shadow start below the panel's corner.
+                    XCTAssertLessThanOrEqual(tab.maxY, panel.maxY - 40)
+                    let local = tab.offsetBy(dx: -sample.window.minX, dy: -sample.window.minY)
+                    XCTAssertEqual(local.offsetBy(dx: sample.window.minX, dy: sample.window.minY), tab)
+                }
+            }
+        }
+        XCTAssertEqual(SideTabGeometry.snapshot(panel: panel, fullWidths: [111], progress: -1, right: false).textOpacity, 0)
+        XCTAssertEqual(SideTabGeometry.snapshot(panel: panel, fullWidths: [111], progress: 2, right: false).textOpacity, 1)
+    }
+
+    func testExpansionStartsOnEventFinishesIn160MillisecondsAndReversesWithoutJump() {
+        var animation = SideTabExpansion()
+        animation.setExpanded(true, at: 10, reduceMotion: false)
+        XCTAssertEqual(animation.progress(at: 10), 0)
+        XCTAssertGreaterThan(animation.progress(at: 10 + 1.0 / 120), 0)
+        XCTAssertEqual(animation.progress(at: 10.16), 1, accuracy: 0.000001)
+        let current = animation.progress(at: 10.08)
+        animation.setExpanded(false, at: 10.08, reduceMotion: false)
+        XCTAssertEqual(animation.progress(at: 10.08), current, accuracy: 0.000001)
+        XCTAssertLessThan(animation.progress(at: 10.09), current)
+        XCTAssertEqual(animation.progress(at: 10.24), 0, accuracy: 0.000001)
+        animation.setExpanded(true, at: 11, reduceMotion: true)
+        XCTAssertEqual(animation.progress(at: 11), 1)
+        animation.setExpanded(false, at: 11, reduceMotion: true)
+        XCTAssertEqual(animation.progress(at: 11), 0)
+        XCTAssertEqual(SideTabGeometry.collapseDelay, 0.12)
+    }
+
     func testSideChangesAtWidthDependentScreenBoundary() {
         XCTAssertTrue(SideTabGeometry.isRight(panelMinX: 109, visibleMinX: 0, expandedWidth: 110))
         XCTAssertFalse(SideTabGeometry.isRight(panelMinX: 110, visibleMinX: 0, expandedWidth: 110))
@@ -63,6 +106,37 @@ final class SideTabGeometryTests: XCTestCase {
 }
 
 @MainActor
+final class SideTabLabelRenderingTests: XCTestCase {
+    func testExpandedNamesRenderAndCollapsedNamesAreFullyTransparent() throws {
+        for (language, name) in [("zh-CN", "全部"), ("en", "Work projects"), ("ja", "仕事の計画"), ("zh-Hant", "工作與生活")] {
+            let text = name as NSString
+            let fullWidth = SideTabGeometry.expandedWidth(textWidth: max(
+                text.size(withAttributes: [.font: DotistDesign.nativeFont(13, serif: true, language: language)]).width,
+                text.size(withAttributes: [.font: DotistDesign.nativeFont(13, weight: .semibold, serif: true, language: language)]).width))
+            for right in [false, true] {
+                for expanded in [false, true] {
+                    let label = SideTabLabel(name: name, language: language, selected: true, hovered: false,
+                        right: right, width: expanded ? fullWidth : 10, fullWidth: fullWidth, textOpacity: expanded ? 1 : 0)
+                    let renderer = ImageRenderer(content: label.environment(\.colorScheme, .light))
+                    let bitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+                    var foregroundPixels = 0
+                    for y in 0..<bitmap.pixelsHigh {
+                        for x in 0..<bitmap.pixelsWide {
+                            if (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.2 { foregroundPixels += 1 }
+                        }
+                    }
+                    if expanded {
+                        XCTAssertGreaterThan(foregroundPixels, 10, "\(language) name must render at expanded width")
+                    } else {
+                        XCTAssertEqual(foregroundPixels, 0, "Narrow edges must contain no letters or ellipsis")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@MainActor
 final class SideTabWindowSynchronizationTests: XCTestCase {
     private func hitTarget(in content: NSView, atWindowPoint point: CGPoint) -> NSView? {
         // hitTest takes its receiver's superview coordinates. NSHostingView is
@@ -88,7 +162,7 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(60))
         content.layoutSubtreeIfNeeded()
         let before = model.visibleGroups.map(\.id)
-        let right = child.frame.minX >= parent.frame.maxX
+        let right = child.frame.midX > parent.frame.midX
         for index in 0...before.count {
             let frame = SideTabGeometry.frame(panel: parent.frame, index: index, width: 10, right: right)
             let point = CGPoint(x: frame.midX, y: frame.midY)
@@ -97,6 +171,60 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
             let actual = child.convertToScreen(target.convert(target.bounds, to: nil))
             XCTAssertEqual(actual.midY, frame.midY, accuracy: 0.001, "Tab \(index) must hit its own capture view")
         }
+    }
+
+    func testExpandedWindowAndNativeCaptureFramesUseTheSameWidth() async throws {
+        _ = NSApplication.shared
+        guard NSScreen.main != nil else {
+            throw XCTSkip("Live expansion requires a WindowServer display; label rendering and geometry are checked offscreen")
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-wIA-expand-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = try AppModel(store: TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path))
+        let parent = DotistPanel(contentRect: CGRect(x: 500, y: 100, width: 364, height: 620),
+                                 styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        parent.appearance = NSAppearance(named: .aqua)
+        parent.isReleasedWhenClosed = false
+        defer { parent.close() }
+        let motion = PanelMotion(model: model, panel: parent, size: parent.frame.size, title: { "test" })
+        let controller = SideTabsController(parent: parent, model: model, state: TaskPanelState(), motion: motion)
+        defer { controller.stop() }
+        parent.orderFront(nil)
+        let child = try XCTUnwrap(parent.childWindows?.first)
+        let content = try XCTUnwrap(child.contentView)
+        let right = child.frame.midX > parent.frame.midX
+        let tab = SideTabGeometry.frame(panel: parent.frame, index: 0, width: 10, right: right)
+        let mouse = CGPoint(x: tab.midX, y: tab.midY)
+        let collapsed = child.frame
+        controller.synchronize(mouse: mouse)
+        for _ in 0..<24 {
+            try await Task.sleep(for: .milliseconds(10))
+            controller.synchronize(mouse: mouse)
+        }
+        content.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(child.frame.width, collapsed.width)
+        let capture = try XCTUnwrap(hitTarget(in: content, atWindowPoint: child.convertPoint(fromScreen: mouse)))
+        XCTAssertEqual(String(describing: type(of: capture)), "PointerView")
+        let actual = child.convertToScreen(capture.convert(capture.bounds, to: nil))
+        let text = model.text("全部") as NSString
+        let fullWidth = SideTabGeometry.expandedWidth(textWidth: max(
+            text.size(withAttributes: [.font: DotistDesign.nativeFont(13, serif: true, language: model.language)]).width,
+            text.size(withAttributes: [.font: DotistDesign.nativeFont(13, weight: .semibold, serif: true, language: model.language)]).width))
+        XCTAssertEqual(actual.width, fullWidth, accuracy: 0.001)
+        XCTAssertEqual(right ? actual.minX : actual.maxX, right ? parent.frame.maxX : parent.frame.minX, accuracy: 0.001)
+        // Leaving keeps the expanded width through the debounce, then shrinks both
+        // the actual child window and its native capture region back to 10pt.
+        let outside = CGPoint(x: parent.frame.midX, y: parent.frame.midY)
+        controller.synchronize(mouse: outside)
+        XCTAssertGreaterThan(child.frame.width, collapsed.width)
+        for _ in 0..<40 {
+            try await Task.sleep(for: .milliseconds(10))
+            controller.synchronize(mouse: outside)
+        }
+        content.layoutSubtreeIfNeeded()
+        XCTAssertEqual(child.frame, collapsed)
+        let narrow = try XCTUnwrap(hitTarget(in: content, atWindowPoint: child.convertPoint(fromScreen: mouse)))
+        XCTAssertEqual(narrow.bounds.width, SideTabGeometry.collapsedWidth, accuracy: 0.001)
     }
 
     func testNativeTabMouseCaptureReordersWithoutSelectingOrMovingPanel() async throws {
@@ -121,7 +249,7 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         let child = try XCTUnwrap(parent.childWindows?.first)
         let before = model.visibleGroups.map(\.id)
         XCTAssertGreaterThanOrEqual(before.count, 2)
-        let right = child.frame.minX >= parent.frame.maxX
+        let right = child.frame.midX > parent.frame.midX
         let point = SideTabGeometry.frame(panel: parent.frame, index: 1, width: 10, right: right)
         let start = CGPoint(x: point.midX, y: point.midY)
         controller.synchronize(mouse: start)
@@ -215,13 +343,16 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         XCTAssertFalse(child.isMovable)
         XCTAssertFalse(child.isOpaque)
         XCTAssertEqual(child.backgroundColor, .clear)
+        XCTAssertFalse(try XCTUnwrap(child.contentView).isOpaque)
+        XCTAssertFalse(try XCTUnwrap(child.contentView?.layer).masksToBounds)
 
         func assertAttached(file: StaticString = #filePath, line: UInt = #line) {
             let frame = parent.frame
             let right = SideTabGeometry.isRight(panelMinX: frame.minX,
                 visibleMinX: (parent.screen ?? NSScreen.main)?.visibleFrame.minX ?? frame.minX, expandedWidth: child.frame.width)
-            XCTAssertEqual(child.frame, SideTabGeometry.windowFrame(panel: frame, count: model.visibleGroups.count + 1,
-                width: child.frame.width, right: right), file: file, line: line)
+            XCTAssertEqual(child.frame, SideTabGeometry.snapshot(panel: frame,
+                fullWidths: Array(repeating: SideTabGeometry.collapsedWidth, count: model.visibleGroups.count + 1),
+                progress: 0, right: right).window, file: file, line: line)
         }
         assertAttached()
         for frame in [CGRect(x: 700, y: 170, width: 364, height: 620),

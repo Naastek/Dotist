@@ -1,7 +1,7 @@
 import Foundation
 
 enum ToolbarItem: String, CaseIterable, Codable {
-    case views, pin, lock, search, collapse
+    case views, pin, lock, color, collapse
 }
 
 enum ToolbarVisibility: String, Codable, CaseIterable {
@@ -14,19 +14,57 @@ enum ToolbarVisibility: String, Codable, CaseIterable {
 final class ToolbarConfig: ObservableObject {
     static let shared = ToolbarConfig()
     private static let key = "dotist.toolbar.v1"
-    private struct Stored: Codable { var order: [ToolbarItem]; var visibility: [ToolbarItem: ToolbarVisibility] }
+    private struct Stored: Codable {
+        var order: [ToolbarItem]
+        var visibility: [ToolbarItem: ToolbarVisibility]
+        private enum CodingKeys: String, CodingKey { case order, visibility }
+
+        init(order: [ToolbarItem], visibility: [ToolbarItem: ToolbarVisibility]) {
+            self.order = order
+            self.visibility = visibility
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            order = try values.decode([String].self, forKey: .order).compactMap(ToolbarItem.init(rawValue:))
+            // v1 encoded enum-keyed dictionaries as alternating key/value arrays.
+            // Accept that format and the string-keyed format, dropping retired items.
+            if let dictionary = try? values.decode([String: ToolbarVisibility].self, forKey: .visibility) {
+                visibility = Dictionary(uniqueKeysWithValues: dictionary.compactMap { key, value in
+                    ToolbarItem(rawValue: key).map { ($0, value) }
+                })
+            } else {
+                var entries = try values.nestedUnkeyedContainer(forKey: .visibility)
+                visibility = [:]
+                while !entries.isAtEnd {
+                    let key = try entries.decode(String.self)
+                    let value = try entries.decode(ToolbarVisibility.self)
+                    if let item = ToolbarItem(rawValue: key) { visibility[item] = value }
+                }
+            }
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode(order.map(\.rawValue), forKey: .order)
+            try values.encode(Dictionary(uniqueKeysWithValues: visibility.map { ($0.key.rawValue, $0.value) }), forKey: .visibility)
+        }
+    }
+    private let defaults: UserDefaults
 
     @Published private(set) var order: [ToolbarItem]
     @Published private(set) var visibility: [ToolbarItem: ToolbarVisibility]
 
-    static let defaultOrder: [ToolbarItem] = [.views, .pin, .lock, .search, .collapse]
+    static let defaultOrder: [ToolbarItem] = [.views, .pin, .lock, .color, .collapse]
     static let defaultVisibility: [ToolbarItem: ToolbarVisibility] =
-        [.views: .hover, .pin: .hover, .lock: .hover, .search: .hidden, .collapse: .always]
+        [.views: .hover, .pin: .hover, .lock: .hover, .color: .hover, .collapse: .always]
 
-    private init() {
-        if let data = UserDefaults.standard.data(forKey: Self.key),
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if let data = defaults.data(forKey: Self.key),
            let stored = try? JSONDecoder().decode(Stored.self, from: data) {
-            let known = stored.order.filter { ToolbarItem.allCases.contains($0) }
+            var seen: Set<ToolbarItem> = []
+            let known = stored.order.filter { seen.insert($0).inserted }
             order = known + ToolbarItem.allCases.filter { !known.contains($0) }
             visibility = Self.defaultVisibility.merging(stored.visibility) { _, new in new }
         } else {
@@ -53,7 +91,7 @@ final class ToolbarConfig: ObservableObject {
 
     private func save() {
         if let data = try? JSONEncoder().encode(Stored(order: order, visibility: visibility)) {
-            UserDefaults.standard.set(data, forKey: Self.key)
+            defaults.set(data, forKey: Self.key)
         }
     }
 }

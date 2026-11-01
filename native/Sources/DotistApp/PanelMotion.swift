@@ -275,9 +275,60 @@ private struct FloatingSurface: View {
     let color: DotistGroupColor
 
     var body: some View {
-        FloatingMaterial(opacity: model.settings.opacity, frost: model.settings.frost, compact: motion.bubble, color: color)
+        FloatingPanelMaterial(opacity: model.settings.opacity, frost: model.settings.frost, compact: motion.bubble, color: color)
             .frame(width: motion.bubble && !motion.animationInProgress ? 48 + (size.width - 48) * reveal : size.width, height: size.height)
             .frame(width: size.width, height: size.height, alignment: motion.bubbleOnRight ? .topTrailing : .topLeading)
+    }
+}
+
+/// Keep the color wash above paper/frost so user opacity never erases the tint.
+/// Shared by the expanded panel, circle and hover strip.
+struct FloatingPanelMaterial: View {
+    let opacity: UInt8
+    let frost: UInt8
+    let compact: Bool
+    let color: DotistGroupColor
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        FloatingPanelSurface(opacity: opacity, frost: frost, compact: compact, color: color,
+                             solid: reduceTransparency || contrast == .increased, scheme: scheme)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: color)
+    }
+}
+
+/// Resolved material inputs also let previews inspect the opaque accessibility surface.
+struct FloatingPanelSurface: View {
+    let opacity: UInt8
+    let frost: UInt8
+    let compact: Bool
+    let color: DotistGroupColor
+    let solid: Bool
+    let scheme: ColorScheme
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: compact ? 24 : DotistDesign.windowCornerRadius, style: .continuous)
+        Group {
+            if solid {
+                DotistDesign.paper
+            } else if compact {
+                Color.clear.glassEffect(.regular.tint(DotistTheme.tint(color, scheme)).interactive(), in: shape)
+                    .overlay(paperOverlay)
+            } else {
+                Color.clear.glassEffect(.regular.tint(DotistTheme.tint(color, scheme)), in: shape)
+                    .overlay(paperOverlay)
+            }
+        }
+        .overlay(DotistTheme.swatch(color).opacity(solid ? 0.08 : (scheme == .dark ? 0.18 : 0.16)))
+        .clipShape(shape)
+    }
+
+    private var paperOverlay: some View {
+        DotistDesign.paper.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false))
+            .overlay(DotistDesign.paper.opacity(Double(frost) / 100 * 0.12))
     }
 }
 

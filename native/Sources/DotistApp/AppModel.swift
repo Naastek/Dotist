@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import DotistCore
 import Foundation
 import GRDB
@@ -47,6 +48,7 @@ final class AppModel: ObservableObject {
     private var sortedTags: [DotistTagCount] = []
     private var pendingChanges = 0
     private var dictionary: [String: [String: String]] = [:]
+    private var dateFilterObservers = Set<AnyCancellable>()
 
     init(store: TaskStore? = nil) throws {
         core = try store ?? TaskStore()
@@ -69,6 +71,13 @@ final class AppModel: ObservableObject {
             for (language, values) in extra { dictionary[language, default: [:]].merge(values) { _, new in new } }
         }
         rebuildIndexes()
+        // A stationary panel must recompute relative filters at midnight and
+        // when the system changes its time zone or calendar preferences.
+        for name in [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
+            NotificationCenter.default.publisher(for: name).sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.objectWillChange.send() }
+            }.store(in: &dateFilterObservers)
+        }
         observation = core.observe(onError: { [weak self] error in
             Task { @MainActor in self?.error = error.localizedDescription }
         }, onChange: { [weak self] snapshot in
@@ -144,6 +153,22 @@ final class AppModel: ObservableObject {
     }
     func ordered(_ values: [DotistTask]) -> [DotistTask] {
         values.sorted { $0.position == $1.position ? $0.id < $1.id : $0.position < $1.position }
+    }
+
+    func filteredTasks(scope: String, groupID: String? = nil, tag: String? = nil,
+                       customRange: TaskDateRange? = nil, completed: Bool = false,
+                       now: Date = Date(), calendar: Calendar = .current) -> TaskFilterResult {
+        TaskFiltering(tasks, now: now, calendar: calendar).filter(scope: scope, groupID: groupID, tag: tag,
+                                                               customRange: customRange, completed: completed)
+    }
+
+    func todayTaskSections(groupID: String? = nil, tag: String? = nil,
+                           now: Date = Date(), calendar: Calendar = .current) -> TaskTodaySections {
+        TaskFiltering(tasks, now: now, calendar: calendar).todaySections(groupID: groupID, tag: tag)
+    }
+
+    func dateFilterRange(scope: String, now: Date = Date(), calendar: Calendar = .current) -> TaskDateRange {
+        TaskFiltering([], now: now, calendar: calendar).range(scope: scope)
     }
 
     func refresh() {

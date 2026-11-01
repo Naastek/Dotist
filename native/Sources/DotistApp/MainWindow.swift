@@ -18,6 +18,7 @@ struct MainWindow: View {
     @State private var composerHovered = false
     @State private var composerFocused = false
     @State private var draggedToolbarItem: ToolbarItem?
+    @State private var showColorPicker = false
     @State private var shelfTarget: String?
     @State private var composer = ""
     @State private var composerSubmitting = false
@@ -372,13 +373,7 @@ struct MainWindow: View {
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + (reduced ? 0 : 0.14)) {
-            let complete = {
-                if let parent = target.parentID {
-                    state.expanded.insert(parent)
-                    state.expanded.formUnion(TaskHierarchy(model.tasks).ancestors(of: parent).map(\.id))
-                }
-                clearReorder()
-            }
+            let complete = { clearReorder() }
             if drag.rootIDs.count == 1 {
                 model.commitReorder(taskID: drag.rootIDs[0], to: target, completed: complete, failed: { clearReorder() })
             } else {
@@ -437,25 +432,28 @@ struct MainWindow: View {
         case .views: "rectangle.split.2x1"
         case .pin: model.settings.alwaysOnTop ? "pin.fill" : "pin"
         case .lock: model.settings.locked ? "lock.fill" : "lock.open"
-        case .search: "magnifyingglass"
+        case .color: "paintpalette"
         case .collapse: "arrow.down.right.and.arrow.up.left"
         }
         let labelKey: String = switch item {
         case .views: "任务视图"
         case .pin: "置顶窗口"
         case .lock: "固定窗口"
-        case .search: "搜索"
+        case .color: "颜色"
         case .collapse: "收起为悬浮球"
         }
         let label = model.text(labelKey)
         return toolbarButton(symbol, label: label) {
             switch item {
             case .views: showViews()
-            case .search: showSearch()
+            case .color: showColorPicker.toggle()
             case .collapse: collapse()
             case .pin: var patch = DotistSettingsPatch(); patch.alwaysOnTop = !model.settings.alwaysOnTop; model.updateSettings(patch)
             case .lock: var patch = DotistSettingsPatch(); patch.locked = !model.settings.locked; model.updateSettings(patch)
             }
+        }.accessibilityIdentifier("toolbar:\(item.rawValue)")
+        .popover(isPresented: Binding(get: { item == .color && showColorPicker }, set: { if item == .color { showColorPicker = $0 } })) {
+            colorPicker
         }.onDrag {
             guard NSEvent.modifierFlags.contains(.command) else { return NSItemProvider() }
             draggedToolbarItem = item
@@ -466,12 +464,65 @@ struct MainWindow: View {
         }
     }
 
+    private var colorPicker: some View {
+        HStack(spacing: 8) {
+            ForEach(DotistGroupColor.allCases, id: \.self) { color in
+                let selected = state.selectedColor(in: model) == color
+                Button {
+                    state.selectColor(color, in: model)
+                    showColorPicker = false
+                } label: {
+                    ZStack {
+                        Rectangle().fill(color == .none ? DotistDesign.paper : DotistTheme.swatch(color))
+                        if color == .none && !selected {
+                            Image(systemName: "nosign").font(font(13)).foregroundStyle(DotistDesign.muted)
+                        }
+                        if selected {
+                            Image(systemName: "checkmark").font(font(11, .semibold))
+                                .foregroundStyle(color == .none ? DotistDesign.ink : Color.black)
+                        }
+                    }.frame(width: 22, height: 22)
+                        .overlay(Rectangle().strokeBorder(selected ? DotistDesign.ink : DotistDesign.rule, lineWidth: selected ? 2 : 0.5))
+                        .padding(2).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                    .help(model.text(colorLabel(color)))
+                    .accessibilityLabel(Text(model.text(colorLabel(color))))
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .accessibilityIdentifier("panel-color:\(color.rawValue)")
+            }
+        }.padding(12)
+    }
+
+    @ViewBuilder private func groupColorMenu(_ groupID: String) -> some View {
+        let current = model.groups.first { $0.id == groupID }.map { DotistGroupColor(rawValue: $0.color) } ?? .none
+        ForEach(DotistGroupColor.allCases, id: \.self) { color in
+            Button { model.setGroupColor(groupID, color) } label: {
+                if current == color { Label(model.text(colorLabel(color)), systemImage: "checkmark") }
+                else { Text(model.text(colorLabel(color))) }
+            }.accessibilityIdentifier("group-color:\(groupID):\(color.rawValue)")
+        }
+    }
+
+    private func colorLabel(_ color: DotistGroupColor) -> String {
+        switch color {
+        case .none: "无颜色"
+        case .red: "红色"
+        case .orange: "橙色"
+        case .yellow: "黄色"
+        case .green: "绿色"
+        case .teal: "青色"
+        case .blue: "蓝色"
+        case .purple: "紫色"
+        case .pink: "粉色"
+        }
+    }
+
     private var dateFilters: some View {
         HStack(spacing: 8) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 16) {
                     ForEach(model.settings.filters, id: \.self) { id in
-                        DraggableFilterButton(title: model.text(filterLabel(id)), selected: state.scope == id, language: model.language) {
+                        DraggableFilterButton(title: model.text(filterLabel(id)), selected: customStart == nil && state.scope == id, language: model.language) {
                             state.scope = id; customStart = nil; customEnd = nil
                         }
                     }
@@ -482,8 +533,8 @@ struct MainWindow: View {
                 .popover(isPresented: $showCalendar) {
                     RangeCalendar(model: model, start: customStart ?? Date().dotistDay, end: customEnd ?? Date().dotistDay, choose: { start, end in
                         state.scope = "today"
-                        customStart = start == Date().dotistDay && end == start ? nil : start
-                        customEnd = customStart == nil ? nil : end
+                        customStart = start
+                        customEnd = end
                     }, close: { showCalendar = false })
                 }
         }.padding(.leading, 16).padding(.trailing, 11).padding(.bottom, 4).frame(height: 30).background(WindowDragArea())
@@ -528,7 +579,7 @@ struct MainWindow: View {
     private var dropGroupIDs: [String] { [DotistGroup.inboxID] + model.visibleGroups.map(\.id) }
 
     @ViewBuilder private var allGroups: some View {
-        if state.groupID == nil, let inbox = model.groups.first(where: { $0.id == DotistGroup.inboxID }) {
+        if state.groupID == nil || state.groupID == DotistGroup.inboxID, let inbox = model.groups.first(where: { $0.id == DotistGroup.inboxID }) {
             taskGroup(inbox, showsHeader: false)
         }
         ForEach(model.visibleGroups.filter { state.groupID == nil || $0.id == state.groupID }) { group in
@@ -539,8 +590,13 @@ struct MainWindow: View {
     private func taskGroup(_ group: DotistGroup, showsHeader: Bool = true) -> some View {
             let roots = showsHeader ? model.ordered(panelTasks.filter { $0.category == group.id && $0.parentId == nil })
                 : model.ungroupedTasks.filter { root in panelTasks.contains { $0.id == root.id } }
-            let open = roots.filter { !$0.completed }
-            let completed = roots.filter(\.completed)
+            let openResult = model.filteredTasks(scope: "all", groupID: group.id, tag: state.activeTag)
+            let completedResult = model.filteredTasks(scope: "done", groupID: group.id, tag: state.activeTag)
+            let open = openResult.roots
+            // A completed descendant belongs to its visible parent's full tree.
+            // Only roots absent from the open trees belong in the folded section.
+            let openRootIDs = Set(open.map(\.id))
+            let completed = completedResult.roots.filter { !openRootIDs.contains($0.id) }
             let firstGroup = model.visibleGroups.first { state.groupID == nil || $0.id == state.groupID }?.id
             let firstSection = !showsHeader || (group.id == firstGroup && (state.groupID != nil || model.ungroupedTasks.isEmpty))
             return VStack(alignment: .leading, spacing: 0) {
@@ -558,10 +614,11 @@ struct MainWindow: View {
                         .contextMenu {
                             Button(model.text("添加任务")) { beginGroupDraft(group, after: open.last) }
                             Button(model.text("在独立面板中打开")) { showGroupPanel(group.id) }
+                            Menu(model.text("颜色")) { groupColorMenu(group.id) }
                         }
                 }
                 if !showsHeader && roots.isEmpty && drag != nil { Color.clear.frame(height: 32) }
-                ForEach(Array(open.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? open[index - 1].id : nil, next: index + 1 < open.count ? open[index + 1].id : nil) }
+                ForEach(Array(open.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? open[index - 1].id : nil, next: index + 1 < open.count ? open[index + 1].id : nil, result: openResult) }
                 emptyGroupGhost(group.id, region: group.id)
                 if addingToGroup == group.id {
                     TaskRowLayout(depth: 0) {
@@ -581,126 +638,110 @@ struct MainWindow: View {
                             Text(model.text("已完成"))
                         }.font(font(12)).foregroundColor(DotistDesign.faint).frame(height: 28)
                     }.buttonStyle(.plain).modifier(DotistFocusRing())
-                    if state.folded.contains(group.id) { ForEach(Array(completed.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? completed[index - 1].id : nil, next: index + 1 < completed.count ? completed[index + 1].id : nil) } }
+                    if state.folded.contains(group.id) { ForEach(Array(completed.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? completed[index - 1].id : nil, next: index + 1 < completed.count ? completed[index + 1].id : nil, result: completedResult) } }
                 }
             }.padding(.top, firstSection ? 6 : 20).id(group.id).contentShape(Rectangle())
                 .onHover { over in if over { hoveredGroup = group.id } else if hoveredGroup == group.id { hoveredGroup = nil } }
                 .background(groupGeometry(group.id, region: group.id))
     }
 
-    private func taskTree(_ task: DotistTask, previous: String?, next: String?) -> AnyView {
+    private func taskTree(_ task: DotistTask, previous: String?, next: String?, result: TaskFilterResult) -> AnyView {
+        // Group trees always show their complete subtree, including completed
+        // children. Date-filtered lists render their own matching rows separately.
         let children = model.visibleChildren(of: task).filter { child in panelTasks.contains { $0.id == child.id } }
         return AnyView(VStack(alignment: .leading, spacing: 0) {
             taskRow(task, children: model.children(of: task), sub: model.depth(of: task) > 0, allTasks: false, previous: previous, next: next)
-            if state.expanded.contains(task.id) && model.depth(of: task) < DotistTask.maxDepth {
+                .opacity(result.contextIDs.contains(task.id) ? 0.5 : 1)
+            if model.depth(of: task) < DotistTask.maxDepth {
                 ForEach(Array(children.enumerated()), id: \.element.id) { index, child in
-                    taskTree(child, previous: index > 0 ? children[index - 1].id : nil, next: index + 1 < children.count ? children[index + 1].id : nil)
+                    taskTree(child, previous: index > 0 ? children[index - 1].id : nil, next: index + 1 < children.count ? children[index + 1].id : nil, result: result)
                 }
             }
             draftRow(after: task, sub: model.depth(of: task) > 0)
         })
     }
 
+    private var customDateRange: TaskDateRange? {
+        customStart.map { TaskDateRange($0, customEnd ?? $0) }
+    }
+
+    private func dateFilterResult(completed: Bool = false, range: TaskDateRange? = nil) -> TaskFilterResult {
+        model.filteredTasks(scope: state.scope, groupID: state.groupID, tag: state.activeTag,
+                            customRange: range ?? customDateRange, completed: completed)
+    }
+
     @ViewBuilder private var filteredTasks: some View {
-        let today = Date().dotistDay
-        if state.scope == "overdue" {
-            let values = model.ordered(panelTasks.filter { !$0.completed && $0.dueDate.map { $0 < today } == true })
-            if values.isEmpty { Text(model.text("没有逾期的任务。")).font(font(12)).foregroundColor(DotistDesign.muted) }
-            else { todaySection("已逾期", items: values) }
-        } else if state.scope == "undated" {
-            let values = panelTasks.filter { !$0.completed && $0.dueDate == nil }
-            if values.isEmpty { Text(model.text("每个任务都有到期日。")).font(font(12)).foregroundColor(DotistDesign.muted) }
-            else {
-                flatRows(model.ordered(values))
-            }
-        } else if state.scope == "done" {
-            let values = model.ordered(Array(panelTasks.filter(\.completed).sorted { $0.updatedAt > $1.updatedAt }.prefix(200)))
-            if values.isEmpty { Text(model.text("还没有完成的任务。")).font(font(12)).foregroundColor(DotistDesign.muted) }
-            else { todaySection("已完成", items: values) }
+        let result = dateFilterResult()
+        if customDateRange == nil && state.scope == "overdue" {
+            if result.matches.isEmpty { Text(model.text("没有逾期的任务。")).font(font(12)).foregroundColor(DotistDesign.muted) }
+            else { todaySection("已逾期", result: result) }
+        } else if customDateRange == nil && state.scope == "undated" {
+            if result.matches.isEmpty { Text(model.text("每个任务都有到期日。")).font(font(12)).foregroundColor(DotistDesign.muted) }
+            else { flatRows(result.tasks, contextIDs: result.contextIDs) }
+        } else if customDateRange == nil && state.scope == "done" {
+            if result.matches.isEmpty { Text(model.text("还没有完成的任务。")).font(font(12)).foregroundColor(DotistDesign.muted) }
+            else { todaySection("已完成", result: result) }
         } else {
-            let bounds = rangeBounds
-            let values = panelTasks.filter { $0.dueDate.map { $0 >= bounds.0 && $0 <= bounds.1 } == true }
-            let dates = Array(Set(values.filter { !$0.completed }.compactMap(\.dueDate))).sorted()
+            let dates = Array(Set(result.matches.compactMap(\.dueDate))).sorted()
+            let done = dateFilterResult(completed: true)
             VStack(alignment: .leading, spacing: 20) {
                 ForEach(dates, id: \.self) { date in
-                    todaySection(model.dueLabel(date), items: model.ordered(values.filter { !$0.completed && $0.dueDate == date }), hideDue: true)
+                    todaySection(model.dueLabel(date), result: dateFilterResult(range: TaskDateRange(date, date)), hideDue: true)
                 }
-                if dates.isEmpty { Text(model.text("今天没有安排。在下方添加，或在「全部」里给任务设置到期日。")).font(font(12)).foregroundColor(DotistDesign.muted) }
-                let done = model.ordered(values.filter(\.completed))
-                if !done.isEmpty {
+                if dates.isEmpty { Text(model.text("所选日期范围内没有未完成任务。")).font(font(12)).foregroundColor(DotistDesign.muted) }
+                if !done.matches.isEmpty {
                     Button { todayDoneOpen.toggle() } label: {
-                        HStack { Image(systemName: todayDoneOpen ? "chevron.down" : "chevron.right").offset(x: -1).frame(width: 18); Text(model.text("已完成")) }.font(font(12)).foregroundColor(DotistDesign.muted)
+                        HStack { Image(systemName: todayDoneOpen ? "chevron.down" : "chevron.right").offset(x: -1).frame(width: 18); Text(model.text("已完成")) }.font(font(12)).foregroundColor(DotistDesign.faint)
                     }.buttonStyle(.plain).modifier(DotistFocusRing())
-                    if todayDoneOpen { flatRows(done) }
+                    if todayDoneOpen { flatRows(done.tasks, contextIDs: done.contextIDs) }
                 }
             }
         }
     }
 
     private var rangeBounds: (String, String) {
-        if let customStart, let customEnd { return (customStart, customEnd) }
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let weekday = calendar.component(.weekday, from: today)
-        let monday = calendar.date(byAdding: .day, value: -((weekday + 5) % 7), to: today)!
-        switch state.scope {
-        case "tomorrow": let date = calendar.date(byAdding: .day, value: 1, to: today)!.dotistDay; return (date, date)
-        case "week": return (monday.dotistDay, calendar.date(byAdding: .day, value: 6, to: monday)!.dotistDay)
-        case "nextweek": return (calendar.date(byAdding: .day, value: 7, to: monday)!.dotistDay, calendar.date(byAdding: .day, value: 13, to: monday)!.dotistDay)
-        case "next7": return (today.dotistDay, calendar.date(byAdding: .day, value: 6, to: today)!.dotistDay)
-        default: return (today.dotistDay, today.dotistDay)
-        }
+        let range = customDateRange ?? model.dateFilterRange(scope: state.scope)
+        return (range.start, range.end)
     }
 
     private var todayList: some View {
-        let today = Date().dotistDay
-        let horizon = Calendar.current.date(byAdding: .day, value: 7, to: Date())!.dotistDay
-        let overdue = model.ordered(panelTasks.filter { !$0.completed && $0.dueDate.map { $0 < today } == true })
-        let due = model.ordered(panelTasks.filter { !$0.completed && $0.dueDate == today })
-        let upcoming = model.ordered(panelTasks.filter { !$0.completed && $0.dueDate.map { $0 > today && $0 <= horizon } == true })
-        let done = model.ordered(panelTasks.filter { task in
-            guard task.completed, let date = task.dueDate, date <= today else { return false }
-            if date == today { return true }
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            return formatter.date(from: task.updatedAt)?.dotistDay == today
-        })
+        let sections = model.todayTaskSections(groupID: state.groupID, tag: state.activeTag)
         return VStack(alignment: .leading, spacing: 20) {
-            if !overdue.isEmpty { todaySection("已逾期", items: overdue) }
-            if !due.isEmpty { todaySection("今天", items: due, hideDue: true) }
-            if overdue.isEmpty && due.isEmpty {
+            if !sections.overdue.matches.isEmpty { todaySection("已逾期", result: sections.overdue) }
+            if !sections.today.matches.isEmpty { todaySection("今天", result: sections.today, hideDue: true) }
+            if sections.overdue.matches.isEmpty && sections.today.matches.isEmpty {
                 Text(model.text("今天没有要做的事。")).font(font(12)).foregroundColor(DotistDesign.muted)
             }
-            if !upcoming.isEmpty {
+            if !sections.upcoming.matches.isEmpty {
                 Button { upcomingOpen.toggle() } label: {
                     HStack { Image(systemName: upcomingOpen ? "chevron.down" : "chevron.right").frame(width: 18); Text(model.text("接下来 {n} 天").replacingOccurrences(of: "{n}", with: "7")) }
                         .font(font(12)).foregroundColor(DotistDesign.faint).frame(height: 28)
                 }.buttonStyle(.plain).modifier(DotistFocusRing())
-                if upcomingOpen { flatRows(upcoming) }
+                if upcomingOpen { flatRows(sections.upcoming.tasks, contextIDs: sections.upcoming.contextIDs) }
             }
-            if !done.isEmpty {
+            if !sections.completed.matches.isEmpty {
                 Button { todayDoneOpen.toggle() } label: {
                     HStack { Image(systemName: todayDoneOpen ? "chevron.down" : "chevron.right").offset(x: -1).frame(width: 18); Text(model.text("已完成")) }
                         .font(font(12)).foregroundColor(DotistDesign.faint).frame(height: 28)
                 }.buttonStyle(.plain).modifier(DotistFocusRing())
-                if todayDoneOpen { flatRows(done) }
+                if todayDoneOpen { flatRows(sections.completed.tasks, contextIDs: sections.completed.contextIDs) }
             }
         }
     }
-    private func todaySection(_ title: String, items: [DotistTask], hideDue: Bool = false) -> some View {
+    private func todaySection(_ title: String, result: TaskFilterResult, hideDue: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 6) { Text(model.text(title)).font(font(15, .semibold, serif: true)).foregroundColor(title == "已逾期" ? DotistDesign.danger : DotistDesign.ink) }.frame(height: 30).padding(.top, 4)
-            flatRows(items, hideDue: hideDue)
+            flatRows(result.tasks, hideDue: hideDue, contextIDs: result.contextIDs)
         }
     }
-    private func flatRows(_ items: [DotistTask], hideDue: Bool = false) -> some View {
+    private func flatRows(_ items: [DotistTask], hideDue: Bool = false, contextIDs: Set<String> = []) -> some View {
         ForEach(dropGroupIDs.filter { state.groupID == nil || $0 == state.groupID }, id: \.self) { id in
             let values = items.filter { $0.category == id }
-            if !values.isEmpty { flatGroupRows(values, groupID: id, hideDue: hideDue) }
+            if !values.isEmpty { flatGroupRows(values, groupID: id, hideDue: hideDue, contextIDs: contextIDs) }
         }
     }
 
-    private func flatGroupRows(_ items: [DotistTask], groupID: String, hideDue: Bool) -> some View {
+    private func flatGroupRows(_ items: [DotistTask], groupID: String, hideDue: Bool, contextIDs: Set<String> = []) -> some View {
         let region = "flat:\(items.first?.id ?? ""):\(groupID)"
         let ids = Set(items.map(\.id))
         let children = Dictionary(grouping: items.filter { $0.parentId != nil }, by: { $0.parentId! })
@@ -715,6 +756,7 @@ struct MainWindow: View {
             }
             ForEach(Array(outlined.enumerated()), id: \.element.id) { index, task in
                 taskRow(task, children: model.children(of: task), sub: task.parentId != nil, allTasks: true, previous: index > 0 ? outlined[index - 1].id : nil, next: index + 1 < outlined.count ? outlined[index + 1].id : nil, hideDue: hideDue)
+                    .opacity(contextIDs.contains(task.id) ? 0.5 : 1)
 
                 draftRow(after: task, sub: task.parentId != nil)
 
@@ -842,14 +884,9 @@ struct MainWindow: View {
             }
             if allTasks, state.groupID == nil, let group = model.group(for: task) { Text(group.name).font(font(12, .semibold, serif: true)).foregroundColor(DotistDesign.faint).lineLimit(1).fixedSize(horizontal: true, vertical: false) }
             if !children.isEmpty {
-                Button {
-                    if state.expanded.contains(task.id) { state.expanded.remove(task.id) } else { state.expanded.insert(task.id) }
-                } label: {
-                    HStack(spacing: 2) {
-                        Text("\(children.filter(\.completed).count)/\(children.count)").lineLimit(1).fixedSize(horizontal: true, vertical: false)
-                        Image(systemName: state.expanded.contains(task.id) ? "chevron.down" : "chevron.right").font(font(8, .semibold))
-                    }.font(font(12)).foregroundColor(DotistDesign.faint)
-                }.buttonStyle(.plain).modifier(DotistFocusRing())
+                Text("\(children.filter(\.completed).count)/\(children.count)")
+                    .font(font(12)).foregroundColor(DotistDesign.faint)
+                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                     .accessibilityIdentifier("task-progress:\(task.id)")
                     .accessibilityLabel(Text(model.text("子任务 {done}/{total}").replacingOccurrences(of: "{done}", with: "\(children.filter(\.completed).count)").replacingOccurrences(of: "{total}", with: "\(children.count)")))
             }
@@ -897,10 +934,7 @@ struct MainWindow: View {
     }
 
     private func changeIndent(ids: [String], reverse: Bool) {
-        let complete = {
-            let hierarchy = TaskHierarchy(model.tasks)
-            for id in ids { state.expanded.formUnion(hierarchy.ancestors(of: id).map(\.id)) }
-        }
+        let complete = { }
         let failed = { showNotice(model.error ?? model.text("无法更改任务层级")); model.error = nil }
         if reverse { model.outdent(ids: ids, completed: complete, failed: failed) }
         else { model.indent(ids: ids, completed: complete, failed: failed) }
@@ -1001,7 +1035,6 @@ struct MainWindow: View {
     private func startDraft(after task: DotistTask, asChild: Bool = false) {
         clearInputs()
         draftAfter = task.id; draftParent = asChild && model.depth(of: task) < 4 ? task.id : task.parentId
-        if let parent = draftParent { state.expanded.insert(parent) }
     }
 
     @ViewBuilder private func draftRow(after task: DotistTask, sub: Bool) -> some View {

@@ -2,6 +2,11 @@ import AppKit
 import DotistCore
 import SwiftUI
 
+enum CommandPaletteVisibility {
+    enum Action { case show, hide }
+    static func action(isVisible: Bool) -> Action { isVisible ? .hide : .show }
+}
+
 struct CommandPalette: View {
     @ObservedObject var model: AppModel
     let close: () -> Void
@@ -35,19 +40,10 @@ struct CommandPalette: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Text(model.text("搜索")).font(DotistDesign.font(12, weight: .medium, language: model.language))
-                Spacer()
-                Text("⌘K").font(DotistDesign.font(11, language: model.language)).foregroundColor(DotistDesign.faint)
-                Button(action: close) { Image(systemName: "xmark").font(DotistDesign.font(14, language: model.language)).frame(width: 24, height: 24).contentShape(Rectangle()) }
-                    .buttonStyle(.plain).foregroundColor(DotistDesign.muted).help(model.text("关闭")).accessibilityLabel(model.text("关闭"))
-            }.foregroundColor(DotistDesign.muted).padding(.horizontal, 16).frame(height: 38)
-                .overlay(SearchDragArea().padding(.trailing, 44).accessibilityHidden(true))
-                .accessibilityIdentifier("search-drag-handle")
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass").font(DotistDesign.font(14, language: model.language)).foregroundColor(DotistDesign.faint)
                 TextField(model.text("搜索任务、分组或视图"), text: $query)
-                    .textFieldStyle(.plain).font(DotistDesign.font(16, language: model.language)).focused($focused).onSubmit(openSelected)
+                    .textFieldStyle(.plain).font(DotistDesign.font(16, language: model.language)).accessibilityLabel(model.text("搜索任务、分组或视图")).focused($focused).onSubmit(openSelected)
             }.padding(.horizontal, 12).frame(height: 44)
                 .overlay(alignment: .bottom) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5) }
                 .padding(.horizontal, 12).padding(.bottom, 8)
@@ -55,7 +51,7 @@ struct CommandPalette: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         if results.isEmpty {
-                            Text(model.text("没有找到匹配的内容")).foregroundColor(DotistDesign.muted).padding(28)
+                            Text(model.text("没有找到匹配的内容")).font(DotistDesign.font(13, language: model.language)).foregroundColor(DotistDesign.muted).padding(28)
                         }
                         ForEach(results) { result in
                             Button { selectedID = result.id; openSelected() } label: {
@@ -69,13 +65,8 @@ struct CommandPalette: View {
                     }.padding(.vertical, 8)
                 }.onChange(of: scrollRequest) { id in if let id { proxy.scrollTo(id) } }
             }
-            Divider()
-            HStack {
-                Text(model.text("↑↓ 选择 · Return 打开 · Esc 关闭"))
-                Spacer()
-            }.font(DotistDesign.font(11, language: model.language)).foregroundColor(DotistDesign.muted).padding(.horizontal, 18).frame(height: 30)
-                .overlay(SearchDragArea().accessibilityHidden(true))
         }
+        .accessibilityIdentifier("search-drag-handle")
         .foregroundColor(DotistDesign.ink)
         .background(WindowMaterial(opacity: 88, frost: model.settings.frost))
         .containerShape(.rect(cornerRadius: DotistDesign.windowCornerRadius))
@@ -112,7 +103,6 @@ struct CommandPalette: View {
                 }
             }
             Spacer(minLength: 12)
-            Image(systemName: "return").font(DotistDesign.font(12, language: model.language)).opacity(selectedID == result.id ? 1 : 0)
         }.foregroundColor(selectedID == result.id ? DotistDesign.ink : DotistDesign.muted)
     }
 
@@ -135,7 +125,3 @@ struct CommandPalette: View {
     }
 }
 
-private struct SearchDragArea: NSViewRepresentable {
-    func makeNSView(context: Context) -> BubblePointerView { BubblePointerView() }
-    func updateNSView(_ view: BubblePointerView, context: Context) {}
-}

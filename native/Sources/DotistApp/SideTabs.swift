@@ -10,6 +10,9 @@ enum SideTabGeometry {
     static let spacing: CGFloat = 4
     static let topInset: CGFloat = 40
     static let reorderDuration = 0.16
+    static let expansionDuration = 0.16
+    static let collapseDelay = 0.12
+    static let shadowInset: CGFloat = 24
     static var stride: CGFloat { height + spacing }
 
     static func isRight(panelMinX: CGFloat, visibleMinX: CGFloat, expandedWidth: CGFloat) -> Bool {
@@ -27,6 +30,21 @@ enum SideTabGeometry {
         return CGRect(x: right ? panel.maxX : panel.minX - width,
                       y: panel.maxY - topInset - total, width: width, height: total)
     }
+    /// One sample drives the window, glass geometry, text reveal and mouse regions.
+    struct Snapshot {
+        let window: CGRect
+        let tabs: [CGRect]
+        let textOpacity: Double
+    }
+    static func snapshot(panel: CGRect, fullWidths: [CGFloat], progress: CGFloat, right: Bool) -> Snapshot {
+        let progress = min(1, max(0, progress))
+        let widths = fullWidths.map { collapsedWidth + ($0 - collapsedWidth) * progress }
+        let bounds = windowFrame(panel: panel, count: widths.count, width: widths.max() ?? collapsedWidth, right: right)
+            .insetBy(dx: -shadowInset, dy: -shadowInset)
+        return Snapshot(window: bounds, tabs: widths.enumerated().map {
+            frame(panel: panel, index: $0.offset, width: $0.element, right: right)
+        }, textOpacity: Double(progress))
+    }
     static func isDrag(_ delta: CGPoint) -> Bool { hypot(delta.x, delta.y) > 4 }
     /// Index is in visibleGroups; the fixed All tab is outside this coordinate space.
     static func destination(source: Int, screenDeltaY: CGFloat, count: Int) -> Int {
@@ -38,6 +56,25 @@ enum SideTabGeometry {
         result.remove(at: source)
         result.insert(id, at: min(max(0, index), result.count))
         return result
+    }
+}
+
+/// Retarget from the current presentation so quick pointer reversals never jump.
+struct SideTabExpansion {
+    private(set) var target: CGFloat = 0
+    private var origin: CGFloat = 0
+    private var started: TimeInterval = 0
+
+    func progress(at time: TimeInterval) -> CGFloat {
+        let t = min(1, max(0, (time - started) / SideTabGeometry.expansionDuration))
+        let eased = UnitCurve.easeOut.value(at: t)
+        return origin + (target - origin) * CGFloat(eased)
+    }
+    mutating func setExpanded(_ expanded: Bool, at time: TimeInterval, reduceMotion: Bool) {
+        let next: CGFloat = expanded ? 1 : 0
+        let current = progress(at: time)
+        if next != target { origin = current; started = time; target = next }
+        if reduceMotion { origin = next; target = next }
     }
 }
 
@@ -68,6 +105,7 @@ private struct SideTabLayout: Equatable, Identifiable {
     let groupID: String?
     let name: String
     let rect: CGRect
+    let fullWidth: CGFloat
     let dragged: Bool
 }
 
@@ -76,7 +114,7 @@ private final class SideTabPresentation: ObservableObject {
     @Published var rows: [SideTabLayout] = []
     @Published var size: CGSize = .zero
     @Published var right = false
-    @Published var expanded = false
+    @Published var textOpacity = 0.0
     @Published var hovered: String?
     @Published var visible = false
 }
@@ -86,7 +124,8 @@ private struct SideTabView: View {
     @ObservedObject var state: TaskPanelState
     let row: SideTabLayout
     let right: Bool
-    let expanded: Bool
+    let textOpacity: Double
+    let glass: Namespace.ID
     let hovered: Bool
     let pointer: (String, NSEvent.EventType, CGPoint) -> Void
     @Environment(\.colorScheme) private var scheme
@@ -95,26 +134,27 @@ private struct SideTabView: View {
 
     var body: some View {
         let shape = SideTabShape(right: right)
-        ZStack {
+        // Size the material before applying glass. Its ID belongs only to the
+        // material: including the foreground in a glass morph can swallow text.
+        Group {
             if reduceTransparency {
                 shape.fill(DotistDesign.paper)
                     .overlay(shape.fill(DotistTheme.tint(model.themeColor(forGroup: row.groupID), scheme)))
             } else {
-                shape.fill(DotistDesign.paper.opacity(selected ? 0.28 : 0.06))
+                Color.clear
+                    .frame(width: row.rect.width, height: row.rect.height)
                     .glassEffect(.regular.tint(DotistTheme.tint(model.themeColor(forGroup: row.groupID), scheme)), in: shape)
-                    .opacity(selected ? 1 : 0.72)
-            }
-            if expanded {
-                Text(model.text(row.name))
-                    .font(DotistDesign.font(13, weight: selected ? .semibold : .regular, serif: true, language: model.language))
-                    .foregroundColor(selected ? DotistDesign.ink : hovered ? DotistDesign.muted : DotistDesign.faint)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .frame(maxWidth: .infinity, alignment: right ? .leading : .trailing)
-                    .padding(.horizontal, 14)
-                    .clipped()
+                    .glassEffectID(row.id, in: glass)
             }
         }
         .frame(width: row.rect.width, height: row.rect.height)
+        .overlay {
+            // Always lay out the full label, outside the glass effect. Reveal it
+            // inside the current width, never remeasure it at the narrow edge.
+            SideTabLabel(name: model.text(row.name), language: model.language,
+                         selected: selected, hovered: hovered, right: right,
+                         width: row.rect.width, fullWidth: row.fullWidth, textOpacity: textOpacity)
+        }
         .shadow(color: .black.opacity(row.dragged ? 0.18 : 0), radius: row.dragged ? 7 : 0, y: row.dragged ? 3 : 0)
         .overlay(SideTabPointer { type, location in pointer(row.id, type, location) })
         .accessibilityElement(children: .ignore)
@@ -122,6 +162,33 @@ private struct SideTabView: View {
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { state.groupID = row.groupID }
         .accessibilityIdentifier("side-tab:\(row.id)")
+    }
+}
+
+/// Foreground stays separate from the glass graph and keeps its expanded layout.
+struct SideTabLabel: View {
+    let name: String
+    let language: String
+    let selected: Bool
+    let hovered: Bool
+    let right: Bool
+    let width: CGFloat
+    let fullWidth: CGFloat
+    let textOpacity: Double
+
+    var body: some View {
+        Text(name)
+            .font(DotistDesign.font(13, weight: selected ? .semibold : .regular, serif: true, language: language))
+            .foregroundStyle(selected || hovered ? DotistDesign.ink : DotistDesign.faint)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(width: max(0, fullWidth - 28), height: SideTabGeometry.height,
+                   alignment: right ? .leading : .trailing)
+            .padding(.horizontal, 14)
+            .frame(width: width, height: SideTabGeometry.height, alignment: right ? .leading : .trailing)
+            .clipped()
+            .opacity(textOpacity)
+            .allowsHitTesting(false)
     }
 }
 
@@ -134,17 +201,19 @@ private struct SideTabsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        GlassEffectContainer(spacing: SideTabGeometry.spacing) {
+        GlassEffectContainer(spacing: SideTabGeometry.spacing * 2) {
             ZStack(alignment: .topLeading) {
                 ForEach(presentation.rows) { row in
                     SideTabView(model: model, state: state, row: row, right: presentation.right,
-                                expanded: presentation.expanded, hovered: presentation.hovered == row.id, pointer: pointer)
-                        .glassEffectID(row.id, in: glass)
-                        .position(x: row.rect.midX, y: presentation.size.height - row.rect.midY)
+                                textOpacity: presentation.textOpacity, glass: glass, hovered: presentation.hovered == row.id, pointer: pointer)
+                        .position(x: row.rect.midX, y: 0)
+                        // Scope animation to vertical reordering. Width, horizontal
+                        // attachment and label opacity keep the controller's sample,
+                        // even if a reorder starts before expansion has finished.
+                        .animation(reduceMotion || row.dragged ? nil : .easeOut(duration: SideTabGeometry.reorderDuration)) { content in
+                            content.offset(y: presentation.size.height - row.rect.midY)
+                        }
                         .zIndex(row.dragged ? 1 : 0)
-                        // The lifted tab follows the pointer directly. Only its neighbors make room.
-                        .animation(reduceMotion || row.dragged ? nil : .easeOut(duration: SideTabGeometry.reorderDuration), value: row.rect.origin.y)
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: presentation.expanded)
                 }
             }
             .frame(width: presentation.size.width, height: presentation.size.height)
@@ -176,6 +245,11 @@ private struct SideTabPointer: NSViewRepresentable {
     }
 }
 
+private final class SideTabHostingView<Content: View>: NSHostingView<Content> {
+    override var isOpaque: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 @MainActor
 private final class SideTabDisplayTarget: NSObject {
     weak var controller: SideTabsController?
@@ -198,7 +272,8 @@ final class SideTabsController: NSObject {
     private var localMonitor: Any?
     private var globalMonitor: Any?
     private var expanded = false
-    private var leftSensorAt: Date?
+    private var collapseWork: DispatchWorkItem?
+    private var expansion = SideTabExpansion()
     private var press: (id: String, point: CGPoint, order: [String], expanded: Bool)?
     private var dragging = false
     private var deltaY: CGFloat = 0
@@ -215,8 +290,14 @@ final class SideTabsController: NSObject {
         window.alphaValue = 0
         window.isReleasedWhenClosed = false; window.isMovable = false; window.isMovableByWindowBackground = false
         window.collectionBehavior = parent.collectionBehavior
-        let host = DotistHostingView(rootView: SideTabsView(model: model, state: state, presentation: presentation) { [weak self] in self?.pointer($0, type: $1, at: $2) })
+        let host = SideTabHostingView(rootView: SideTabsView(model: model, state: state, presentation: presentation) { [weak self] in self?.pointer($0, type: $1, at: $2) })
         host.sizingOptions = []
+        host.safeAreaRegions = []
+        host.wantsLayer = true
+        host.layer?.backgroundColor = NSColor.clear.cgColor
+        host.layer?.masksToBounds = false
+        window.acceptsMouseMovedEvents = true
+        parent.acceptsMouseMovedEvents = true
         window.contentView = host
         parent.addChildWindow(window, ordered: .below)
         for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification, NSWindow.didChangeScreenNotification,
@@ -235,7 +316,9 @@ final class SideTabsController: NSObject {
             if event.type == .keyDown, event.keyCode == 53, self.press != nil {
                 self.cancelDrag(); self.synchronize(); return nil
             }
-            self.synchronize()
+            guard event.type != .keyDown else { return event }
+            let point = event.window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
+            self.synchronize(mouse: point)
             return event
         }
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in self?.synchronize() }
@@ -245,6 +328,7 @@ final class SideTabsController: NSObject {
     func stop() {
         guard !stopped else { return }
         stopped = true
+        collapseWork?.cancel(); collapseWork = nil
         displayLink?.invalidate(); displayLink = nil
         observers.forEach(NotificationCenter.default.removeObserver); observers.removeAll()
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }; localMonitor = nil
@@ -265,7 +349,7 @@ final class SideTabsController: NSObject {
             let delta = CGPoint(x: point.x - press.point.x, y: point.y - press.point.y)
             if SideTabGeometry.isDrag(delta) { dragging = true }
             if dragging, press.expanded, let source = press.order.firstIndex(of: press.id) {
-                expanded = true; leftSensorAt = nil
+                expanded = true; collapseWork?.cancel(); collapseWork = nil
                 deltaY = min(max(delta.y, -CGFloat(press.order.count - 1 - source) * SideTabGeometry.stride), CGFloat(source) * SideTabGeometry.stride)
                 preview = SideTabGeometry.reordered(press.order, id: press.id,
                     to: SideTabGeometry.destination(source: source, screenDeltaY: deltaY, count: press.order.count))
@@ -279,7 +363,7 @@ final class SideTabsController: NSObject {
                 state.groupID = press.id == "all" ? nil : press.id
             }
             cancelDrag()
-            leftSensorAt = nil
+            collapseWork?.cancel(); collapseWork = nil
         default: break
         }
         synchronize()
@@ -309,45 +393,60 @@ final class SideTabsController: NSObject {
         let maxWidth = widths.max() ?? SideTabGeometry.collapsedWidth
         let frame = parent.frame
         let right = SideTabGeometry.isRight(panelMinX: frame.minX,
-            visibleMinX: (parent.screen ?? NSScreen.main)?.visibleFrame.minX ?? frame.minX, expandedWidth: maxWidth)
-        let bounds = SideTabGeometry.windowFrame(panel: frame, count: items.count, width: maxWidth, right: right)
-        // Compare to the actual child frame: AppKit already translates child windows
-        // when the parent moves, so cached last-target frames are not authoritative.
-        if window.frame != bounds { window.setFrame(bounds, display: true) }
-        window.appearance = parent.appearance; window.level = parent.level
-
-        let currentRects = items.indices.map { SideTabGeometry.frame(panel: frame, index: $0,
-            width: SideTabGeometry.width(expanded: expanded, fullWidth: widths[$0]), right: right) }
+            visibleMinX: (parent.screen ?? NSScreen.main)?.visibleFrame.minX ?? frame.minX, expandedWidth: maxWidth + SideTabGeometry.shadowInset)
+        let visible = parent.isVisible && parent.isOnActiveSpace && !motion.bubble && !motion.animationInProgress
+        let now = CACurrentMediaTime()
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let current = SideTabGeometry.snapshot(panel: frame, fullWidths: widths,
+            progress: expansion.progress(at: now), right: right)
         let sensor = SideTabGeometry.windowFrame(panel: frame, count: items.count,
             width: expanded ? maxWidth : SideTabGeometry.collapsedWidth, right: right)
-        let overTab = currentRects.contains { $0.contains(mouse) }
-        if press != nil {
-            leftSensorAt = nil
-        } else if sensor.contains(mouse) && (expanded || overTab) {
-            expanded = true; leftSensorAt = nil
-        } else if expanded {
-            if let leftSensorAt {
-                if Date().timeIntervalSince(leftSensorAt) >= 0.15 { expanded = false; self.leftSensorAt = nil }
-            } else { leftSensorAt = Date() }
+        let overTab = current.tabs.contains { $0.contains(mouse) }
+        if !visible {
+            expanded = false; collapseWork?.cancel(); collapseWork = nil; cancelDrag()
+        } else if press != nil || overTab || (expanded && sensor.contains(mouse)) {
+            expanded = true; collapseWork?.cancel(); collapseWork = nil
+        } else if expanded && collapseWork == nil {
+            // Event-triggered debounce; no extra polling interval is added.
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, !self.stopped else { return }
+                self.expanded = false
+                // Keep the work present during synchronization, so it cannot
+                // immediately schedule a second collapse while sampling motion.
+                self.synchronize()
+                self.collapseWork = nil
+            }
+            collapseWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + SideTabGeometry.collapseDelay, execute: work)
         }
+        expansion.setExpanded(expanded, at: now, reduceMotion: reduceMotion || !visible)
+        let sample = SideTabGeometry.snapshot(panel: frame, fullWidths: widths,
+            progress: expansion.progress(at: now), right: right)
+        let bounds = sample.window
+        // AppKit moves child windows with the parent. Compare the actual frame,
+        // then update frame + SwiftUI layout from the very same animation sample.
+        if window.frame != bounds { window.setFrame(bounds, display: false) }
+        if window.appearance != parent.appearance { window.appearance = parent.appearance }
+        if window.level != parent.level { window.level = parent.level }
         var hitRects: [CGRect] = []
         let rows = items.enumerated().map { index, item -> SideTabLayout in
             let lifted = dragging && preview != nil && press?.id == item.id
             let slot = lifted ? (press!.order.firstIndex(of: item.id)! + 1) : index
             let rect = SideTabGeometry.frame(panel: frame, index: slot,
-                width: SideTabGeometry.width(expanded: expanded, fullWidth: widths[index]), right: right,
+                width: sample.tabs[index].width, right: right,
                 offsetY: lifted ? deltaY : 0)
             hitRects.append(rect)
             return SideTabLayout(id: item.id, groupID: item.groupID, name: item.name,
-                rect: rect.offsetBy(dx: -bounds.minX, dy: -bounds.minY), dragged: lifted)
+                rect: rect.offsetBy(dx: -bounds.minX, dy: -bounds.minY), fullWidth: widths[index], dragged: lifted)
         }
         if presentation.size != bounds.size { presentation.size = bounds.size }
         if presentation.right != right { presentation.right = right }
-        if presentation.expanded != expanded { presentation.expanded = expanded }
+        if presentation.textOpacity != sample.textOpacity { presentation.textOpacity = sample.textOpacity }
         if presentation.rows != rows { presentation.rows = rows }
+        // Resolve the new SwiftUI layout before the resized child is composited.
+        window.contentView?.layoutSubtreeIfNeeded()
         let hovered = zip(items, hitRects).first { $0.1.contains(mouse) }?.0.id
         if presentation.hovered != hovered { presentation.hovered = hovered }
-        let visible = parent.isVisible && parent.isOnActiveSpace && !motion.bubble && !motion.animationInProgress
         if presentation.visible != visible { presentation.visible = visible }
         window.ignoresMouseEvents = !visible || (press == nil && !hitRects.contains { $0.contains(mouse) })
         window.alphaValue = visible ? parent.alphaValue : 0
@@ -359,7 +458,7 @@ final class SideTabsController: NSObject {
             // there is never a stale child frame to flash at the old panel location.
             // orderOut removes an NSWindow from its parent. Keep an invisible child
             // instead, otherwise the first collapse silently breaks drag following.
-            expanded = false; leftSensorAt = nil; cancelDrag()
+            expanded = false; collapseWork?.cancel(); collapseWork = nil; cancelDrag()
         }
     }
 }

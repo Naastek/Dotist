@@ -88,7 +88,7 @@ final class TaskInteractionTests: XCTestCase {
         }
         let model = try AppModel(store: store)
         let state = TaskPanelState()
-        state.expanded = Set(chain.map(\.id))
+        XCTAssertTrue(state.expanded.isEmpty, "No expansion state should be needed to render every descendant")
         var rows: [TaskListRowFrame] = []
         let view = MainWindow(model: model, state: state, showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, collapse: {}, primary: false)
             .frame(width: 364, height: 620)
@@ -106,6 +106,36 @@ final class TaskInteractionTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         host.layoutSubtreeIfNeeded()
         XCTAssertEqual(Set(rows.map { $0.task.id }), Set(chain.map(\.id)), "A matching deep tag keeps the full ancestor context")
+    }
+
+    func testCompletedChildStaysVisibleWithoutExpansionWhileCompletedSectionStillFolds() async throws {
+        let store = try store()
+        let parent = try store.addTask(title: "open parent", category: "work")
+        let child = try store.addTask(title: "completed child", category: "work", parentId: parent.id)
+        _ = try store.addTask(title: "open child", category: "work", parentId: parent.id)
+        _ = try store.patchTask(id: child.id, completed: true)
+        let completedRoot = try store.addTask(title: "completed root", category: "work")
+        _ = try store.patchTask(id: completedRoot.id, completed: true)
+        let model = try AppModel(store: store)
+        let state = TaskPanelState(groupID: "work")
+        var rows: [TaskListRowFrame] = []
+        let view = MainWindow(model: model, state: state, showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, collapse: {}, primary: false)
+            .frame(width: 364, height: 620)
+            .onPreferenceChange(TaskListRowFrame.Key.self) { rows = $0 }
+        let host = NSHostingView(rootView: view)
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertTrue(rows.contains { $0.task.id == child.id })
+        XCTAssertFalse(rows.contains { $0.task.id == completedRoot.id })
+        state.folded.insert("work")
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertTrue(rows.contains { $0.task.id == completedRoot.id })
+        XCTAssertTrue(rows.contains { $0.task.id == child.id })
+        XCTAssertEqual(rows.count, Set(rows.map { $0.task.id }).count, "Completed descendants must not duplicate their parent in the folded section")
+        XCTAssertTrue(state.expanded.isEmpty)
     }
 
     func testMainWindowDoesNotRebuildListForPointerFrames() async throws {

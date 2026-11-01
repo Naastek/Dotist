@@ -7,8 +7,26 @@ final class TaskPanelState: ObservableObject {
     @Published var groupID: String?
     @Published var scope: String
     @Published var activeTag: String?
+    // Legacy navigation bookkeeping only; descendants always render expanded.
     @Published var expanded: Set<String> = []
     @Published var folded: Set<String> = []
+    func selectedColor(in model: AppModel) -> DotistGroupColor {
+        guard let groupID, let group = model.groups.first(where: { $0.id == groupID }) else {
+            return DotistGroupColor(rawValue: model.settings.allColor)
+        }
+        return DotistGroupColor(rawValue: group.color)
+    }
+
+    func selectColor(_ color: DotistGroupColor, in model: AppModel) {
+        if let groupID {
+            model.setGroupColor(groupID, color)
+        } else {
+            var patch = DotistSettingsPatch()
+            patch.allColor = color.rawValue
+            model.updateSettings(patch)
+        }
+    }
+
     init(groupID: String? = nil, scope: String = "all") {
         self.groupID = groupID
         self.scope = scope

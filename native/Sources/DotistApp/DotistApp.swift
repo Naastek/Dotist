@@ -121,6 +121,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
                 case 2: self?.showQuick()
                 case 3: self?.showSettings()
                 case 4: self?.showViews()
+                case 5: self?.showSearch()
                 default: break
                 }
             }
@@ -217,7 +218,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         UserDefaults.standard.set(panel.frame.minY, forKey: "dotist.native.window.y")
     }
     func windowDidResignKey(_ notification: Notification) {
-        if let window = notification.object as? NSWindow, window === quickWindow { window.orderOut(nil) }
+        if let window = notification.object as? NSWindow, window === quickWindow || window === searchWindow { window.orderOut(nil) }
     }
     func windowWillClose(_ notification: Notification) {
         if let window = notification.object as? NSWindow, window === viewsWindow {
@@ -315,7 +316,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     @objc private func openSearchFromMenu() { showSearch() }
 
     private func shortcutValues() -> [UInt32: String] {
-        [1: model.settings.toggleShortcut, 2: model.settings.quickAddShortcut, 3: model.settings.settingsShortcut, 4: model.settings.viewsShortcut]
+        [1: model.settings.toggleShortcut, 2: model.settings.quickAddShortcut, 3: model.settings.settingsShortcut, 4: model.settings.viewsShortcut, 5: "Command+K"]
     }
     func beginShortcutCapture() {
         suspendedShortcuts = shortcuts?.values ?? [:]
@@ -457,7 +458,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     }
     func showSettings() {
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 740, height: 560), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 880, height: 660), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
             window.title = model.text("Dotist 设置")
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
@@ -467,7 +468,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             window.isReleasedWhenClosed = false
             window.appearance = panel.appearance
             installContent(SettingsWindow(model: model, updater: updater, beginShortcutCapture: beginShortcutCapture, endShortcutCapture: endShortcutCapture, resetWindowSize: resetWindowSize).ignoresSafeArea(), in: window)
-            window.minSize = NSSize(width: 600, height: 420)
+            window.minSize = NSSize(width: 800, height: 540)
             window.center()
             settingsWindow = window
         }
@@ -522,14 +523,19 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     }
 
     func showSearch() {
+        if CommandPaletteVisibility.action(isVisible: searchWindow?.isVisible == true) == .hide {
+            searchWindow?.orderOut(nil)
+            return
+        }
         if searchWindow == nil {
-            let window = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 600, height: 440), styleMask: [.borderless], backing: .buffered, defer: false)
+            let window = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 600, height: 372), styleMask: [.borderless], backing: .buffered, defer: false)
             window.isOpaque = false
             window.backgroundColor = .clear
             window.hasShadow = true
             window.level = .floating
             window.isReleasedWhenClosed = false
             window.isMovableByWindowBackground = true
+            window.delegate = self
             window.appearance = panel.appearance
             window.center()
             searchWindow = window
