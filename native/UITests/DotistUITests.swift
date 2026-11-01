@@ -76,14 +76,20 @@ final class DotistUITests: XCTestCase {
     }
 
     private func selectGroup(_ id: String, name: String, in window: XCUIElement, app: XCUIApplication) {
-        window.buttons["group-menu"].click()
-        let item = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
-        XCTAssertTrue(item.waitForExistence(timeout: 3), "Missing group menu item \(id)")
-        item.click()
+        if window.label == "Dotist" {
+            let item = app.buttons["side-tab:\(id)"]
+            XCTAssertTrue(item.waitForExistence(timeout: 3), "Missing side tab \(id)")
+            item.click()
+        } else {
+            window.staticTexts["group-menu"].rightClick()
+            let item = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+            XCTAssertTrue(item.waitForExistence(timeout: 3), "Missing group menu item \(id)")
+            item.click()
+        }
     }
 
     private func openGroupPanel(_ id: String, name: String, app: XCUIApplication) -> XCUIElement {
-        app.dialogs["Dotist"].buttons["group-menu"].click()
+        app.dialogs["Dotist"].staticTexts["group-menu"].rightClick()
         let open = app.menuItems["在独立面板中打开"]
         XCTAssertTrue(open.waitForExistence(timeout: 3))
         open.hover()

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ComposerInput: NSViewRepresentable {
     @Binding var text: String
+    @Binding var focused: Bool
     let placeholder: String
     let label: String
     let font: NSFont
@@ -32,8 +33,10 @@ struct ComposerInput: NSViewRepresentable {
         var parent: ComposerInput
         init(_ parent: ComposerInput) { self.parent = parent }
         func controlTextDidBeginEditing(_ notification: Notification) {
+            parent.focused = true
             (notification.userInfo?["NSFieldEditor"] as? NSTextView)?.insertionPointColor = NSColor(DotistDesign.accent)
         }
+        func controlTextDidEndEditing(_ notification: Notification) { parent.focused = false }
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSTextField else { return }
             parent.text = field.stringValue

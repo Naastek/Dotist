@@ -34,7 +34,6 @@ struct GroupManager: View {
                             } else {
                                 Button { begin(group) } label: { Text(group.name).font(font(14, .semibold, serif: true)).frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain).modifier(DotistFocusRing()).disabled(group.id == DotistGroup.inboxID)
                             }
-                            Text("\(model.tasks.filter { $0.category == group.id && $0.parentId == nil && !$0.completed }.count)").font(font(12)).foregroundColor(DotistDesign.faint)
                             Button { model.change { try $0.moveGroup(group.id, direction: -1) } } label: { Image(systemName: "chevron.up").frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).disabled(index <= 1)
                             Button { model.change { try $0.moveGroup(group.id, direction: 1) } } label: { Image(systemName: "chevron.down").frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).disabled(group.id == DotistGroup.inboxID || index == model.groups.count - 1)
                             Button { model.deleteGroup(group) } label: { Image(systemName: "xmark").font(.system(size: 11)).frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).disabled(group.id == DotistGroup.inboxID)

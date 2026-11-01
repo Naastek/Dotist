@@ -54,6 +54,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     private var model: AppModel!
     private var updater: NativeUpdater!
     private var panel: DotistPanel!
+    private var sideTabs: SideTabsController?
     private var viewsWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var quickWindow: QuickPanel?
@@ -109,6 +110,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         hosting.autoresizingMask = [.width, .height]
         container.addSubview(hosting)
         panel.contentView = container
+        sideTabs = SideTabsController(parent: panel, model: model, state: mainState, motion: motion)
         installMenu()
         appliedLanguage = model.settings.language
         menuBar = MenuBarController(model: model) { [weak self] action in self?.performMenuAction(action) }
@@ -195,6 +197,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        sideTabs?.stop()
         motion?.stop()
         groupPanels.forEach { $0.motion.stop() }
         model?.mcp.stop()

@@ -8,11 +8,15 @@ struct SettingsWindow: View {
     let beginShortcutCapture: () -> Void
     let endShortcutCapture: (UInt32, String?) -> Void
     let resetWindowSize: () -> Void
+    @ObservedObject private var toolbar = ToolbarConfig.shared
     @State private var active = "appearance"
+    @State private var manager: Manager?
+    private enum Manager: String, Identifiable { case tags, groups; var id: String { rawValue } }
     private let sections: [(String, String, String)] = [
         ("appearance", "外观", "paintpalette"), ("general", "通用", "slider.horizontal.3"),
         ("filters", "筛选器", "list.bullet"), ("menubar", "菜单栏", "eye"),
-        ("shortcuts", "快捷键", "keyboard"), ("mcp", "MCP", "cable.connector"),
+        ("toolbar", "工具栏", "rectangle.topthird.inset.filled"),
+        ("keyboard", "键盘快捷键", "keyboard"), ("shortcuts", "快捷键", "keyboard"), ("mcp", "MCP", "cable.connector"),
         ("data", "数据", "externaldrive"), ("about", "关于", "info.circle"),
     ]
     private func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular, serif: Bool = false) -> Font {
@@ -90,6 +94,8 @@ struct SettingsWindow: View {
                             boolRow("自动收起", value: model.settings.autoCollapse) { $0.autoCollapse = $1 }
                             if model.settings.autoCollapse { numberRow("收起等待时间", value: Double(model.settings.autoCollapseSecs), range: 5...120) { $0.autoCollapseSecs = UInt16($1.rounded()) } }
                             boolRow("窗口置顶", value: model.settings.alwaysOnTop) { $0.alwaysOnTop = $1 }
+                            settingRow("分组") { Button(model.text("管理分组…")) { manager = .groups } }
+                            settingRow("标签") { Button(model.text("管理标签…")) { manager = .tags } }
                         }
                         section("filters", "筛选器") {
                             settingRow("启动时打开") {
@@ -139,6 +145,42 @@ struct SettingsWindow: View {
                             clickRow("左键点击", value: model.settings.trayLeftClick) { $0.trayLeftClick = $1 }
                             clickRow("右键点击", value: model.settings.trayRightClick) { $0.trayRightClick = $1 }
                         }
+                        section("toolbar", "工具栏") {
+                            Text(model.text("在面板上按住 ⌘ 可以左右拖动图标调整顺序"))
+                                .font(font(12)).foregroundColor(DotistDesign.muted).padding(.vertical, 8)
+                            ForEach(Array(toolbar.order.enumerated()), id: \.element) { index, item in
+                                HStack(spacing: 6) {
+                                    Text(model.text(toolbarTitle(item))).frame(maxWidth: .infinity, alignment: .leading)
+                                    Picker(model.text(toolbarTitle(item)), selection: Binding(
+                                        get: { toolbar.visibility(of: item) },
+                                        set: { toolbar.setVisibility($0, for: item) })) {
+                                        Text(model.text("常驻")).tag(ToolbarVisibility.always)
+                                        Text(model.text("悬停显示")).tag(ToolbarVisibility.hover)
+                                        if item != .collapse { Text(model.text("隐藏")).tag(ToolbarVisibility.hidden) }
+                                    }.pickerStyle(.segmented).labelsHidden().frame(width: 210)
+                                        .accessibilityLabel(Text(model.text(toolbarTitle(item))))
+                                    Button { toolbar.move(item, onto: toolbar.order[index - 1]) } label: { Image(systemName: "chevron.up") }
+                                        .disabled(index == 0).accessibilityLabel(Text(model.text("上移")))
+                                    Button { toolbar.move(item, onto: toolbar.order[index + 1]) } label: { Image(systemName: "chevron.down") }
+                                        .disabled(index == toolbar.order.count - 1).accessibilityLabel(Text(model.text("下移")))
+                                }.frame(minHeight: 40)
+                            }
+                            Button(model.text("恢复默认")) { toolbar.reset() }.padding(.top, 8)
+                        }
+                        section("keyboard", "键盘快捷键") {
+                            Text(model.text("面板内")).font(font(13, .medium)).padding(.top, 8)
+                            infoRow("移动焦点", "↑↓")
+                            infoRow("调整顺序", "⌥↑↓")
+                            infoRow("缩进", "Tab")
+                            infoRow("保存 / 新建", "Return")
+                            infoRow("换行", "⇧Return")
+                            infoRow("取消", "Esc")
+                            Text(model.text("全局快捷键")).font(font(13, .medium)).padding(.top, 12)
+                            infoRow("显示 / 收起窗口", shortcutValue(model.settings.toggleShortcut))
+                            infoRow("打开设置", shortcutValue(model.settings.settingsShortcut))
+                            infoRow("打开任务视图", shortcutValue(model.settings.viewsShortcut))
+                            infoRow("快速添加", shortcutValue(model.settings.quickAddShortcut))
+                        }
                         section("shortcuts", "快捷键") {
                             shortcutRow("显示 / 收起窗口", id: 1, value: model.settings.toggleShortcut)
                             shortcutRow("打开设置", id: 3, value: model.settings.settingsShortcut)
@@ -185,7 +227,28 @@ struct SettingsWindow: View {
                 }.id(active)
             }.font(font(13)).foregroundColor(DotistDesign.ink).controlSize(.regular).background(WindowDragArea()).background(DotistDesign.paper)
         }.modifier(DotistTheme(theme: model.settings.theme))
+        }.sheet(item: $manager) { current in
+            Group {
+                switch current {
+                case .groups:
+                    GroupManager(model: model, close: { manager = nil }, tags: { manager = .tags })
+                case .tags:
+                    TagManager(model: model, close: { manager = nil }, groups: { manager = .groups }, select: { _ in })
+                }
+            }.frame(minWidth: 420, minHeight: 400)
         }
+    }
+    private func toolbarTitle(_ item: ToolbarItem) -> String {
+        switch item {
+        case .views: return "任务视图"
+        case .pin: return "置顶窗口"
+        case .lock: return "固定窗口"
+        case .search: return "搜索"
+        case .collapse: return "收起为悬浮球"
+        }
+    }
+    private func shortcutValue(_ value: String) -> String {
+        value.isEmpty ? model.text("未设置") : value.replacingOccurrences(of: "CommandOrControl", with: "⌘").replacingOccurrences(of: "Command", with: "⌘").replacingOccurrences(of: "Control", with: "⌃").replacingOccurrences(of: "Alt", with: "⌥").replacingOccurrences(of: "Shift", with: "⇧").replacingOccurrences(of: "+", with: " ")
     }
     private var glassPreset: String {
         switch (model.settings.opacity, model.settings.frost) {

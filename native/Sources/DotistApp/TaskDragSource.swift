@@ -60,17 +60,19 @@ final class TaskDragSourceView: NSView, NSDraggingSource {
               hypot(event.locationInWindow.x - down.x, event.locationInWindow.y - down.y) > 4 else { return }
         dragging = true
         self.down = nil
-        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
-        let size = NSSize(width: min(320, max(80, ceil((title as NSString).size(withAttributes: attributes).width) + 20)), height: 32)
-        let image = NSImage(size: size, flipped: false) { [title] rect in
-            NSColor.windowBackgroundColor.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: 7, yRadius: 7).fill()
-            (title as NSString).draw(in: rect.insetBy(dx: 10, dy: 7), withAttributes: attributes)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor.withAlphaComponent(0.8)]
+        let size = NSSize(width: min(348, max(120, ceil((title as NSString).size(withAttributes: attributes).width) + 42)), height: 32)
+        let image = NSImage(size: size, flipped: false) { [title] _ in
+            NSColor.secondaryLabelColor.withAlphaComponent(0.8).setStroke()
+            let circle = NSBezierPath(ovalIn: NSRect(x: 1, y: 8, width: 16, height: 16))
+            circle.lineWidth = 1.25
+            circle.stroke()
+            (title as NSString).draw(at: NSPoint(x: 26, y: 8), withAttributes: attributes)
             return true
         }
         let item = NSDraggingItem(pasteboardWriter: taskID as NSString)
         let point = convert(event.locationInWindow, from: nil)
-        item.setDraggingFrame(NSRect(x: point.x - 10, y: point.y - size.height / 2, width: size.width, height: size.height), contents: image)
+        item.setDraggingFrame(NSRect(x: point.x - 26, y: point.y - size.height / 2, width: size.width, height: size.height), contents: image)
         begin()
         beginDraggingSession(with: [item], event: event, source: self)
     }
