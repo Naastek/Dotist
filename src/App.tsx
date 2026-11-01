@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { CalendarDays, Columns3, ChevronDown, ChevronLeft, Lock, LockOpen, ChevronRight, ChevronUp, Check, Minimize2, Plus, Trash2 } from 'lucide-react';
 import { GroupManager } from './GroupManager';
 import { Menu, type MenuEntry, type MenuState, type OpenMenu } from './Menu';
@@ -15,7 +15,8 @@ import { setLanguage, t, tError } from './i18n';
 import { buildGroups, remainingCount, type TaskNode } from './taskTree';
 import { UPCOMING_DAYS, buildLists, buildToday, type Lists } from './todayView';
 import { groupColor, groupName, nextColor, type Category, type GroupInfo, type TodoTask } from './types';
-import { startInBubble, windowApi, type ResizeDirection } from './windowApi';
+import { isDragRelease, startInBubble, windowApi, type ResizeDirection } from './windowApi';
+import { useDragScroll } from './useDragScroll';
 
 const UNDO_MS = 5000;
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -23,6 +24,13 @@ const reducedMotion = () => typeof window.matchMedia === 'function' && window.ma
 function message(error: unknown) { return tError(typeof error === 'string' ? error : error instanceof Error ? error.message : '操作失败，请重试。'); }
 type Run = (action: () => Promise<void>) => Promise<boolean>;
 type Scope = 'today' | 'all' | 'overdue' | 'undated' | 'done';
+type TaskDrag = {
+  sourceId: string | null; target: { id: string; after: boolean } | null;
+  start: (event: React.PointerEvent<HTMLElement>, task: TodoTask, scope: string, allTasks: boolean) => void;
+  move: (event: React.PointerEvent<HTMLElement>) => void;
+  end: (event: React.PointerEvent<HTMLElement>, canceled?: boolean) => void;
+  consumeClick: () => boolean;
+};
 /** The filters in the header strip, in order; it scrolls sideways (two-finger swipe) to reach all of them. */
 const RANGE_FILTERS: { id: FilterId; index: number }[] = [{ id: 'tomorrow', index: 1 }, { id: 'week', index: 2 }, { id: 'nextweek', index: 3 }, { id: 'next7', index: 4 }];
 const GRIPS: ResizeDirection[] = ['North', 'South', 'East', 'West', 'NorthEast', 'NorthWest', 'SouthEast', 'SouthWest'];
@@ -44,6 +52,13 @@ export function App() {
   const [mutating, setMutating] = useState(false);
   const mutationLock = useRef(false);
   const sequence = useRef(0);
+  const dragSource = useRef<{ id: string; scope: string; allTasks: boolean } | null>(null);
+  const dragOrigin = useRef<{ id: string; scope: string; allTasks: boolean; pointerId: number; x: number; y: number; element: HTMLElement } | null>(null);
+  const dropTargetRef = useRef<{ id: string; after: boolean } | null>(null);
+  const suppressClick = useRef(false);
+  const refreshAfterDrag = useRef(false);
+  const [draggedTask, setDraggedTask] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [addingSub, setAddingSub] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -96,10 +111,14 @@ export function App() {
   const animating = useRef(false);
 
   const load = useCallback(async () => {
+    if (dragSource.current) { refreshAfterDrag.current = true; return; }
     const request = ++sequence.current;
     try {
       const [next, nextGroups] = await Promise.all([taskApi.list(), taskApi.groups()]);
-      if (request === sequence.current) { setTasks(next); setGroups(nextGroups); setLoadError(''); }
+      if (request === sequence.current) {
+        if (dragSource.current) { refreshAfterDrag.current = true; return; }
+        setTasks(next); setGroups(nextGroups); setLoadError('');
+      }
     } catch (reason) { if (request === sequence.current) setLoadError(message(reason)); }
   }, []);
   useEffect(() => {
@@ -118,6 +137,80 @@ export function App() {
     catch (reason) { setError(message(reason)); return false; }
     finally { mutationLock.current = false; setMutating(false); }
   };
+  const updateDropTarget = (x: number, y: number) => {
+    const source = dragSource.current;
+    if (!source) return;
+    const row = document.elementFromPoint(x, y)?.closest<HTMLElement>('.dt-row[data-drag-scope]');
+    const id = row?.dataset.taskId;
+    const rect = row?.getBoundingClientRect();
+    const target = row && rect && id && row.dataset.dragScope === source.scope && id !== source.id
+      ? { id, after: y >= rect.top + rect.height / 2 } : null;
+    dropTargetRef.current = target;
+    setDropTarget(current => current?.id === target?.id && current?.after === target?.after ? current : target);
+  };
+  const { update: scrollWhileDragging, stop: stopDragScroll } = useDragScroll('.dt-scroll', updateDropTarget);
+  const cancelTaskDrag = useCallback(() => {
+    const origin = dragOrigin.current;
+    if (!origin) return;
+    const wasDragging = Boolean(dragSource.current);
+    dragOrigin.current = null; dragSource.current = null; dropTargetRef.current = null;
+    stopDragScroll();
+    if (wasDragging) { suppressClick.current = true; setDraggedTask(null); setDropTarget(null); }
+    if (origin.element.hasPointerCapture?.(origin.pointerId)) origin.element.releasePointerCapture(origin.pointerId);
+    if (refreshAfterDrag.current) { refreshAfterDrag.current = false; void load(); }
+  }, [load, stopDragScroll]);
+  useEffect(() => {
+    const cancel = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !dragOrigin.current || !dragSource.current) return;
+      event.preventDefault();
+      cancelTaskDrag();
+    };
+    window.addEventListener('keydown', cancel);
+    return () => window.removeEventListener('keydown', cancel);
+  }, [cancelTaskDrag]);
+  useLayoutEffect(() => {
+    if (dragOrigin.current && !dragOrigin.current.element.isConnected) cancelTaskDrag();
+  });
+  const taskDrag: TaskDrag = {
+    sourceId: draggedTask,
+    target: dropTarget,
+    start: (event, task, scope, allTasks) => {
+      if (mutating || event.button !== 0 || (event.target as HTMLElement).closest('button, input, textarea')) return;
+      suppressClick.current = false;
+      dragOrigin.current = { id: task.id, scope, allTasks, pointerId: event.pointerId, x: event.clientX, y: event.clientY, element: event.currentTarget };
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    },
+    move: event => {
+      const origin = dragOrigin.current;
+      if (!origin || event.pointerId !== origin.pointerId) return;
+      if (!dragSource.current && Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 4) {
+        dragSource.current = { id: origin.id, scope: origin.scope, allTasks: origin.allTasks };
+        setDraggedTask(origin.id);
+      }
+      const source = dragSource.current;
+      if (!source) return;
+      event.preventDefault();
+      updateDropTarget(event.clientX, event.clientY);
+      scrollWhileDragging(event.clientX, event.clientY);
+    },
+    end: (event, canceled = false) => {
+      const origin = dragOrigin.current;
+      if (!origin || event.pointerId !== origin.pointerId) return;
+      dragOrigin.current = null;
+      const source = dragSource.current;
+      if (!source) return;
+      const target = dropTargetRef.current;
+      stopDragScroll();
+      suppressClick.current = true;
+      window.setTimeout(() => { suppressClick.current = false; }, 0);
+      dropTargetRef.current = null;
+      dragSource.current = null; setDraggedTask(null); setDropTarget(null);
+      const pending = refreshAfterDrag.current; refreshAfterDrag.current = false;
+      if (!canceled && target) void run(() => taskApi.reorder(source.id, target.id, target.after, source.allTasks)).then(ok => { if (!ok && pending) void load(); });
+      else if (pending) void load();
+    },
+    consumeClick: () => { const suppressed = suppressClick.current; suppressClick.current = false; return suppressed; },
+  };
 
   // While the native window changes size the page keeps its content laid out at a fixed size, anchored at the
   // top-right (where the collapse button is), so the window simply reveals it instead of re-flowing every frame.
@@ -131,15 +224,16 @@ export function App() {
   const releaseLayout = () => { document.documentElement.removeAttribute('data-moving'); setMoving(false); };
   const collapse = useCallback(async () => {
     if (animating.current || modeRef.current !== 'open') return;
+    cancelTaskDrag();
     animating.current = true;
     holdLayout(window.innerWidth, window.innerHeight);
     setFolded(true);
     await sleep(reducedMotion() ? 0 : 110);
-    try { await windowApi.animateBubble(true, reducedMotion() ? 120 : 260); modeRef.current = 'bubble'; setMode('bubble'); setFolded(false); }
+    try { await windowApi.animateBubble(true, reducedMotion() ? 1 : 260); modeRef.current = 'bubble'; setMode('bubble'); setFolded(false); }
     catch (reason) { setFolded(false); setError(message(reason)); }
     releaseLayout();
     animating.current = false;
-  }, []);
+  }, [cancelTaskDrag]);
   const expand = useCallback(async () => {
     if (animating.current || modeRef.current !== 'bubble') return;
     animating.current = true;
@@ -147,9 +241,9 @@ export function App() {
     holdLayout(width, height);
     setFolded(true); modeRef.current = 'open'; setMode('open');
     await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-    const growing = windowApi.animateBubble(false, reducedMotion() ? 120 : 340);
+    const growing = windowApi.animateBubble(false, reducedMotion() ? 1 : 340);
     // Start revealing the content while the window is still growing, so it unfolds in one motion.
-    await sleep(reducedMotion() ? 0 : 90);
+    await sleep(reducedMotion() ? 0 : 65);
     setFolded(false);
     try { await growing; } catch (reason) { setError(message(reason)); }
     releaseLayout();
@@ -159,23 +253,29 @@ export function App() {
   useEffect(() => { void settingsApi.get().then(settings => { applyTheme(settings.theme); applyGlass(settings.opacity, settings.frost); applyGroupColors(settings.group_colors); setLanguage(settings.language); syncPrefs(settings); startFilter.current(settings.default_filter); }, () => {}); }, [syncPrefs]);
   // A window left expanded with the pointer away and no activity folds back into the bubble.
   useEffect(() => {
-    const state = { inside: true, last: Date.now() };
+    const state = { inside: true, pressed: false, nativeDrag: false, last: Date.now() };
     const touch = () => { state.last = Date.now(); };
     const enter = () => { state.inside = true; touch(); };
     const leave = () => { state.inside = false; touch(); };
+    const press = (event: PointerEvent) => { if (event.button === 0) { state.pressed = true; void windowApi.dragPointer(true); } touch(); };
+    const release = () => { state.pressed = false; touch(); void windowApi.dragPointer(false); };
+    const cancel = () => { state.pressed = false; touch(); if (!state.nativeDrag) void windowApi.dragPointer(false); };
     const root = document.documentElement;
     root.addEventListener('mouseenter', enter); root.addEventListener('mouseleave', leave);
-    window.addEventListener('pointermove', enter); window.addEventListener('pointerdown', touch); window.addEventListener('keydown', touch);
+    window.addEventListener('pointermove', enter); window.addEventListener('pointerdown', press, true); window.addEventListener('keydown', touch);
+    window.addEventListener('pointerup', release); window.addEventListener('pointercancel', cancel);
     // Native pointer tracking keeps working while the app is in the background.
     const nativePointer = windowApi.on<boolean>('pointer', inside => { if (inside) enter(); else leave(); });
+    const dragStart = windowApi.on('drag-start', () => { state.nativeDrag = true; touch(); });
+    const dragEnd = windowApi.on<unknown>('drag-end', payload => { if (isDragRelease(payload)) { state.nativeDrag = false; state.pressed = false; touch(); } });
     const timer = window.setInterval(() => {
       const { autoCollapse, collapseSecs, locked } = prefsRef.current;
       if (!autoCollapse || locked || modeRef.current !== 'open' || state.inside) { if (modeRef.current !== 'open') touch(); return; }
       const typing = document.hasFocus() && document.activeElement instanceof HTMLInputElement;
-      if (typing || false) { touch(); return; }
+      if (typing || state.pressed || state.nativeDrag || dragSource.current) { touch(); return; }
       if (Date.now() - state.last >= collapseSecs * 1000) { touch(); void collapse(); }
     }, 1000);
-    return () => { void nativePointer.then(stop => stop()); window.clearInterval(timer); root.removeEventListener('mouseenter', enter); root.removeEventListener('mouseleave', leave); window.removeEventListener('pointermove', enter); window.removeEventListener('pointerdown', touch); window.removeEventListener('keydown', touch); };
+    return () => { void nativePointer.then(stop => stop()); void dragStart.then(stop => stop()); void dragEnd.then(stop => stop()); window.clearInterval(timer); root.removeEventListener('mouseenter', enter); root.removeEventListener('mouseleave', leave); window.removeEventListener('pointermove', enter); window.removeEventListener('pointerdown', press, true); window.removeEventListener('keydown', touch); window.removeEventListener('pointerup', release); window.removeEventListener('pointercancel', cancel); };
   }, [collapse]);
   async function toggleLock() {
     try { syncPrefs(await settingsApi.update({ locked: !prefs.locked })); } catch (reason) { setError(message(reason)); }
@@ -184,7 +284,7 @@ export function App() {
     try { syncPrefs(await settingsApi.update({ always_on_top: !prefs.onTop })); } catch (reason) { setError(message(reason)); }
   }
   useEffect(() => {
-    const onKey = (event: globalThis.KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key === ',') { event.preventDefault(); void windowApi.openSettings(); } };
+    const onKey = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key === ',') { event.preventDefault(); void windowApi.openSettings(); } };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
@@ -280,11 +380,13 @@ export function App() {
       if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 4) { tabDragged.current = true; tabOrigin.current = null; void windowApi.startDragging(); }
     },
     onPointerUp: () => { tabOrigin.current = null; },
+    onPointerCancel: () => { tabOrigin.current = null; },
+    onLostPointerCapture: () => { tabOrigin.current = null; },
     onClickCapture: (event: React.MouseEvent) => { if (tabDragged.current) { event.preventDefault(); event.stopPropagation(); tabDragged.current = false; } },
   };
   startFilter.current = selectFilter;
   const addNext = (task: TodoTask) => { if (task.parent_id) { setExpanded(new Set(expanded).add(task.parent_id)); setAddingSub(task.parent_id); } else setAdding(task.category); };
-  const rowProps = { mutating, run, editing, setEditing, addingSub, setAddingSub, addNext, expanded, setExpanded, remove, toggleSet, groups, today, openMenu };
+  const rowProps = { mutating, run, editing, setEditing, addingSub, setAddingSub, addNext, expanded, setExpanded, remove, toggleSet, groups, today, openMenu, taskDrag };
 
   return <TagContext.Provider value={{ active: activeTag, pick: next => setTag(activeTag === next ? null : next) }}><main className={`dt-window ${folded ? 'pose-folded' : ''} ${moving ? 'is-moving' : ''}`}>
     {view === 'tags' ? <><TagManager tasks={tasks} run={run} onSwitch={next => (next === 'groups' ? openManager() : setView('tags'))} onBack={() => setView('tasks')} onPick={name => { setTag(name); setScope('all'); setView('tasks'); }} />{error && <div className="dt-error" role="alert">{error}</div>}</>
@@ -312,13 +414,13 @@ export function App() {
       {tasks.length === 0 && <p className="dt-empty">{t('把要做的事，放在这里。')}</p>}
       {views.map(({ group, open, done }, index) => <section className={`dt-group ${group.color} ${flash === group.id ? 'is-flash' : ''}`} key={group.id} aria-labelledby={`group-${group.id}`}>
         <div className={`dt-group-label ${group.color}`} onContextMenu={event => openMenu(event, groupMenu(group, index))}><b id={`group-${group.id}`}>{group.name}</b><span className="dt-group-tools"><button type="button" className="dt-icon dt-group-plus" aria-label={t('添加到「{name}」', { name: group.name })} title={t('在这个分组里添加任务')} onClick={() => { setScope('all'); setAdding(group.id); }}><Plus className="dt-svg" strokeWidth={1.5} /></button><span className="dt-n">{open.length}</span></span></div>
-        <ul className="dt-list">{open.map((node, index) => <TaskItem key={node.task.id} node={node} prevId={index > 0 ? open[index - 1].task.id : null} first={index === 0} last={index === open.length - 1} {...rowProps} />)}</ul>
+        <ul className="dt-list">{open.map((node, index) => <TaskItem key={node.task.id} node={node} dragScope={`group:${group.id}:open`} prevId={open[index - 1]?.task.id ?? null} previousTaskId={open[index - 1]?.task.id} nextTaskId={open[index + 1]?.task.id} {...rowProps} />)}</ul>
         <GroupAdd group={group} open={adding === group.id} onOpen={() => setAdding(group.id)} onClose={() => setAdding(null)} lastId={open.length ? open[open.length - 1].task.id : null} run={run} onIndented={id => setExpanded(new Set(expanded).add(id))} />
         {done.length > 0 && <>
           <button className="dt-folded" aria-expanded={foldedOpen.has(group.id)} onClick={() => setFoldedOpen(toggleSet(foldedOpen, group.id))}>
             <span className="dt-col"><ChevronRight className="dt-svg" strokeWidth={1.5} style={{ transform: foldedOpen.has(group.id) ? 'rotate(90deg)' : undefined, transition: 'transform var(--dur-fold)' }} /></span>{t('已完成')} {done.length}
           </button>
-          {foldedOpen.has(group.id) && <ul className="dt-list">{done.map((node, index) => <TaskItem key={node.task.id} node={node} prevId={null} first={index === 0} last={index === done.length - 1} {...rowProps} />)}</ul>}
+          {foldedOpen.has(group.id) && <ul className="dt-list">{done.map((node, index) => <TaskItem key={node.task.id} node={node} dragScope={`group:${group.id}:done`} prevId={null} previousTaskId={done[index - 1]?.task.id} nextTaskId={done[index + 1]?.task.id} {...rowProps} />)}</ul>}
         </>}
       </section>)}
       </>}
@@ -332,7 +434,7 @@ export function App() {
 }
 
 interface ItemProps {
-  node: TaskNode; prevId: string | null; groups: GroupInfo[]; today: string; openMenu: OpenMenu; first: boolean; last: boolean; mutating: boolean; run: Run;
+  node: TaskNode; dragScope: string; taskDrag: TaskDrag; prevId: string | null; previousTaskId?: string; nextTaskId?: string; groups: GroupInfo[]; today: string; openMenu: OpenMenu; mutating: boolean; run: Run;
   editing: string | null; setEditing: (id: string | null) => void;
   addingSub: string | null; setAddingSub: (id: string | null) => void; addNext: (task: TodoTask) => void;
   expanded: Set<string>; setExpanded: (next: Set<string>) => void;
@@ -352,17 +454,17 @@ function SegmentRing({ count, done }: { count: number; done: number }) {
 }
 
 function TaskItem(props: ItemProps) {
-  const { node, prevId, groups, today, openMenu, first, last, mutating, run, editing, setEditing, addingSub, setAddingSub, addNext, expanded, setExpanded, remove, toggleSet } = props;
+  const { node, dragScope, taskDrag, prevId, previousTaskId, nextTaskId, groups, today, openMenu, mutating, run, editing, setEditing, addingSub, setAddingSub, addNext, expanded, setExpanded, remove, toggleSet } = props;
   const { task, children } = node;
   const doneCount = children.filter(child => child.completed).length;
   const isOpen = expanded.has(task.id) || addingSub === task.id;
   const startSub = () => { setExpanded(new Set(expanded).add(task.id)); setAddingSub(task.id); };
 
   return <li className="dt-item">
-    <TaskRow task={task} today={today} openMenu={openMenu} groups={groups} prevId={prevId} onIndented={id => setExpanded(new Set(expanded).add(id))} first={first} last={last} subCount={children.length} subDone={doneCount} expanded={isOpen} onToggleSub={() => setExpanded(toggleSet(expanded, task.id))}
+    <TaskRow task={task} taskDrag={taskDrag} dragScope={dragScope} previousTaskId={previousTaskId} nextTaskId={nextTaskId} today={today} openMenu={openMenu} groups={groups} prevId={prevId} onIndented={id => setExpanded(new Set(expanded).add(id))} subCount={children.length} subDone={doneCount} expanded={isOpen} onToggleSub={() => setExpanded(toggleSet(expanded, task.id))}
       mutating={mutating} run={run} editing={editing === task.id} setEditing={setEditing} onAddSub={startSub} onNext={() => addNext(task)} remove={remove} />
     {(children.length > 0 || addingSub === task.id) && <ul className="dt-sub" hidden={!isOpen}>
-      {children.map((child, index) => <li key={child.id} className="dt-item"><TaskRow task={child} sub today={today} openMenu={openMenu} groups={groups} prevId={null} onIndented={() => {}} first={index === 0} last={index === children.length - 1} subCount={0} subDone={0} expanded={false} onToggleSub={() => {}}
+      {children.map((child, index) => <li key={child.id} className="dt-item"><TaskRow task={child} taskDrag={taskDrag} dragScope={`children:${task.id}`} previousTaskId={children[index - 1]?.id} nextTaskId={children[index + 1]?.id} sub today={today} openMenu={openMenu} groups={groups} prevId={null} onIndented={() => {}} subCount={0} subDone={0} expanded={false} onToggleSub={() => {}}
         mutating={mutating} run={run} editing={editing === child.id} setEditing={setEditing} onAddSub={() => {}} onNext={() => addNext(child)} remove={remove} /></li>)}
       {addingSub === task.id && <li className="dt-item"><SubAdd parent={task} run={run} close={() => setAddingSub(null)} /></li>}
     </ul>}
@@ -378,16 +480,16 @@ function Actions({ title, sub, flat, disabled, onAddSub, onDue, onDelete }: { ti
 }
 
 interface RowProps {
-  task: TodoTask; sub?: boolean; flat?: boolean; hideDue?: boolean; tag?: GroupInfo; today: string; openMenu: OpenMenu; groups: GroupInfo[]; prevId: string | null; onIndented: (parentId: string) => void;
-  first: boolean; last: boolean; subCount: number; subDone: number; expanded: boolean; onToggleSub: () => void;
+  task: TodoTask; taskDrag?: TaskDrag; dragScope?: string; dragAllTasks?: boolean; previousTaskId?: string; nextTaskId?: string; sub?: boolean; flat?: boolean; hideDue?: boolean; tag?: GroupInfo; today: string; openMenu: OpenMenu; groups: GroupInfo[]; prevId: string | null; onIndented: (parentId: string) => void;
+  subCount: number; subDone: number; expanded: boolean; onToggleSub: () => void;
   mutating: boolean; run: Run; editing: boolean; setEditing: (id: string | null) => void; onAddSub: () => void; onNext?: () => void; remove: (task: TodoTask) => Promise<void>;
 }
 
-function TaskRow({ task, sub, flat, hideDue, tag, today, openMenu, groups, prevId, onIndented, first, last, subCount, subDone, expanded, onToggleSub, mutating, run, editing, setEditing, onAddSub, onNext, remove }: RowProps) {
+function TaskRow({ task, taskDrag, dragScope, dragAllTasks = false, previousTaskId, nextTaskId, sub, flat, hideDue, tag, today, openMenu, groups, prevId, onIndented, subCount, subDone, expanded, onToggleSub, mutating, run, editing, setEditing, onAddSub, onNext, remove }: RowProps) {
   const [picking, setPicking] = useState(false);
   const progress = subCount ? subDone / subCount : 0;
   const due = task.due_date ? dueInfo(task.due_date, today) : null;
-  const classes = ['dt-row', sub ? 'is-sub' : '', task.completed ? 'is-done' : '', subCount ? 'has-sub' : '', editing ? 'is-editing' : ''].filter(Boolean).join(' ');
+  const classes = ['dt-row', sub ? 'is-sub' : '', task.completed ? 'is-done' : '', subCount ? 'has-sub' : '', editing ? 'is-editing' : '', taskDrag?.sourceId === task.id ? 'is-dragging' : '', taskDrag?.target?.id === task.id ? (taskDrag.target.after ? 'is-drop-after' : 'is-drop-before') : ''].filter(Boolean).join(' ');
   const toggle = () => void run(() => taskApi.patch(task.id, { completed: !task.completed }));
   const menuItems = (): MenuEntry[] => [
     ...(!sub && !flat && !task.completed ? [{ label: t('添加子任务'), onSelect: onAddSub }] : []),
@@ -395,22 +497,32 @@ function TaskRow({ task, sub, flat, hideDue, tag, today, openMenu, groups, prevI
     ...(task.due_date ? [{ label: t('清除到期日'), onSelect: () => void run(() => taskApi.setDue(task.id, null)) }] : []),
     ...(!flat && !sub && prevId ? [{ label: t('缩进为上一条的子任务'), onSelect: () => void run(() => taskApi.reparent(task.id, prevId)).then(ok => { if (ok) onIndented(prevId); }) }] : []),
     ...(!flat && sub ? [{ label: t('取消缩进'), onSelect: () => void run(() => taskApi.reparent(task.id, null)) }] : []),
-    ...(!flat ? [{ label: t('上移'), disabled: first, onSelect: () => void run(() => taskApi.move(task.id, -1)) }, { label: t('下移'), disabled: last, onSelect: () => void run(() => taskApi.move(task.id, 1)) }] : []),
+    { label: t('上移'), disabled: !previousTaskId, onSelect: () => { if (previousTaskId) void run(() => taskApi.reorder(task.id, previousTaskId, false, dragAllTasks)); } },
+    { label: t('下移'), disabled: !nextTaskId, onSelect: () => { if (nextTaskId) void run(() => taskApi.reorder(task.id, nextTaskId, true, dragAllTasks)); } },
     ...(!sub && groups.length > 1 ? ['separator' as const, ...groups.filter(group => group.id !== task.category).map(group => ({ label: t('移到「{name}」', { name: group.name }), dot: group.color, onSelect: () => void run(() => taskApi.patch(task.id, { category: group.id })) }))] : []),
     'separator',
     { label: t('删除'), danger: true, onSelect: () => void remove(task) },
   ];
   return <>
-    <div className={classes} onContextMenu={event => openMenu(event, menuItems())}>
+    <div className={classes} data-task-id={task.id} data-drag-scope={dragScope} onContextMenu={event => openMenu(event, menuItems())}>
       <button className={`dt-check ${task.completed ? 'is-on' : ''} ${!task.completed && subCount > 1 ? 'is-seg' : ''}`} role="checkbox" aria-checked={task.completed} disabled={mutating} aria-label={t(task.completed ? '恢复 {title}' : '完成 {title}', { title: task.title })} onClick={toggle}>
         {task.completed ? <Check className="dt-svg" strokeWidth={2} /> : subCount > 1 ? <SegmentRing count={subCount} done={subDone} /> : subCount > 0 && progress > 0 && <svg className="dt-ring" viewBox="0 0 21 21" aria-hidden="true"><circle cx="10.5" cy="10.5" r="9.75" pathLength="100" strokeDasharray={`${progress * 100} 100`} /></svg>}
       </button>
       {editing
         ? <EditField task={task} sub={sub} groups={groups} prevId={prevId} onIndented={onIndented} run={run} close={() => setEditing(null)} onNext={onNext} />
         : <>
-          <span className="dt-text" role="button" tabIndex={0} aria-label={t('编辑 {title}', { title: task.title })} onClick={() => setEditing(task.id)} onKeyDown={event => {
+          <span className="dt-text" role="button" tabIndex={0} title={t('拖动排序；按住 Option 并使用上下方向键调整。')} draggable={false}
+            onPointerDown={event => { if (taskDrag && dragScope) taskDrag.start(event, task, dragScope, dragAllTasks); }}
+            onPointerMove={event => taskDrag?.move(event)} onPointerUp={event => taskDrag?.end(event)}
+            onPointerCancel={event => taskDrag?.end(event, true)} onLostPointerCapture={event => taskDrag?.end(event, true)}
+            aria-label={t('编辑 {title}', { title: task.title })} onClick={() => { if (!taskDrag?.consumeClick()) setEditing(task.id); }} onKeyDown={event => {
             if (event.key === 'Enter') setEditing(task.id);
-            else if (event.altKey && !flat && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) { event.preventDefault(); const down = event.key === 'ArrowDown'; if (down ? !last : !first) void run(() => taskApi.move(task.id, down ? 1 : -1)); }
+            else if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+              event.preventDefault();
+              const down = event.key === 'ArrowDown';
+              const target = down ? nextTaskId : previousTaskId;
+              if (target) void run(() => taskApi.reorder(task.id, target, down, dragAllTasks));
+            }
           }}><TitleText title={task.title} /></span>
           {due && !hideDue && <button type="button" className={`dt-due is-${due.tone} ${task.completed ? 'is-done' : ''}`} aria-label={t('到期日 {date}，点击修改', { date: due.text })} aria-expanded={picking} onClick={() => setPicking(!picking)}>{due.text}</button>}
           {tag && <span className={`dt-tag ${tag.color}`}>{tag.name}</span>}
@@ -433,12 +545,12 @@ function DuePicker({ task, today, sub, run, close }: { task: TodoTask; today: st
   </div>;
 }
 
-interface RowProps2 { mutating: boolean; run: Run; editing: string | null; setEditing: (id: string | null) => void; remove: (task: TodoTask) => Promise<void>; openMenu: OpenMenu }
+interface RowProps2 { mutating: boolean; run: Run; editing: string | null; setEditing: (id: string | null) => void; remove: (task: TodoTask) => Promise<void>; openMenu: OpenMenu; taskDrag: TaskDrag }
 
 /** A flat list of tasks across groups, each row tagged with its group. */
-function FlatRows({ items, groups, today, rowProps, hideDue }: { items: TodoTask[]; groups: GroupInfo[]; today: string; rowProps: RowProps2; hideDue?: boolean }) {
-  return <ul className="dt-list">{items.map(task => <li className="dt-item" key={task.id}>
-    <TaskRow task={task} flat hideDue={hideDue && task.due_date === today} today={today} openMenu={rowProps.openMenu} tag={groups.find(group => group.id === task.category)} groups={groups} prevId={null} onIndented={() => {}} first last subCount={0} subDone={0} expanded={false} onToggleSub={() => {}}
+function FlatRows({ items, groups, today, rowProps, dragScope, hideDue }: { items: TodoTask[]; groups: GroupInfo[]; today: string; rowProps: RowProps2; dragScope: string; hideDue?: boolean }) {
+  return <ul className="dt-list">{items.map((task, index) => <li className="dt-item" key={task.id}>
+    <TaskRow task={task} taskDrag={rowProps.taskDrag} dragScope={dragScope} dragAllTasks previousTaskId={items[index - 1]?.id} nextTaskId={items[index + 1]?.id} flat hideDue={hideDue && task.due_date === today} today={today} openMenu={rowProps.openMenu} tag={groups.find(group => group.id === task.category)} groups={groups} prevId={null} onIndented={() => {}} subCount={0} subDone={0} expanded={false} onToggleSub={() => {}}
       mutating={rowProps.mutating} run={rowProps.run} editing={rowProps.editing === task.id} setEditing={rowProps.setEditing} onAddSub={() => {}} remove={rowProps.remove} />
   </li>)}</ul>;
 }
@@ -469,13 +581,13 @@ interface TodayListProps {
 /** The day view: today (overdue, due today, the coming week) or any other day / range picked in the calendar. */
 function TodayList({ data, range, groups, today, hasTasks, upcomingOpen, setUpcomingOpen, foldedOpen, setFoldedOpen, toggleSet, rowProps }: TodayListProps) {
   const doneKey = '__today_done__';
-  const rows = (items: TodoTask[]) => <FlatRows items={items} groups={groups} today={today} rowProps={rowProps} />;
+  const rows = (items: TodoTask[], scope: string) => <FlatRows items={items} groups={groups} today={today} rowProps={rowProps} dragScope={scope} />;
   const todayOnly = range.start === today && range.end === today;
   const dayTitle = (date: string) => { const name = dueInfo(date, today).text; const short = monthDay(date); return name === short ? `${weekdayShort(date)} · ${short}` : `${name} · ${short}`; };
-  const doneFold = <Fold label={t('已完成')} count={data.done.length} open={foldedOpen.has(doneKey)} onToggle={() => setFoldedOpen(toggleSet(foldedOpen, doneKey))}>{rows(data.done)}</Fold>;
+  const doneFold = <Fold label={t('已完成')} count={data.done.length} open={foldedOpen.has(doneKey)} onToggle={() => setFoldedOpen(toggleSet(foldedOpen, doneKey))}>{rows(data.done, 'today:done')}</Fold>;
   if (!todayOnly) {
     return <>
-      {data.days.map(day => <Section key={day.date} title={dayTitle(day.date)} tone="work" count={day.tasks.length}>{rows(day.tasks)}</Section>)}
+      {data.days.map(day => <Section key={day.date} title={dayTitle(day.date)} tone="work" count={day.tasks.length}>{rows(day.tasks, `day:${day.date}`)}</Section>)}
       {data.days.length === 0 && <p className="dt-empty">{t('{day}没有安排。在下方添加，任务会定在这一天。', { day: rangeLabel(range, today) })}</p>}
       {doneFold}
     </>;
@@ -483,20 +595,20 @@ function TodayList({ data, range, groups, today, hasTasks, upcomingOpen, setUpco
   const none = data.overdue.length + data.today.length === 0;
   const empty = none && data.upcoming.length + data.done.length === 0;
   return <>
-    <Section title={t('已逾期')} tone="is-overdue" count={data.overdue.length}>{rows(data.overdue)}</Section>
-    <Section title={t('今天')} tone="work" count={data.today.length}><FlatRows items={data.today} groups={groups} today={today} rowProps={rowProps} hideDue /></Section>
+    <Section title={t('已逾期')} tone="is-overdue" count={data.overdue.length}>{rows(data.overdue, 'today:overdue')}</Section>
+    <Section title={t('今天')} tone="work" count={data.today.length}><FlatRows items={data.today} groups={groups} today={today} rowProps={rowProps} dragScope="today:today" hideDue /></Section>
     {none && <p className="dt-empty">{!hasTasks ? t('把要做的事，放在这里。') : empty ? t('今天没有安排。在下方添加，或在「全部」里给任务设置到期日。') : t('今天没有要做的事。')}</p>}
-    <Fold label={t('接下来 {n} 天', { n: UPCOMING_DAYS })} count={data.upcoming.length} open={upcomingOpen} onToggle={() => setUpcomingOpen(!upcomingOpen)}>{rows(data.upcoming)}</Fold>
+    <Fold label={t('接下来 {n} 天', { n: UPCOMING_DAYS })} count={data.upcoming.length} open={upcomingOpen} onToggle={() => setUpcomingOpen(!upcomingOpen)}>{rows(data.upcoming, 'today:upcoming')}</Fold>
     {doneFold}
   </>;
 }
 
 /** Overdue, undated and completed perspectives across all groups. */
 function ScopeList({ scope, lists, groups, today, rowProps }: { scope: 'overdue' | 'undated' | 'done'; lists: Lists; groups: GroupInfo[]; today: string; rowProps: RowProps2 }) {
-  const rows = (items: TodoTask[]) => <FlatRows items={items} groups={groups} today={today} rowProps={rowProps} />;
-  if (scope === 'overdue') return lists.overdue.length ? <Section title={t('已逾期')} tone="is-overdue" count={lists.overdue.length}>{rows(lists.overdue)}</Section> : <p className="dt-empty">{t('没有逾期的任务。')}</p>;
-  if (scope === 'done') return lists.done.length ? <Section title={t('已完成')} tone="work" count={lists.done.length}>{rows(lists.done)}</Section> : <p className="dt-empty">{t('还没有完成的任务。')}</p>;
-  return lists.undated.length ? <>{lists.undated.map(entry => <Section key={entry.group.id} title={entry.group.name} tone={entry.group.color} count={entry.tasks.length}>{rows(entry.tasks)}</Section>)}</> : <p className="dt-empty">{t('每个任务都有到期日。')}</p>;
+  const rows = (items: TodoTask[], scope: string) => <FlatRows items={items} groups={groups} today={today} rowProps={rowProps} dragScope={scope} />;
+  if (scope === 'overdue') return lists.overdue.length ? <Section title={t('已逾期')} tone="is-overdue" count={lists.overdue.length}>{rows(lists.overdue, 'scope:overdue')}</Section> : <p className="dt-empty">{t('没有逾期的任务。')}</p>;
+  if (scope === 'done') return lists.done.length ? <Section title={t('已完成')} tone="work" count={lists.done.length}>{rows(lists.done, 'scope:done')}</Section> : <p className="dt-empty">{t('还没有完成的任务。')}</p>;
+  return lists.undated.length ? <>{lists.undated.map(entry => <Section key={entry.group.id} title={entry.group.name} tone={entry.group.color} count={entry.tasks.length}>{rows(entry.tasks, `undated:${entry.group.id}`)}</Section>)}</> : <p className="dt-empty">{t('每个任务都有到期日。')}</p>;
 }
 
 function EditField({ task, sub, groups, prevId, onIndented, run, close, onNext }: { onNext?: () => void; task: TodoTask; sub?: boolean; groups: GroupInfo[]; prevId: string | null; onIndented: (parentId: string) => void; run: Run; close: () => void }) {
@@ -521,7 +633,7 @@ function EditField({ task, sub, groups, prevId, onIndented, run, close, onNext }
     if (!await save()) return;
     if (await run(() => taskApi.reparent(task.id, parentId)) && parentId) onIndented(parentId);
   };
-  const onKeyDown = async (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onKeyDown = async (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (isImeEvent(event, composing.current)) return;
     // Enter finishes this task and starts the next one beside it; Shift+Enter breaks the line inside this task.
     if (event.key === 'Enter' && event.shiftKey) return;
@@ -560,7 +672,7 @@ function GroupAdd({ group, open, onOpen, onClose, lastId, run, onIndented }: { g
     busy.current = false;
     if (ok) { setTitle(''); if (parent) onIndented(parent); }
   };
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (isImeEvent(event, composing.current)) return;
     if (event.key === 'Enter') { event.preventDefault(); void add(); }
     else if (event.key === 'Escape') { event.preventDefault(); close(); }
@@ -587,7 +699,7 @@ function SubAdd({ parent, run, close }: { parent: TodoTask; run: Run; close: () 
     busy.current = false;
     if (ok) { setTitle(''); if (asTopLevel) close(); }
   };
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (isImeEvent(event, composing.current)) return;
     if (event.key === 'Enter') { event.preventDefault(); void add(false); }
     else if (event.key === 'Escape') { event.preventDefault(); close(); }

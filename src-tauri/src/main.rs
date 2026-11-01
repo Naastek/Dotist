@@ -29,6 +29,48 @@ const WINDOW_RADIUS: f64 = 16.0;
 /// Strength of the NSVisualEffectView (see `blur_alpha_for`).
 static BLUR_ALPHA_BITS: AtomicU64 = AtomicU64::new(0x3FF0000000000000); // 1.0
 
+static NATIVE_DRAG: AtomicBool = AtomicBool::new(false);
+
+/// Unknown button state must never be interpreted as a release.
+fn drag_in_progress(active: bool, left_pressed: Option<bool>) -> bool {
+    left_pressed == Some(true) || (active && left_pressed != Some(false))
+}
+
+#[cfg(target_os = "macos")]
+fn left_mouse_pressed() -> Option<bool> {
+    use objc2::{class, msg_send};
+    // SAFETY: NSEvent's class query is thread-safe, has no object lifetime, and returns an NSUInteger bitmask.
+    let buttons: usize = unsafe { msg_send![class!(NSEvent), pressedMouseButtons] };
+    Some(buttons & 1 != 0)
+}
+#[cfg(not(target_os = "macos"))]
+fn left_mouse_pressed() -> Option<bool> { None }
+
+fn finish_window_drag(app: &AppHandle) {
+    if NATIVE_DRAG.swap(false, Ordering::SeqCst) {
+        let _ = app.emit("dotist://drag-end", serde_json::json!({ "released": true }));
+        if let Some(window) = app.get_webview_window("main") { schedule_snap(window); }
+    }
+}
+
+#[tauri::command]
+fn window_drag_pointer(app: AppHandle, pressed: bool) {
+    if pressed {
+        NATIVE_DRAG.store(true, Ordering::SeqCst);
+        let _ = app.emit("dotist://drag-start", ());
+    } else if left_mouse_pressed() != Some(true) { finish_window_drag(&app); }
+}
+
+#[tauri::command]
+fn start_window_drag(window: WebviewWindow) -> Result<(), String> {
+    NATIVE_DRAG.store(true, Ordering::SeqCst);
+    let _ = window.emit("dotist://drag-start", ());
+    window.start_dragging().map_err(|error| {
+        finish_window_drag(window.app_handle());
+        error.to_string()
+    })
+}
+
 
 /// The system blur stays at full strength: a partly transparent blur layer lets the sharp desktop show through,
 /// which reads as harsh, ghosted glass. Frost and transparency are shaped by the tint, haze and grain instead.
@@ -206,8 +248,13 @@ struct Bubble {
     saved: Mutex<Option<(PhysicalPosition<i32>, PhysicalSize<u32>)>>,
     snap_generation: AtomicU64,
     open_generation: AtomicU64,
+    open_animating: AtomicU64,
     animating: AtomicBool,
     resize_generation: AtomicU64,
+}
+impl Bubble {
+    fn begin_open_animation(&self, generation: u64) { self.open_animating.fetch_max(generation, Ordering::SeqCst); }
+    fn end_open_animation(&self, generation: u64) { let _ = self.open_animating.compare_exchange(generation, 0, Ordering::SeqCst, Ordering::SeqCst); }
 }
 
 #[derive(Default)]
@@ -281,6 +328,12 @@ fn restore_task(store: State<'_, SharedStore>, id: String) -> Result<Task, Strin
 fn move_task(store: State<'_, SharedStore>, id: String, direction: i32) -> Result<(), String> {
     store.lock().map_err(|e| e.to_string())?.move_task(&id, direction).map_err(|e| e.to_string())
 }
+#[tauri::command]
+fn reorder_task(app: AppHandle, store: State<'_, SharedStore>, id: String, target_id: String, after: bool, all_tasks: bool) -> Result<(), String> {
+    store.lock().map_err(|e| e.to_string())?.reorder_task(&id, &target_id, after, all_tasks).map_err(|e| e.to_string())?;
+    let _ = app.emit("dotist://tasks-changed", ());
+    Ok(())
+}
 
 #[tauri::command]
 fn list_groups(store: State<'_, SharedStore>) -> Result<Vec<Group>, String> {
@@ -336,6 +389,7 @@ fn animate_frame(window: &WebviewWindow, from: Rect, to: Rect, radii: (f64, f64)
     let total = (duration_ms.max(1)) as f64 / 1000.0;
     let mut last_radius = f64::MIN;
     loop {
+        if cancelled() { break; }
         let t = (started.elapsed().as_secs_f64() / total).min(1.0);
         let rect = lerp_rect(from, to, ease(t));
         let width = (rect.right - rect.left).round().max(1.0);
@@ -345,8 +399,8 @@ fn animate_frame(window: &WebviewWindow, from: Rect, to: Rect, radii: (f64, f64)
         // Rebuilding the vibrancy mask is the costly step, so only do it when the radius visibly changed.
         let radius = lerp(radii.0, radii.1, ease_out_cubic(t));
         if (radius - last_radius).abs() >= 1.0 { set_effects_radius(window, radius); last_radius = radius; }
-        if t >= 1.0 || cancelled() { break; }
-        std::thread::sleep(std::time::Duration::from_millis(3));
+        if t >= 1.0 { break; }
+        std::thread::sleep(std::time::Duration::from_millis(8));
     }
 }
 
@@ -386,7 +440,7 @@ fn reset_window_size(app: AppHandle, bubble: State<'_, Bubble>) -> Result<(), St
 
 /// Animates the native window (and its vibrancy) between the full window and the 48px bubble.
 /// The bubble sits exactly where the collapse button (top-right corner of the window) is.
-/// Collapsing eases in and out; expanding springs a little past its size and settles.
+/// Collapsing eases in and out; expanding settles with a restrained spring.
 #[tauri::command]
 async fn animate_bubble(window: WebviewWindow, bubble: State<'_, Bubble>, bubble_mode: bool, duration_ms: u64) -> Result<(), String> {
     let (area_pos, area_size, scale) = work_area(&window)?;
@@ -423,11 +477,12 @@ async fn animate_bubble(window: WebviewWindow, bubble: State<'_, Bubble>, bubble
     if !bubble_mode { window.set_min_size(Some(LogicalSize::new(BUBBLE, BUBBLE))).map_err(|e| e.to_string())?; }
     bubble.open_generation.fetch_add(1, Ordering::SeqCst);
     bubble.animating.store(true, Ordering::SeqCst);
+    bubble.open_animating.store(0, Ordering::SeqCst);
     if bubble_mode {
         animate_frame(&window, current, target, radii, duration_ms, &ease_in_out_cubic, &|| false);
         bubble.active.store(true, Ordering::SeqCst);
     } else {
-        animate_frame(&window, current, target, radii, duration_ms, &|t| ease_out_back(t, 0.8), &|| false);
+        animate_frame(&window, current, target, radii, duration_ms, &|t| ease_out_back(t, 0.25), &|| false);
         window.set_min_size(Some(LogicalSize::new(MIN_WIDTH, MIN_HEIGHT))).map_err(|e| e.to_string())?;
         window.set_resizable(true).map_err(|e| e.to_string())?;
         bubble.active.store(false, Ordering::SeqCst);
@@ -449,7 +504,7 @@ fn bubble_target_size(window: WebviewWindow, bubble: State<'_, Bubble>) -> Resul
 /// Widens the bubble into a capsule (hover) toward the screen interior, or shrinks it back, animated.
 /// `width` is the logical width the content needs; it is clamped to something sensible for the screen.
 #[tauri::command]
-async fn set_bubble_open(window: WebviewWindow, bubble: State<'_, Bubble>, open: bool, width: Option<f64>) -> Result<(), String> {
+async fn set_bubble_open(window: WebviewWindow, bubble: State<'_, Bubble>, open: bool, width: Option<f64>, duration_ms: Option<u64>) -> Result<(), String> {
     if !bubble.active.load(Ordering::SeqCst) { return Ok(()); }
     let generation = bubble.open_generation.fetch_add(1, Ordering::SeqCst) + 1;
     let (area_pos, area_size, scale) = work_area(&window)?;
@@ -463,13 +518,20 @@ async fn set_bubble_open(window: WebviewWindow, bubble: State<'_, Bubble>, open:
     let to = if on_right { Rect { left: from.right - target_px, ..from } } else { Rect { right: from.left + target_px, ..from } };
     window.set_min_size(Some(LogicalSize::new(BUBBLE, BUBBLE))).map_err(|e| e.to_string())?;
     let cancelled = || bubble.open_generation.load(Ordering::SeqCst) != generation || !bubble.active.load(Ordering::SeqCst);
+    bubble.begin_open_animation(generation);
     if open {
-        animate_frame(&window, from, to, (BUBBLE_RADIUS, BUBBLE_RADIUS), 260, &ease_out_cubic, &cancelled);
+        animate_frame(&window, from, to, (BUBBLE_RADIUS, BUBBLE_RADIUS), duration_ms.unwrap_or(260), &ease_out_cubic, &cancelled);
     } else {
-        animate_frame(&window, from, to, (BUBBLE_RADIUS, BUBBLE_RADIUS), 180, &ease_out_cubic, &cancelled);
+        animate_frame(&window, from, to, (BUBBLE_RADIUS, BUBBLE_RADIUS), duration_ms.unwrap_or(180), &ease_out_cubic, &cancelled);
     }
     // Make sure the mask matches the final size, even if the last frame was cut short by a newer request.
-    if bubble.active.load(Ordering::SeqCst) && bubble.open_generation.load(Ordering::SeqCst) == generation { set_effects_radius(&window, BUBBLE_RADIUS); }
+    let latest = bubble.active.load(Ordering::SeqCst) && bubble.open_generation.load(Ordering::SeqCst) == generation;
+    if latest {
+        set_effects_radius(&window, BUBBLE_RADIUS);
+    }
+    bubble.end_open_animation(generation);
+    // A drag may finish while the capsule is still changing width; snap only after its last frame.
+    if latest { schedule_snap(window); }
     Ok(())
 }
 
@@ -575,9 +637,9 @@ fn schedule_snap(window: WebviewWindow) {
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(180));
         let bubble = app.state::<Bubble>();
-        if !bubble.active.load(Ordering::SeqCst) || bubble.snap_generation.load(Ordering::SeqCst) != generation || bubble.animating.load(Ordering::SeqCst) { return; }
-        // The window has stopped moving: a native drag never reports its end to the page, so say so.
-        let _ = app.emit("dotist://drag-end", ());
+        if !bubble.active.load(Ordering::SeqCst) || bubble.snap_generation.load(Ordering::SeqCst) != generation || bubble.animating.load(Ordering::SeqCst) || bubble.open_animating.load(Ordering::SeqCst) != 0 { return; }
+        // Movement-idle only debounces snapping. A held/unknown button must never end a drag or pull the window back.
+        if drag_in_progress(NATIVE_DRAG.load(Ordering::SeqCst), left_mouse_pressed()) { return; }
         let Ok((area_pos, area_size, _)) = work_area(&window) else { return };
         let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) else { return };
         let max_x = (area_pos.x + area_size.width as i32 - size.width as i32).max(area_pos.x);
@@ -1043,7 +1105,7 @@ fn main() {
         .manage(Capture::default())
         .manage(TrayState::default())
         .manage(ViewsPresence::default())
-        .invoke_handler(tauri::generate_handler![list_tasks, set_due_date, set_start_date, set_date_range, move_status_task, list_groups, add_group, update_group, move_group, delete_group, restore_group, reparent_task, add_task, patch_task, delete_task, restore_task, move_task, animate_bubble, bubble_target_size, set_bubble_open, set_tray_titles, set_tray_groups, reset_window_size, get_settings, update_settings, open_settings, open_views, quick_done, shortcut_capture, reveal_in_finder, updater::check_for_update, updater::install_update, updater::pending_update])
+        .invoke_handler(tauri::generate_handler![start_window_drag, window_drag_pointer, list_tasks, set_due_date, set_start_date, set_date_range, move_status_task, list_groups, add_group, update_group, move_group, delete_group, restore_group, reparent_task, add_task, patch_task, delete_task, restore_task, move_task, reorder_task, animate_bubble, bubble_target_size, set_bubble_open, set_tray_titles, set_tray_groups, reset_window_size, get_settings, update_settings, open_settings, open_views, quick_done, shortcut_capture, reveal_in_finder, updater::check_for_update, updater::install_update, updater::pending_update])
         .on_window_event(|window, event| {
             if window.label() == "views" && matches!(event, WindowEvent::Destroyed) {
                 let app = window.app_handle();
@@ -1063,8 +1125,15 @@ fn main() {
                 if window.label() == "quick" { let _ = window.hide(); }
             }
             if let WindowEvent::Moved(_) = event {
-                if window.label() == "main" && window.app_handle().state::<Bubble>().active.load(Ordering::SeqCst) {
-                    if let Some(webview) = window.app_handle().get_webview_window("main") { schedule_snap(webview); }
+                if window.label() == "main" && left_mouse_pressed() == Some(true) {
+                    NATIVE_DRAG.store(true, Ordering::SeqCst);
+                    let _ = window.emit("dotist://drag-start", ());
+                }
+                if window.label() == "main" {
+                    let bubble = window.app_handle().state::<Bubble>();
+                    if bubble.active.load(Ordering::SeqCst) && !bubble.animating.load(Ordering::SeqCst) && bubble.open_animating.load(Ordering::SeqCst) == 0 {
+                        if let Some(webview) = window.app_handle().get_webview_window("main") { schedule_snap(webview); }
+                    }
                 }
             }
         })
@@ -1165,6 +1234,8 @@ fn main() {
                     loop {
                         std::thread::sleep(std::time::Duration::from_millis(60));
                         let Some(window) = handle.get_webview_window("main") else { continue };
+                        let left_pressed = left_mouse_pressed();
+                        if left_pressed == Some(false) { finish_window_drag(&handle); }
                         if !window.is_visible().unwrap_or(false) { last = None; continue; }
                         let (Ok(cursor), Ok(pos), Ok(size)) = (window.cursor_position(), window.outer_position(), window.outer_size()) else { continue };
                         let inside = cursor.x >= pos.x as f64 && cursor.x < pos.x as f64 + size.width as f64 && cursor.y >= pos.y as f64 && cursor.y < pos.y as f64 + size.height as f64;
@@ -1186,7 +1257,7 @@ fn main() {
                         // Idle fade: after a moment without the pointer or focus the window recedes; it returns at once when used.
                         let (fade, idle, delay, secs) = handle.state::<SettingsStore>().current.lock().map(|s| (s.idle_fade && !s.locked, s.idle_opacity as f64 / 100.0, s.idle_delay_secs as u64, s.idle_fade_secs as f64)).unwrap_or((false, 1.0, 5, 2.0));
                         // The floating bubble never fades: it is small and must stay easy to find.
-                        let busy = inside || window.is_focused().unwrap_or(false) || handle.state::<Bubble>().animating.load(Ordering::SeqCst) || handle.state::<Bubble>().active.load(Ordering::SeqCst);
+                        let busy = drag_in_progress(NATIVE_DRAG.load(Ordering::SeqCst), left_pressed) || inside || window.is_focused().unwrap_or(false) || handle.state::<Bubble>().animating.load(Ordering::SeqCst) || handle.state::<Bubble>().active.load(Ordering::SeqCst);
                         if busy { in_use_at = std::time::Instant::now(); }
                         let target = if fade && !busy && in_use_at.elapsed() > std::time::Duration::from_secs(delay) { idle } else { 1.0 };
                         if (alpha - target).abs() > 0.004 {
@@ -1236,6 +1307,31 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn older_capsule_animation_cannot_hide_or_stick_after_a_newer_one() {
+        let bubble = Bubble::default();
+        bubble.begin_open_animation(2);
+        bubble.begin_open_animation(1);
+        bubble.end_open_animation(1);
+        assert_eq!(bubble.open_animating.load(Ordering::SeqCst), 2);
+        bubble.end_open_animation(2);
+        assert_eq!(bubble.open_animating.load(Ordering::SeqCst), 0);
+        bubble.begin_open_animation(1);
+        bubble.end_open_animation(1);
+        assert_eq!(bubble.open_animating.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn drag_lasts_until_confirmed_release_independent_of_movement_or_focus() {
+        for (active, button, expected) in [
+            (true, Some(true), true), (false, Some(true), true),
+            (true, None, true), (false, None, false),
+            (true, Some(false), false), (false, Some(false), false),
+        ] {
+            assert_eq!(drag_in_progress(active, button), expected, "active={active}, button={button:?}");
+        }
+    }
 
     #[test]
     fn views_window_forces_dock_until_destroyed() {

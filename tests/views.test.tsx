@@ -112,6 +112,108 @@ it('reorders cards within a status column using the non-drag controls', async ()
   await waitFor(() => expect(within(column).getAllByRole('article')[0].getAttribute('aria-label')).toBe(before[1]));
 });
 
+it.each(['drag', 'button'] as const)('board %s reordering keeps other status tasks in their relative position', async method => {
+  await board();
+  const column = screen.getByRole('region', { name: '待办' });
+  const source = within(column).getByRole('article', { name: '整理本周的工作计划' });
+  const target = within(column).getByRole('article', { name: '下班后散步，顺路买些水果' });
+  if (method === 'drag') {
+    const dataTransfer = transfer();
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.drop(target, { dataTransfer });
+  } else {
+    actions('整理本周的工作计划');
+    fireEvent.click(screen.getByRole('button', { name: '下移 整理本周的工作计划' }));
+  }
+  await waitFor(() => expect(within(column).getAllByRole('article')[0].getAttribute('aria-label')).toBe('下班后散步，顺路买些水果'));
+  const tasks = (await api.list()).filter(task => ['demo-0', 'demo-1', 'demo-6'].includes(task.id)).sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+  expect(tasks.map(task => task.id)).toEqual(['demo-1', 'demo-6', 'demo-0']);
+});
+
+it('reorders calendar cards without changing their date or group', async () => {
+  await ready();
+  const section = screen.getByRole('region', { name: dates.fullDate(dates.localDate()) });
+  const source = within(section).getByRole('article', { name: '下班后散步，顺路买些水果' });
+  const target = within(section).getByRole('article', { name: '整理本周的工作计划' });
+  target.getBoundingClientRect = () => new DOMRect(0, 0, 200, 40);
+  const before = (await api.list()).find(task => task.id === 'demo-6')!;
+  const dataTransfer = transfer();
+  fireEvent.dragStart(source, { dataTransfer });
+  fireEvent.dragOver(target, { dataTransfer, clientY: 10 });
+  fireEvent.drop(target, { dataTransfer, clientY: 10 });
+  await waitFor(() => expect(within(section).getAllByRole('article')[0].getAttribute('aria-label')).toBe('下班后散步，顺路买些水果'));
+  const after = (await api.list()).find(task => task.id === before.id)!;
+  expect([after.category, after.due_date]).toEqual([before.category, before.due_date]);
+});
+
+it('reorders summaries within a day without writing the due date again', async () => {
+  await ready();
+  const day = screen.getByRole('gridcell', { name: dates.fullDate(dates.localDate()) });
+  const source = within(day).getByText('提交周报');
+  const target = within(day).getByText('整理本周的工作计划');
+  target.getBoundingClientRect = () => new DOMRect(0, 0, 200, 40);
+  const setDue = vi.spyOn(api, 'setDue');
+  const dataTransfer = transfer();
+  fireEvent.dragStart(source, { dataTransfer });
+  fireEvent.dragOver(target, { dataTransfer, clientY: 10 });
+  fireEvent.drop(target, { dataTransfer, clientY: 10 });
+  await waitFor(() => expect(day.querySelector('.dv-day-task')?.textContent).toContain('提交周报'));
+  expect(setDue).not.toHaveBeenCalled();
+});
+
+it('provides non-drag ordering controls for calendar cards', async () => {
+  await ready();
+  const section = screen.getByRole('region', { name: dates.fullDate(dates.localDate()) });
+  const before = within(section).getAllByRole('article').map(card => card.getAttribute('aria-label'));
+  actions(before[1]!);
+  fireEvent.click(within(section).getByRole('button', { name: `上移 ${before[1]}` }));
+  await waitFor(() => expect(within(section).getAllByRole('article')[0].getAttribute('aria-label')).toBe(before[1]));
+});
+
+it('reorders Gantt labels without changing the task dates', async () => {
+  await ready();
+  fireEvent.click(screen.getByRole('tab', { name: '甘特' }));
+  const panel = screen.getByRole('tabpanel');
+  const source = within(panel).getByText('下班后散步，顺路买些水果', { selector: 'strong' }).closest('.dv-gantt-label')!;
+  const target = within(panel).getByText('整理本周的工作计划', { selector: 'strong' }).closest('.dv-gantt-label')!;
+  target.getBoundingClientRect = () => new DOMRect(0, 0, 200, 40);
+  const before = (await api.list()).find(task => task.id === 'demo-6')!;
+  const dataTransfer = transfer();
+  fireEvent.dragStart(source, { dataTransfer });
+  fireEvent.dragOver(target, { dataTransfer, clientY: 10 });
+  fireEvent.drop(target, { dataTransfer, clientY: 10 });
+  await waitFor(() => expect(document.querySelector('.dv-gantt-row .dv-gantt-label strong')?.textContent).toBe('下班后散步，顺路买些水果'));
+  const after = (await api.list()).find(task => task.id === before.id)!;
+  expect([after.start_date, after.due_date]).toEqual([before.start_date, before.due_date]);
+});
+
+it('does not reorder an unscheduled card onto a scheduled Gantt row', async () => {
+  await ready();
+  fireEvent.click(screen.getByRole('tab', { name: '甘特' }));
+  const panel = screen.getByRole('tabpanel');
+  const source = within(panel).getByRole('article', { name: '给绿萝换盆' });
+  const target = within(panel).getByText('整理本周的工作计划', { selector: 'strong' }).closest('.dv-gantt-label')!;
+  const reorder = vi.spyOn(api, 'reorder');
+  const dataTransfer = transfer();
+  fireEvent.dragStart(source, { dataTransfer });
+  fireEvent.dragOver(target, { dataTransfer });
+  fireEvent.drop(target, { dataTransfer });
+  expect(reorder).not.toHaveBeenCalled();
+  expect((await api.list()).find(task => task.id === 'demo-7')?.due_date).toBeNull();
+});
+
+it('supports keyboard ordering of scheduled Gantt rows', async () => {
+  await ready();
+  fireEvent.click(screen.getByRole('tab', { name: '甘特' }));
+  const panel = screen.getByRole('tabpanel');
+  const labels = panel.querySelectorAll('.dv-gantt-row .dv-gantt-label');
+  const first = labels[0].querySelector('strong')?.textContent;
+  const second = labels[1].querySelector('strong')?.textContent;
+  fireEvent.keyDown(labels[1], { key: 'ArrowUp', altKey: true });
+  await waitFor(() => expect(panel.querySelector('.dv-gantt-row .dv-gantt-label strong')?.textContent).toBe(second));
+  expect(panel.querySelectorAll('.dv-gantt-row .dv-gantt-label strong')[1].textContent).toBe(first);
+});
+
 it('reschedules an unscheduled task by dragging to a day, and by using its date input', async () => {
   await ready();
   const today = dates.localDate();

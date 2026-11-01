@@ -22,6 +22,7 @@ interface TaskApi {
   remove(id: string): Promise<void>;
   restore(id: string): Promise<void>;
   move(id: string, direction: -1 | 1): Promise<void>;
+  reorder(id: string, targetId: string, after: boolean, allTasks: boolean): Promise<void>;
 }
 
 const localApi: TaskApi = {
@@ -42,6 +43,7 @@ const localApi: TaskApi = {
   remove: async id => { await invoke('delete_task', { id }); },
   restore: async id => { await invoke('restore_task', { id }); },
   move: async (id, direction) => { await invoke('move_task', { id, direction }); },
+  reorder: async (id, targetId, after, allTasks) => { await invoke('reorder_task', { id, targetId, after, allTasks }); },
 };
 
 // An explicit browser-only visual preview; it never reads or writes the user's database.
@@ -61,8 +63,8 @@ function createDemoApi(): TaskApi {
   let groups: GroupInfo[] = [{ id: 'work', name: '工作', color: 'work', position: 0 }, { id: 'life', name: '生活', color: 'life', position: 1 }, { id: 'study', name: '学习', color: 'study', position: 2 }];
   const deletedGroups = new Map<string, { group: GroupInfo; tasks: TodoTask[] }>();
   const deleted = new Map<string, TodoTask[]>();
-  const siblings = (task: TodoTask) => tasks.filter(item => item.parent_id === task.parent_id && (task.parent_id || item.category === task.category)).sort((a, b) => a.position - b.position);
-  return {
+  const siblings = (task: TodoTask) => tasks.filter(item => item.parent_id === task.parent_id && (task.parent_id || item.category === task.category)).sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+  const demo: TaskApi = {
     list: async () => tasks.map(task => ({ ...task })),
     groups: async () => [...groups].sort((a, b) => a.position - b.position).map(group => ({ ...group })),
     addGroup: async (name, color) => {
@@ -147,9 +149,8 @@ function createDemoApi(): TaskApi {
       if (!task || task.parent_id) return;
       const peers = tasks.filter(item => !item.parent_id && item.status === task.status).sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
       const index = peers.findIndex(item => item.id === id);
-      if (!peers[index + direction]) return;
-      [peers[index], peers[index + direction]] = [peers[index + direction], peers[index]];
-      peers.forEach((peer, position) => { peer.position = position; });
+      const other = peers[index + direction];
+      if (other) await demo.reorder(id, other.id, direction > 0, true);
     },
     patch: async (id, patch) => {
       const target = tasks.find(task => task.id === id);
@@ -175,9 +176,46 @@ function createDemoApi(): TaskApi {
       const group = siblings(task);
       const index = group.findIndex(item => item.id === id);
       const other = group[index + direction];
-      if (other) [task.position, other.position] = [other.position, task.position];
+      if (other) await demo.reorder(id, other.id, direction > 0, false);
+    },
+    reorder: async (id, targetId, after, allTasks) => {
+      const task = tasks.find(item => item.id === id);
+      const target = tasks.find(item => item.id === targetId);
+      if (!task || !target) throw new Error('找不到任务');
+      if (!allTasks && (task.category !== target.category || task.parent_id !== target.parent_id)) throw new Error('只能调整同级任务的顺序');
+      if (id === targetId) return;
+      const peers = [...tasks].sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+      const sourceIndex = peers.findIndex(peer => peer.id === id);
+      const source = peers.splice(sourceIndex, 1)[0];
+      const insertAt = peers.findIndex(peer => peer.id === targetId) + Number(after);
+      if (insertAt === sourceIndex) return;
+      peers.splice(insertAt, 0, source);
+      const candidate = (preferLeft: boolean) => {
+        let first = insertAt, last = insertAt;
+        while (true) {
+          const lower = first === 0 ? Number.MIN_SAFE_INTEGER : peers[first - 1].position + 1;
+          const upper = last + 1 === peers.length ? Number.MAX_SAFE_INTEGER : peers[last + 1].position - 1;
+          const latestStart = upper - (last - first);
+          if (lower <= latestStart) {
+            const start = Math.max(lower, Math.min(peers[first].position, latestStart));
+            const changed = peers.slice(first, last + 1).filter((peer, index) => peer.position !== start + index);
+            return { first, last, start, changed: changed.length, unrelated: changed.filter(peer => peer.id !== id && peer.id !== targetId).length };
+          }
+          if (first > 0 && (last + 1 === peers.length || preferLeft)) first -= 1;
+          else last += 1;
+        }
+      };
+      const left = candidate(true), right = candidate(false);
+      const { first, last, start } = left.unrelated < right.unrelated || (left.unrelated === right.unrelated && left.changed <= right.changed) ? left : right;
+      const now = new Date().toISOString();
+      peers.slice(first, last + 1).forEach((peer, index) => {
+        if (peer.position === start + index) return;
+        peer.position = start + index; peer.revision += 1;
+        if (!peer.completed) peer.updated_at = now;
+      });
     },
   };
+  return demo;
 }
 
 export const isDemo = new URLSearchParams(window.location.search).has('demo');

@@ -10,16 +10,19 @@ button { cursor: pointer; }
 /* The native window animates its own size (with the glass); the page only fades its content. */
 .dt-window { width: 100vw; height: 100vh; box-shadow: var(--dt-window-shadow); -webkit-backdrop-filter: none; backdrop-filter: none;
   transition: border-radius var(--dur-collapse) var(--ease-out); }
-.dt-window > * { transition: opacity 240ms var(--ease-smooth), transform 340ms var(--ease-spring); }
-.dt-window > :nth-child(2) { transition-delay: 40ms; }
-.dt-window > :nth-child(3) { transition-delay: 80ms; }
-.dt-window > :nth-child(4) { transition-delay: 110ms; }
+.dt-window > * { transition: opacity 220ms var(--ease-smooth), transform 300ms var(--ease-smooth); }
+.dt-window > :nth-child(2) { transition-delay: 20ms; }
+.dt-window > :nth-child(3) { transition-delay: 40ms; }
+.dt-window > :nth-child(4) { transition-delay: 60ms; }
 .dt-window.pose-folded { border-radius: calc(var(--bubble) / 2); }
 .dt-window.pose-folded > * { opacity: 0; transform: translateY(8px) scale(0.985); transition-delay: 0ms; }
 .dt-scroll::-webkit-scrollbar { width: 5px; }
 .dt-scroll::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 5px; }
 .dt-head .dt-demo { font-size: 12px; line-height: 16px; color: var(--ink-faint); padding-top: 2px; }
-.dt-row .dt-text { cursor: text; }
+.dt-row .dt-text { cursor: grab; user-select: none; -webkit-user-select: none; }
+.dt-row.is-dragging { opacity: .45; }
+.dt-row.is-drop-before { box-shadow: inset 0 2px var(--accent); }
+.dt-row.is-drop-after { box-shadow: inset 0 -2px var(--accent); }
 .dt-row .dt-text:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 .dt-row.is-editing { z-index: 0; }
 .dt-row.is-editing .dt-cat-pick { margin-right: -2px; }
@@ -176,7 +179,7 @@ html[data-theme="light"] { --tint-rgb: 250, 249, 245; }
 .dt-row::before { transition: background 140ms var(--ease-smooth); }
 .dt-switch span { transition: transform 260ms var(--ease-spring), background 140ms var(--ease-smooth); }
 .dt-bubble-text { transition: opacity 180ms var(--ease-smooth); }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition-duration: 0.01ms !important; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition-duration: 0.01ms !important; transition-delay: 0s !important; } }
 
 /* ---- Menu ---- */
 .dt-menu { position: fixed; z-index: 50; min-width: 172px; max-width: 280px; padding: 4px; border-radius: 10px; background: var(--surface-float); box-shadow: var(--shadow-float), inset 0 0 0 0.5px var(--edge);

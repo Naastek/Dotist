@@ -31,6 +31,9 @@ struct ComposerInput: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: ComposerInput
         init(_ parent: ComposerInput) { self.parent = parent }
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            (notification.userInfo?["NSFieldEditor"] as? NSTextView)?.insertionPointColor = NSColor(DotistDesign.accent)
+        }
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSTextField else { return }
             parent.text = field.stringValue

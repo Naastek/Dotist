@@ -1,0 +1,93 @@
+@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500&family=Noto+Serif+SC:wght@600&family=Source+Sans+3:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,600&display=swap");
+/* Dotist v4 — 预览用样式。每个类都对应一个 SwiftUI 视图（见各组件 README）。
+   禁用：下划线指示、前置小圆点、左侧竖线、圆角底板选中、编辑放大+下划线、进度环。 */
+*{box-sizing:border-box}
+body{margin:0;font-family:var(--font-sans);color:var(--ink);-webkit-font-smoothing:antialiased}
+.dt-desk{position:relative;overflow:hidden;padding:24px;background:radial-gradient(60% 50% at 15% 20%,#9fc3d8 0%,transparent 70%),radial-gradient(50% 45% at 90% 15%,#c9b8e6 0%,transparent 70%),radial-gradient(60% 50% at 70% 95%,#8fb9b0 0%,transparent 70%),linear-gradient(160deg,#dfe6ee,#cfd8e3)}
+[data-theme="dark"] .dt-desk{background:radial-gradient(60% 50% at 15% 20%,#24425a 0%,transparent 70%),radial-gradient(50% 45% at 90% 15%,#3b2f55 0%,transparent 70%),radial-gradient(60% 50% at 70% 95%,#1f4440 0%,transparent 70%),linear-gradient(160deg,#16181c,#101216)}
+.dt-row-flex{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+.dt-cap{font:12px/17px var(--font-sans);color:var(--ink-muted);margin:8px 0 0}
+[data-theme="dark"] .dt-cap{color:#d0d0d6}
+/* 面板玻璃（唯一常驻玻璃） */
+.dt-panel{position:relative;width:364px;border-radius:20px;overflow:hidden;color:var(--ink);background:var(--material-tint);backdrop-filter:blur(28px) saturate(1.7);-webkit-backdrop-filter:blur(28px) saturate(1.7);box-shadow:inset 0 1px 0 var(--highlight),0 0 0 .5px var(--edge),0 22px 60px rgba(0,0,0,.24);display:flex;flex-direction:column}
+/* 临时浮层玻璃 */
+.dt-glass{color:var(--ink);background:var(--glass-float);backdrop-filter:blur(16px) saturate(1.9) brightness(1.04);-webkit-backdrop-filter:blur(16px) saturate(1.9) brightness(1.04);box-shadow:inset 0 1px 0 var(--highlight),0 0 0 .5px var(--edge),0 10px 28px rgba(0,0,0,.18)}
+/* 图标：SF Symbols 的预览替身 */
+.dt-ic{width:28px;height:28px;display:grid;place-items:center;color:var(--ink-muted);flex:none}
+.dt-ic svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.dt-ic.m{width:24px;height:24px}.dt-ic.m svg{width:14px;height:14px;stroke-width:1.6}
+.dt-ic.s{width:22px;height:22px}.dt-ic.s svg{width:12px;height:12px;stroke-width:1.7}
+.dt-ic.hover{color:var(--ink)}.dt-ic.faint{color:var(--ink-faint)}
+.dt-chev{display:inline-block;width:9px;height:9px;color:var(--ink-faint)}.dt-chev svg{display:block;width:100%;height:100%;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+/* 第一行 44 */
+.dt-head{height:44px;display:flex;align-items:center;padding:0 10px 0 16px;flex:none}
+.dt-title{font:600 18px/24px var(--font-serif);letter-spacing:.02em;display:flex;align-items:baseline;gap:5px}
+.dt-sp{flex:1}
+/* 第二行 30：日期范围 */
+.dt-scope{height:30px;display:flex;align-items:center;padding:0 11px 4px 16px;gap:16px;flex:none;font:400 13px/20px var(--font-sans)}
+.dt-scope .d{color:var(--ink-faint)}.dt-scope .d.hover{color:var(--ink-muted)}.dt-scope .d.on{color:var(--ink);font-weight:500}
+.dt-scope .dt-ic{margin-left:auto}
+.dt-tags{height:24px;display:flex;align-items:center;gap:14px;padding:0 16px 4px;font:400 12px/20px var(--font-sans);color:var(--ink-faint)}.dt-tags .on{color:var(--ink);font-weight:500}.dt-tags .r{margin-left:auto}
+/* 列表 */
+.dt-list{flex:1;overflow:hidden;padding:0 16px 8px;position:relative}
+.dt-group{margin-top:20px}.dt-group:first-child{margin-top:6px}
+.dt-gh{display:flex;align-items:baseline;gap:6px;height:30px;padding-top:4px;position:relative}
+.dt-gh b{font:600 15px/22px var(--font-serif);letter-spacing:.03em}.dt-gh em{font:normal 400 12px/16px var(--font-sans);color:var(--ink-faint)}
+.dt-gh.empty b{color:var(--ink-faint)}.dt-gh.over b,.dt-gh.over em{color:var(--danger)}
+.dt-gh .acts{position:absolute;right:-5px;top:4px;display:flex;opacity:0}.dt-group.hover>.dt-gh .acts{opacity:1}
+.dt-task{position:relative;display:flex;align-items:flex-start;gap:8px;min-height:32px;padding:6px 0}
+.dt-ckf{flex:none;width:18px;height:20px;display:grid;place-items:center}
+.dt-ck{width:16px;height:16px;border-radius:50%;border:1.25px solid var(--check-stroke);display:grid;place-items:center}
+.dt-ck.done{background:var(--accent);border-color:var(--accent)}.dt-ck.done svg{width:9px;height:9px;stroke:var(--on-accent);fill:none;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+.dt-task.focus .dt-ck{border-color:var(--accent)}
+.dt-tx{flex:1;min-width:0;font:400 13px/20px var(--font-sans)}.dt-task.done .dt-tx{color:var(--ink-faint)}
+.dt-tx .tag{font-size:12px;color:var(--ink-faint);margin-left:4px}
+.dt-caret{display:inline-block;width:1.5px;height:16px;background:var(--accent);vertical-align:-3px;margin-left:1px}
+.dt-meta{flex:none;display:flex;gap:8px;align-items:baseline;font:400 12px/20px var(--font-sans);color:var(--ink-muted);font-variant-numeric:tabular-nums}
+.dt-meta .today{color:var(--accent)}.dt-meta .over{color:var(--danger)}.dt-meta .gn{font:600 12px/20px var(--font-serif);color:var(--ink-faint)}
+.dt-meta .sc{color:var(--ink-faint);display:inline-flex;align-items:baseline;gap:3px}.dt-meta .sc .dt-chev{width:8px;height:8px}
+.dt-ra{display:none;position:absolute;right:-5px;top:5px}
+.dt-task.hover .dt-ra,.dt-task.focus .dt-ra{display:flex}.dt-task.hover .dt-meta,.dt-task.focus .dt-meta{visibility:hidden}
+.dt-sub{padding-left:26px}.dt-sub .dt-task{min-height:28px;padding:4px 0}.dt-sub .dt-ckf{width:14px}.dt-sub .dt-ck{width:13px;height:13px}
+.dt-fold{display:flex;gap:8px;align-items:center;height:28px;font:400 12px var(--font-sans);color:var(--ink-faint)}.dt-fold .dt-ckf{width:18px}
+.dt-drop{height:32px;position:relative}.dt-drop.sub::after{left:22px;top:13px}.dt-drop::after{content:"";position:absolute;left:26px;right:0;top:15px;height:1.5px;border-radius:1px;background:var(--accent)}
+/* 输入栏 52 */
+.dt-composer{flex:none;height:52px;display:flex;align-items:center;gap:8px;padding:0 11px 0 16px;border-top:.5px solid var(--rule);font:400 13px/20px var(--font-sans)}
+.dt-composer .grp{font:600 13px/20px var(--font-serif);color:var(--ink-muted);display:flex;align-items:baseline;gap:4px}
+.dt-composer .in{flex:1;color:var(--ink)}.dt-composer .ph{color:var(--ink-faint)}
+.dt-composer .due{font:400 12px/20px var(--font-sans);color:var(--accent);margin-right:-4px}
+/* 菜单（原生 Menu 的视觉） */
+.dt-menu{width:220px;border-radius:12px;padding:5px 0}
+.dt-mi{display:flex;align-items:center;height:28px;padding:0 14px 0 8px;font:400 13px/20px var(--font-sans)}
+.dt-mi .ck{width:18px;display:grid;place-items:center}.dt-mi .ck svg{width:11px;height:11px;stroke:var(--ink);fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.dt-mi .t{flex:1;margin-left:4px}.dt-mi .n{font-size:12px;color:var(--ink-faint)}
+.dt-mi.serif .t{font:600 14px/20px var(--font-serif)}.dt-mi.mut{color:var(--ink-muted)}
+.dt-sep{height:.5px;background:var(--rule);margin:5px 12px}
+/* 分组架 / 撤销 */
+.dt-shelf{width:340px;height:48px;border-radius:24px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;font:600 14px/20px var(--font-serif)}
+.dt-shelf span{color:var(--ink-faint)}.dt-shelf .on{color:var(--ink)}.dt-shelf .new{font:400 12px var(--font-sans);display:flex;align-items:center}
+.dt-dragged{width:250px;border-radius:10px;padding:6px 12px;display:flex;gap:8px;align-items:center;font:13px/20px var(--font-sans);transform:rotate(-1.2deg)}
+.dt-undo{display:inline-flex;height:36px;border-radius:18px;align-items:center;gap:4px;padding:0 6px 0 16px;font:400 13px/20px var(--font-sans)}
+.dt-undo .msg{color:var(--ink-muted)}.dt-undo .act{color:var(--accent);font-weight:500;padding:0 10px}
+/* 悬浮球 / 横条 */
+.dt-bubble{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;font:600 20px/1 var(--font-sans);font-variant-numeric:tabular-nums}
+.dt-bubble.grp{font:600 15px/1 var(--font-serif)}.dt-bubble svg{width:20px;height:20px;stroke:var(--accent);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.dt-bar{width:250px;height:48px;border-radius:24px;display:flex;align-items:center;padding-left:18px}
+.dt-bar .txt{flex:1;min-width:0;font:400 12px/16px var(--font-sans);color:var(--ink-muted)}.dt-bar .txt b{display:block;font:500 13px/18px var(--font-sans);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dt-bar .n{width:48px;text-align:center;font:600 20px/1 var(--font-sans)}
+/* 日历弹层 */
+.dt-cal{width:252px;border-radius:12px;padding:12px 12px 10px}
+.dt-cal .mh{display:flex;align-items:center;font:600 14px/20px var(--font-serif);margin:0 4px 8px}.dt-cal .mh .dt-ic{margin-left:2px}
+.dt-cal .q{display:flex;gap:14px;font:400 12px/20px var(--font-sans);color:var(--ink-faint);margin:0 4px 8px}.dt-cal .q .on{color:var(--ink);font-weight:500}
+.dt-cal .g{display:grid;grid-template-columns:repeat(7,1fr);row-gap:2px;text-align:center;font:400 12px/28px var(--font-sans);color:var(--ink-muted);font-variant-numeric:tabular-nums}
+.dt-cal .g .w{color:var(--ink-faint);font-size:11px}
+.dt-cal .g .o{color:var(--ink-faint);opacity:.6}.dt-cal .g .has{color:var(--ink)}.dt-cal .g .today{color:var(--ink);font-weight:600}
+.dt-cal .g .in{color:var(--accent)}.dt-cal .g .end{color:var(--accent);font-weight:600}
+.dt-cal .ft{display:flex;justify-content:space-between;font:400 12px/20px var(--font-sans);color:var(--ink-muted);margin:6px 4px 0}.dt-cal .ft .ok{color:var(--accent);font-weight:500}
+/* 规格表 */
+.dt-spec{border-collapse:collapse;font:12px/17px var(--font-sans);color:var(--ink);background:var(--material-tint);border-radius:12px;overflow:hidden}
+.dt-spec th{text-align:left;font-weight:600;font-size:11px;color:var(--ink-faint);padding:8px 12px;border-bottom:.5px solid var(--rule)}
+.dt-spec td{padding:7px 12px;border-bottom:.5px solid var(--rule);vertical-align:middle}
+.dt-spec td .dt-ic{display:inline-grid}
+.dt-guide{position:absolute;top:0;bottom:0;width:0;border-left:1px dashed #d0342c;opacity:.8;pointer-events:none}
+.dt-guide i{position:absolute;top:-16px;left:-14px;width:28px;text-align:center;font:600 10px var(--font-sans);color:#d0342c;font-style:normal}

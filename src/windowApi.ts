@@ -6,6 +6,11 @@ import { isDemo } from './taskApi';
 /** `?demo&bubble` starts the browser preview directly in the floating-bubble state. */
 export const startInBubble = isDemo && new URLSearchParams(window.location.search).has('bubble');
 
+/** Old movement-idle notifications are not proof that the button was released. */
+export function isDragRelease(payload: unknown): boolean {
+  return typeof payload === 'object' && payload !== null && 'released' in payload && payload.released === true;
+}
+
 export type ResizeDirection = 'North' | 'South' | 'East' | 'West' | 'NorthEast' | 'NorthWest' | 'SouthEast' | 'SouthWest';
 
 export const windowApi = {
@@ -16,7 +21,7 @@ export const windowApi = {
   },
   /** Logical size the window grows back to (default 364x620). */
   async bubbleTargetSize(): Promise<[number, number]> { return isDemo ? [364, 620] : invoke<[number, number]>('bubble_target_size'); },
-  async setBubbleOpen(open: boolean, width?: number) { if (!isDemo) await invoke('set_bubble_open', { open, width }); },
+  async setBubbleOpen(open: boolean, width?: number, durationMs?: number) { if (!isDemo) await invoke('set_bubble_open', { open, width, durationMs }); },
   /** Opens the separate settings window (the main window has no settings button). */
   async openSettings() { if (!isDemo) await invoke('open_settings'); },
   async openViews() { if (!isDemo) await invoke('open_views'); },
@@ -32,9 +37,10 @@ export const windowApi = {
   async quickDone(added: boolean) { if (!isDemo) await invoke('quick_done', { added }); },
   async startDragging() {
     if (isDemo) return;
-    await getCurrentWindow().startDragging();
+    await invoke('start_window_drag');
   },
-  async on<T = undefined>(event: 'collapse' | 'expand' | 'focus-composer' | 'settings-changed' | 'pointer' | 'drag-end' | 'shadow-radius' | 'tasks-changed' | 'quick-show' | 'goto', handler: (payload: T) => void): Promise<() => void> {
+  async dragPointer(pressed: boolean) { if (!isDemo) await invoke('window_drag_pointer', { pressed }); },
+  async on<T = undefined>(event: 'collapse' | 'expand' | 'focus-composer' | 'settings-changed' | 'pointer' | 'drag-start' | 'drag-end' | 'shadow-radius' | 'tasks-changed' | 'quick-show' | 'goto', handler: (payload: T) => void): Promise<() => void> {
     if (isDemo) return () => {};
     return listen<T>(`dotist://${event}`, message => handler(message.payload));
   },

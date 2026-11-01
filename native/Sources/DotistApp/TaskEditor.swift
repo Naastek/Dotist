@@ -28,7 +28,8 @@ struct TaskEditor: NSViewRepresentable {
         editor.textContainer?.lineFragmentPadding = 0
         editor.textContainer?.widthTracksTextView = true
         editor.font = font
-        editor.textColor = NSColor.labelColor
+        editor.insertionPointColor = NSColor(DotistDesign.accent)
+        editor.textColor = NSColor(DotistDesign.ink)
         editor.string = text
         editor.commit = commit
         editor.cancel = cancel
