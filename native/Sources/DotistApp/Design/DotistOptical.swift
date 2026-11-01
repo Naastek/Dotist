@@ -166,7 +166,11 @@ final class GroupHeaderInkView: NSView {
     private var showsChevron = true
     private var titleColor = NSColor.labelColor
     private var titleImage: InkRaster?
-    private var symbolImage: InkRaster?
+    private var symbolImages: [String: InkRaster] = [:]
+    private var symbolImage: InkRaster? { symbolImages[symbol] }
+    // Both directions share a slot, including while the arrow is hidden. A
+    // direction change cannot take width from the already laid-out title.
+    private var symbolSlotWidth: CGFloat { symbolImages.values.map(\.size.width).max() ?? 0 }
     private var rasterScale: CGFloat = 0
     private var rasterColorSpace: NSColorSpace?
     // These are also useful to isolate the two glyph masks in native captures.
@@ -177,7 +181,7 @@ final class GroupHeaderInkView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     func configure(title: String, font: NSFont, symbol: String, showsChevron: Bool, titleColor: NSColor) {
-        let changed = self.title != title || titleFont != font || self.symbol != symbol || self.titleColor != titleColor
+        let changed = self.title != title || titleFont != font || self.titleColor != titleColor
         self.title = title; titleFont = font; self.symbol = symbol
         self.showsChevron = showsChevron; self.titleColor = titleColor
         if changed { invalidateRasters() }
@@ -198,7 +202,7 @@ final class GroupHeaderInkView: NSView {
     }
     override var intrinsicContentSize: NSSize {
         prepareRasters()
-        return NSSize(width: (titleImage?.size.width ?? 0) + 6 + (symbolImage?.size.width ?? 0), height: 30)
+        return NSSize(width: (titleImage?.size.width ?? 0) + 6 + symbolSlotWidth, height: 30)
     }
     private func prepareRasters(scale requestedScale: CGFloat? = nil) {
         let scale = requestedScale ?? window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
@@ -208,14 +212,17 @@ final class GroupHeaderInkView: NSView {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             let text = NSAttributedString(string: title, attributes: [.font: titleFont, .foregroundColor: titleColor])
             titleImage = Self.inkImage(size: text.size(), scale: scale, colorSpace: colorSpace) { text.draw(at: $0) }
-            let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
-            symbolImage = image.flatMap { image in
-                Self.inkImage(size: image.size, scale: scale, colorSpace: colorSpace) { point in
-                    // Draw the symbol as a mask, then color the occupied pixels.
-                    image.draw(at: point, from: .zero, operation: .sourceOver, fraction: 1)
-                    NSColor(DotistDesign.faint).setFill()
-                    NSRect(origin: point, size: image.size).fill(using: .sourceIn)
+            symbolImages.removeAll(keepingCapacity: true)
+            for name in ["chevron.right", "chevron.down"] {
+                let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+                    .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+                symbolImages[name] = image.flatMap { image in
+                    Self.inkImage(size: image.size, scale: scale, colorSpace: colorSpace) { point in
+                        // Draw the symbol as a mask, then color the occupied pixels.
+                        image.draw(at: point, from: .zero, operation: .sourceOver, fraction: 1)
+                        NSColor(DotistDesign.faint).setFill()
+                        NSRect(origin: point, size: image.size).fill(using: .sourceIn)
+                    }
                 }
             }
         }
@@ -299,7 +306,7 @@ final class GroupHeaderInkView: NSView {
         let scale = transform.map { hypot($0.a, $0.b) } ?? window?.backingScaleFactor ?? 1
         prepareRasters(scale: max(1, scale))
         guard let titleImage else { return }
-        let available = max(0, bounds.width - (symbolImage?.size.width ?? 0) - 6)
+        let available = max(0, bounds.width - symbolSlotWidth - 6)
         // Preserve the single-line tail truncation of the SwiftUI title.
         let displayedTitle: InkRaster
         if titleImage.size.width > available, available > 0 {

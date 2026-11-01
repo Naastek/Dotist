@@ -12,6 +12,71 @@ final class GroupHeaderRenderingTests: XCTestCase {
         DotistDesign.registerFonts(in: repo.appendingPathComponent(".cache/native-migration/fonts"))
     }
 
+    func testDisclosureSlotReservesBothDirectionsBeforeAnyAnimatedResize() throws {
+        for (title, language) in [("life", "en"), ("work", "en"), ("工作 Work", "zh-CN")] {
+            let view = GroupHeaderInkView()
+            let font = DotistDesign.nativeFont(15, weight: .semibold, serif: true, language: language)
+            var widths: [CGFloat] = []
+            for (symbol, visible) in [("chevron.right", true), ("chevron.down", true), ("chevron.down", false), ("chevron.right", false)] {
+                view.configure(title: title, font: font, symbol: symbol, showsChevron: visible, titleColor: .black)
+                widths.append(view.intrinsicContentSize.width)
+            }
+            print("GROUP WIDTH \(title): right/down/hidden=\(widths); screen=\(String(describing: NSScreen.main?.backingScaleFactor))")
+            for width in widths.dropFirst() {
+                XCTAssertEqual(width, widths[0], accuracy: 0.01,
+                               "Arrow direction/visibility must never borrow title space during a layout transaction: \(title)")
+            }
+        }
+    }
+
+    private final class HeaderState: ObservableObject {
+        @Published var collapsed = false
+        @Published var hovered = false
+    }
+    private struct AnimatedHeader: View {
+        @ObservedObject var state: HeaderState
+        let title: String
+        let language: String
+        var body: some View {
+            VStack(spacing: 0) {
+                GroupCollapseHeader(title: title, language: language, collapsed: state.collapsed, hovered: state.hovered, toggle: {})
+                if !state.collapsed { Color.clear.frame(height: 32).transition(.opacity) }
+            }.animation(.easeInOut(duration: 0.16), value: state.collapsed)
+                .frame(maxHeight: .infinity, alignment: .top).background(Color.white).environment(\.colorScheme, .light)
+        }
+    }
+
+    func testWholeTitlesRemainUnchangedThroughoutCollapseExpansionAndHover() async throws {
+        for (title, language) in [("life", "en"), ("work", "en"), ("工作 Work", "zh-CN")] {
+            let state = HeaderState()
+            let fixture = NativeRenderingFixture(AnimatedHeader(state: state, title: title, language: language), size: CGSize(width: 320, height: 62))
+            defer { fixture.close() }
+            let glyphs = try XCTUnwrap(fixture.descendants(GroupHeaderInkView.self).first)
+            let scale = fixture.window.backingScaleFactor
+            _ = try await fixture.capture(scale: scale)
+            let width = glyphs.bounds.width
+            let fullTitle = glyphs.titleInkFrame
+            print("GROUP ANIMATION \(title), screens=\(NSScreen.screens.count), window backing=\(scale)x, bitmap=\(scale)x; screenless backing is not Retina evidence")
+            for (collapsed, hovered) in [(true, false), (false, true), (false, false), (false, true), (true, true), (false, false)] {
+                withAnimation(.easeInOut(duration: 0.16)) { state.collapsed = collapsed; state.hovered = hovered }
+                for delay in [0, 20, 60, 100] {
+                    if delay > 0 { try await Task.sleep(for: .milliseconds(delay)) }
+                    let bitmap = try await fixture.capture(scale: scale)
+                    let frame = fixture.host.convert(glyphs.bounds, from: glyphs)
+                    let pixels = try XCTUnwrap(inkBounds(bitmap, x: frame.minX..<(frame.minX + fullTitle.width)))
+                    XCTAssertEqual(glyphs.bounds.width, width, accuracy: 0.01, "\(title), collapsed=\(collapsed), hover=\(hovered), delay=\(delay)")
+                    XCTAssertEqual(glyphs.titleInkFrame, fullTitle, "Title must retain all glyphs, including its final letter")
+                    XCTAssertEqual(pixels.width, fullTitle.width, accuracy: 0.5 / scale)
+                    XCTAssertEqual(pixels.midY, 15, accuracy: 0.5 / scale)
+                    if collapsed || hovered {
+                        let arrow = try XCTUnwrap(inkBounds(bitmap, x: (frame.minX + glyphs.symbolInkFrame.minX)..<(frame.minX + glyphs.symbolInkFrame.maxX)))
+                        XCTAssertEqual(arrow.midY, pixels.midY, accuracy: 0.5 / scale)
+                    }
+                }
+            }
+        }
+    }
+
     /// Scan the entire height and separate only by horizontal glyph ranges.
     /// The reference axis is the complete rendered title, not its cap height,
     /// its first word, a script sample, or a standalone ImageRenderer view.

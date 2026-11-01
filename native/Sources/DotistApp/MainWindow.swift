@@ -36,9 +36,7 @@ struct MainWindow: View {
     @State private var draftParent: String?
     @State private var draftHeight: CGFloat = 20
     @State private var draftSaving = false
-    @State private var emptyDraft: TaskEmptyState?
     @State private var emptyAddHovered = false
-    @State private var emptyDraftSession: UUID?
     @State private var emptyStateHeight: CGFloat = 0
     @State private var editedTitle = ""
     @State private var editSaving = false
@@ -160,8 +158,6 @@ struct MainWindow: View {
         .onChange(of: model.tagDescription) { _ in
             if let tag = state.activeTag, !model.tagCounts.contains(where: { $0.tag == tag && $0.open > 0 }) { state.activeTag = nil }
         }
-        .onChange(of: customDateRange) { _ in if emptyDraft != nil { leaveInputs() } }
-        .onChange(of: state.activeTag) { _ in if emptyDraft != nil { leaveInputs() } }
         .onChange(of: model.scope) { scope in if primary { state.scope = scope } }
         .onChange(of: state.scope) { scope in cancelReorder(); leaveInputs(); selection.update { $0.clear() }; if primary { model.scope = scope } }
         .onChange(of: model.scopeNavigation) { _ in
@@ -277,49 +273,24 @@ struct MainWindow: View {
         return TaskEmptyStateLayout(viewportHeight: viewportHeight, minimumTop: emptyStateMinimumTop) {
             TaskEmptyStateContent(title: model.text(context.title), hint: context.hint.map { model.text($0) }, language: model.language) {
                 if context.allowsAdding {
-                    if let session = emptyDraftSession, emptyDraft != nil {
-                        TaskRowLayout(depth: 0) {
-                            TaskCheckmark(depth: 0, completed: false, children: [], emphasized: false)
-                            TaskEditor(text: $draftTitle, height: $draftHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("任务内容"),
-                                       commit: { saveEmptyDraft(continuing: true) }, cancel: { clearInputs() }, indent: { _ in },
-                                       blur: { saveEmptyDraft(continuing: false, session: session) })
-                                .id(session).frame(height: draftHeight)
-                            Color.clear.frame(width: 0, height: 0)
-                        }.background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(0.18)).padding(.horizontal, -6))
-                    } else {
-                        Button {
-                            clearInputs()
-                            emptyDraft = context
-                            emptyDraftSession = UUID()
-                        } label: {
-                            TaskEmptyAddLabel(title: model.text(TaskEmptyState.addTitle), language: model.language)
-                                .contentShape(Rectangle())
-                        }.buttonStyle(.plain).modifier(DotistFocusRing())
-                            .background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(emptyAddHovered ? 0.10 : 0)).padding(.horizontal, -6))
-                            .onHover { emptyAddHovered = $0 }
-                            .accessibilityLabel(Text(model.text(TaskEmptyState.addAccessibilityLabel)))
-                            .accessibilityIdentifier("empty-state-add")
-                    }
+                    Button { focusEmptyStateComposer(context) } label: {
+                        TaskEmptyAddLabel()
+                            .background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(emptyAddHovered ? 0.10 : 0)))
+                    }.buttonStyle(.plain).modifier(DotistFocusRing())
+                        .onHover { emptyAddHovered = $0 }
+                        .accessibilityLabel(Text(model.text(TaskEmptyState.addAccessibilityLabel)))
+                        .accessibilityIdentifier("empty-state-add")
                 }
             }
         }.accessibilityElement(children: .contain)
     }
 
-    private func saveEmptyDraft(continuing: Bool, session: UUID? = nil) {
-        guard let context = emptyDraft, let currentSession = emptyDraftSession,
-              session == nil || session == currentSession, !draftSaving else { return }
-        guard let title = TaskDraftFlow.titleToSave(draftTitle) else { clearInputs(); return }
-        draftSaving = true
-        var created: DotistTask?
-        model.change(completed: {
-            draftSaving = false
-            guard emptyDraftSession == currentSession else { return }
-            let continueHere = continuing && emptyStateContext == context
-            clearInputs()
-            if continueHere, let created { startDraft(after: created) }
-        }, failed: { draftSaving = false; showNotice(model.error ?? model.text("无法保存任务")); model.error = nil }) {
-            created = try $0.addTask(title: title, category: context.groupID, dueDate: context.dueDate)
-        }
+    private func focusEmptyStateComposer(_ context: TaskEmptyState) {
+        clearInputs()
+        selection.update { $0.clear() }
+        category = context.groupID
+        dueDate = context.dueDate.flatMap { Date.dotistDay($0) }
+        composerFocused = true
     }
 
     @ViewBuilder private var listMenu: some View {
@@ -1195,7 +1166,7 @@ struct MainWindow: View {
     }
 
     private func handleUndoShortcut(redo: Bool) -> Bool {
-        guard !composerFocused, editing == nil, draftAfter == nil, addingToGroup == nil, emptyDraft == nil else { return false }
+        guard !composerFocused, editing == nil, draftAfter == nil, addingToGroup == nil else { return false }
         if redo {
             guard model.canRedoAction else { return false }
             model.redoLast()
@@ -1267,8 +1238,7 @@ struct MainWindow: View {
     }
 
     private func leaveInputs() {
-        if emptyDraft != nil { saveEmptyDraft(continuing: false) }
-        else if let id = editing, let task = model.tasks.first(where: { $0.id == id }) {
+        if let id = editing, let task = model.tasks.first(where: { $0.id == id }) {
             saveEditing(task) { clearInputs() }
         } else if let id = draftAfter, let task = model.tasks.first(where: { $0.id == id }) {
             saveDraft(after: task, continueEditing: false)
@@ -1280,7 +1250,6 @@ struct MainWindow: View {
     private func clearEditing() { editing = nil; editedTitle = ""; editHeight = 20; pendingEdit = nil }
     private func clearDraft() { draftAfter = nil; draftTitle = ""; draftParent = nil; draftHeight = 20 }
     private func clearInputs() {
-        emptyDraft = nil; emptyDraftSession = nil
         clearDraft(); clearEditing(); addingToGroup = nil; groupTitles.removeAll()
     }
 
@@ -1456,15 +1425,10 @@ struct MainWindow: View {
 }
 
 struct TaskEmptyAddLabel: View {
-    let title: String
-    let language: String
     var body: some View {
-        TaskRowLayout(depth: 0) {
-            TaskCheckmark(depth: 0, completed: false, children: [], emphasized: false)
-            OpticalText(title: title, size: 13, language: language)
-                .foregroundStyle(DotistDesign.faint).lineLimit(1).truncationMode(.tail)
-            Color.clear.frame(width: 0, height: 0)
-        }
+        OpticalSymbol(name: "plus", size: 16)
+            .foregroundStyle(DotistDesign.faint)
+            .frame(width: 32, height: 32).contentShape(Rectangle())
     }
 }
 
@@ -1488,6 +1452,7 @@ struct TaskEmptyStateContent<AddRow: View>: View {
                 if let hint {
                     OpticalText(title: hint, size: 12, language: language)
                         .foregroundStyle(DotistDesign.faint).lineLimit(1).truncationMode(.tail)
+                        .accessibilityIdentifier("empty-state-hint")
                 }
             }.frame(maxWidth: .infinity)
             addRow()
@@ -1542,6 +1507,9 @@ struct GroupCollapseHeader: View {
             HStack(spacing: 6) {
                 GroupHeaderInkLabel(title: title, language: language, collapsed: collapsed,
                                     showsChevron: collapsed || hovered, empty: empty)
+                    // Row insertion/removal still animates in the section. The
+                    // native title switches glyphs without interpolating bounds.
+                    .transaction { $0.animation = nil }
                 Spacer(minLength: 26)
             }.frame(height: 30).contentShape(Rectangle())
         }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(title))

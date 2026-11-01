@@ -228,6 +228,11 @@ final class ComposerFieldEditor: NSTextView {
 
 final class ComposerTextField: NSTextField {
     var rowHeight: CGFloat = ComposerMetrics.rowHeight
+    var requestFocusWhenAttached: (() -> Void)?
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { requestFocusWhenAttached?() }
+    }
     private var referenceFont: NSFont?
     private var linePadding: CGFloat { ceil(NSLayoutManager().defaultLineHeight(for: font ?? .systemFont(ofSize: ComposerMetrics.fontSize))) }
     func configure(font: NSFont, reference: String) {
@@ -298,6 +303,9 @@ struct ComposerInput: NSViewRepresentable {
     func makeNSView(context: Context) -> NSTextField {
         let field = ComposerTextField()
         field.delegate = context.coordinator
+        field.requestFocusWhenAttached = { [weak field, weak coordinator = context.coordinator] in
+            if let field { coordinator?.requestFocus(field) }
+        }
         return field
     }
     func updateNSView(_ field: NSTextField, context: Context) {
@@ -310,10 +318,25 @@ struct ComposerInput: NSViewRepresentable {
             field.stringValue = text
             if let editor = field.currentEditor() { editor.selectedRange = NSRange(location: (text as NSString).length, length: 0) }
         }
+        context.coordinator.requestFocus(field)
     }
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: ComposerInput
         init(_ parent: ComposerInput) { self.parent = parent }
+        private var focusScheduled = false
+        func requestFocus(_ field: NSTextField) {
+            guard parent.focused, field.currentEditor() == nil, !focusScheduled else { return }
+            focusScheduled = true
+            // Wait for SwiftUI to remove mutually exclusive editors and attach
+            // this field. Read the latest binding so withdrawn requests expire.
+            DispatchQueue.main.async { [weak self, weak field] in
+                guard let self else { return }
+                self.focusScheduled = false
+                guard self.parent.focused, let field, let window = field.window,
+                      field.currentEditor() == nil else { return }
+                window.makeFirstResponder(field)
+            }
+        }
         func controlTextDidBeginEditing(_ notification: Notification) {
             parent.focused = true
             if let editor = notification.userInfo?["NSFieldEditor"] as? NSTextView {
