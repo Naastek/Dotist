@@ -65,24 +65,31 @@ final class ToolbarConfig: ObservableObject {
            let stored = try? JSONDecoder().decode(Stored.self, from: data) {
             var seen: Set<ToolbarItem> = []
             let known = stored.order.filter { seen.insert($0).inserted }
-            order = known + ToolbarItem.allCases.filter { !known.contains($0) }
+            order = Self.fixedOrder(known + ToolbarItem.allCases.filter { !known.contains($0) })
             visibility = Self.defaultVisibility.merging(stored.visibility) { _, new in new }
         } else {
             order = Self.defaultOrder
             visibility = Self.defaultVisibility
         }
+        visibility[.collapse] = .always
     }
 
-    func visibility(of item: ToolbarItem) -> ToolbarVisibility { visibility[item] ?? .hidden }
+    // Collapse is a permanent edge control, outside the sortable icon strip.
+    static func fixedOrder(_ items: [ToolbarItem]) -> [ToolbarItem] {
+        items.filter { $0 != .collapse } + [.collapse]
+    }
+
+    func visibility(of item: ToolbarItem) -> ToolbarVisibility { item == .collapse ? .always : visibility[item] ?? .hidden }
     func items(_ mode: ToolbarVisibility) -> [ToolbarItem] { order.filter { visibility(of: $0) == mode } }
 
     func setVisibility(_ value: ToolbarVisibility, for item: ToolbarItem) {
+        guard item != .collapse else { return }
         visibility[item] = value
         save()
     }
     /// Moves `item` to the slot currently held by `target` (⌘-drag reorder).
     func move(_ item: ToolbarItem, onto target: ToolbarItem) {
-        guard item != target, let from = order.firstIndex(of: item), let to = order.firstIndex(of: target) else { return }
+        guard item != .collapse, target != .collapse, item != target, let from = order.firstIndex(of: item), let to = order.firstIndex(of: target) else { return }
         order.remove(at: from)
         order.insert(item, at: to)
         save()

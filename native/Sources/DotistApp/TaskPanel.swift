@@ -44,11 +44,9 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
 
     var groupName: String { state.groupID.map { model.groupDisplayName($0) } ?? model.text("全部") }
     var tasks: [DotistTask] { model.topLevelTasks.filter { state.groupID == nil || $0.category == state.groupID } }
-    var remaining: Int { tasks.filter { !$0.completed }.count }
-    var bubbleTitle: String {
-        let next = model.ordered(tasks.filter { !$0.completed }).first?.title
-        return next.map { groupName + " · " + $0 } ?? groupName
-    }
+    var bubbleContent: BubbleContent { BubbleContent(model: model, groupID: state.groupID, fallbackTitle: groupName) }
+    var remaining: Int { bubbleContent.remaining }
+    var bubbleTitle: String { bubbleContent.title }
 
     init(model: AppModel, groupID: String, near frame: NSRect, showViews: @escaping () -> Void,
          showSearch: @escaping () -> Void, showSettings: @escaping () -> Void,
@@ -68,7 +66,8 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
         super.init(window: panel)
-        motion = PanelMotion(model: model, panel: panel, size: size, title: { [weak self] in self?.bubbleTitle ?? "" })
+        motion = PanelMotion(model: model, panel: panel, size: size, title: { [weak self] in self?.bubbleTitle ?? "" },
+            bubbleContent: { [weak self, model] in self?.bubbleContent ?? BubbleContent(model: model) })
         panel.delegate = self
         applyAppearance()
         updateTitle()
@@ -90,6 +89,7 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
     func applyAppearance() {
         window?.appearance = model.settings.theme == "light" ? NSAppearance(named: .aqua) : model.settings.theme == "dark" ? NSAppearance(named: .darkAqua) : nil
         window?.level = model.settings.alwaysOnTop ? .floating : .normal
+        motion?.refreshShadow()
     }
     func updateTitle() { window?.title = "Dotist · " + groupName }
     func toggleCompact() { motion?.toggleBubble() }

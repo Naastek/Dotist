@@ -125,7 +125,7 @@ struct TaskCheckmark: View {
         ZStack {
             if completed {
                 Circle().fill(DotistDesign.accent)
-                Image(systemName: "checkmark").font(.system(size: depth == 0 ? 9 : 7.5, weight: .heavy)).foregroundStyle(DotistDesign.paper)
+                Image(systemName: "checkmark").font(DotistDesign.font(depth == 0 ? 9 : 7.5, weight: .heavy, language: "en")).foregroundStyle(DotistDesign.paper)
             } else if children.isEmpty {
                 Circle().strokeBorder(emphasized ? DotistDesign.accent : DotistDesign.checkStroke, lineWidth: 1.25)
             } else {
@@ -145,16 +145,6 @@ struct TaskCheckmark: View {
 
 @MainActor final class TaskDragMotion: ObservableObject {
     @Published var location = CGPoint.zero
-}
-
-struct TaskLiftedLayer<Content: View>: View {
-    @ObservedObject var motion: TaskDragMotion
-    let origin: CGPoint
-    let start: CGPoint
-    let content: Content
-    var body: some View {
-        content.offset(x: origin.x, y: origin.y + motion.location.y - start.y)
-    }
 }
 
 struct TaskGhostFrameKey: PreferenceKey {
@@ -222,12 +212,17 @@ struct TaskListDrag {
     var rootIDs: [String] = []
     var sourceDepth = 0
     var subtreeHeight = 0
+    var initialTarget: TaskReorderEngine.Target?
+    var baselineRows: [TaskListRowFrame] = []
+    var baselineGroups: [TaskListGroupFrame] = []
+    var scrollOriginY: CGFloat = 0
 }
 
 @MainActor
 final class TaskReorderRuntime: ObservableObject {
+    @Published var drag: TaskListDrag?
     weak var scrollView: NSScrollView?
-    var ghostFrame = CGRect.zero
+    var scrollOriginY: CGFloat { scrollView?.contentView.bounds.minY ?? 0 }
 
     @discardableResult func scroll(by delta: CGFloat) -> Bool {
         guard let scrollView, let document = scrollView.documentView else { return false }
@@ -434,5 +429,112 @@ final class TaskDragSourceView: NSView, NSDraggingSource {
         down = nil
         dragging = false
         finish()
+    }
+}
+
+/// A pure countdown: callers inject monotonic timestamps, so tests need no sleeps.
+struct PausableToastLifetime {
+    let duration: TimeInterval
+    private var remaining: TimeInterval = 0
+    private var resumedAt: TimeInterval?
+    private var hovered = false
+
+    mutating func restart(at now: TimeInterval) {
+        remaining = duration
+        resumedAt = hovered ? nil : now
+    }
+    mutating func setHovered(_ value: Bool, at now: TimeInterval) {
+        guard value != hovered else { return }
+        if value {
+            if let resumedAt { remaining = max(0, remaining - max(0, now - resumedAt)) }
+            resumedAt = nil
+        } else { resumedAt = now }
+        hovered = value
+    }
+    func isVisible(at now: TimeInterval) -> Bool {
+        remaining - (resumedAt.map { max(0, now - $0) } ?? 0) > 0
+    }
+}
+
+/// Toolbar buttons are 28pt wide with 4pt spacing. The dragged icon follows
+/// the pointer; only neighbors between its original and target slots move.
+enum ToolbarDragLayout {
+    static let step: CGFloat = 32
+    static func targetIndex(from source: Int, translation: CGFloat, count: Int) -> Int {
+        guard count > 0, translation.isFinite else { return source }
+        let displacement = (translation / step).rounded()
+        return Int(min(CGFloat(count - 1), max(0, CGFloat(source) + displacement)))
+    }
+    static func offset(index: Int, source: Int, target: Int, translation: CGFloat) -> CGFloat {
+        if index == source { return translation }
+        if source < target && index > source && index <= target { return -step }
+        if target < source && index >= target && index < source { return step }
+        return 0
+    }
+}
+
+struct ToolbarDragSession {
+    let item: ToolbarItem
+    let items: [ToolbarItem]
+    var translation: CGFloat = 0
+    var source: Int { items.firstIndex(of: item) ?? 0 }
+    var target: Int { ToolbarDragLayout.targetIndex(from: source, translation: translation, count: items.count) }
+    func offset(for item: ToolbarItem) -> CGFloat {
+        guard let index = items.firstIndex(of: item) else { return 0 }
+        return ToolbarDragLayout.offset(index: index, source: source, target: target, translation: translation)
+    }
+}
+
+struct ToolbarFrameKey: PreferenceKey {
+    static let defaultValue: [ToolbarItem: CGRect] = [:]
+    static func reduce(value: inout [ToolbarItem: CGRect], nextValue: () -> [ToolbarItem: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+struct TaskGhostConnector: Shape {
+    var start: CGPoint
+    var end: CGPoint
+    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, AnimatablePair<CGFloat, CGFloat>> {
+        get { .init(.init(start.x, start.y), .init(end.x, end.y)) }
+        set { start = .init(x: newValue.first.first, y: newValue.first.second); end = .init(x: newValue.second.first, y: newValue.second.second) }
+    }
+    func path(in rect: CGRect) -> Path {
+        guard end.y > start.y, end.x > start.x else { return Path() }
+        let radius = min(4, (end.y - start.y) / 2, (end.x - start.x) / 2)
+        return Path { path in
+            path.move(to: start)
+            path.addLine(to: CGPoint(x: start.x, y: end.y - radius))
+            path.addQuadCurve(to: CGPoint(x: start.x + radius, y: end.y), control: CGPoint(x: start.x, y: end.y))
+            path.addLine(to: end)
+        }
+    }
+}
+
+/// Erases only title glyphs behind the floating row actions. It never paints
+/// paper over the panel tint, and leaves the transparent title hit region intact.
+struct TaskTitleFade: View {
+    let trailing: CGFloat
+    var body: some View {
+        GeometryReader { geometry in
+            let end = max(0, geometry.size.width - trailing)
+            let start = max(0, end - 24)
+            let width = max(1, geometry.size.width)
+            LinearGradient(stops: [
+                .init(color: .white, location: 0),
+                .init(color: .white, location: start / width),
+                .init(color: .clear, location: end / width),
+                .init(color: .clear, location: 1)
+            ], startPoint: .leading, endPoint: .trailing)
+        }
+    }
+}
+
+/// Convert the pointer to the frozen outline by removing the one live gap.
+/// A pointer inside the placeholder keeps the same insertion boundary.
+enum TaskDragGeometry {
+    static func pointerY(_ y: CGFloat, excludingGhost frame: CGRect) -> CGFloat {
+        guard !frame.isEmpty else { return y }
+        return y - min(frame.height, max(0, y - frame.minY))
     }
 }

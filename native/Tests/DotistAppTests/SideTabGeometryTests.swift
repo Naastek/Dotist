@@ -5,6 +5,14 @@ import XCTest
 @testable import DotistApp
 
 final class SideTabGeometryTests: XCTestCase {
+    func testNeighboringTabsHaveSixPointGap() {
+        let panel = CGRect(x: 500, y: 100, width: 364, height: 620)
+        for right in [false, true] {
+            let first = SideTabGeometry.frame(panel: panel, index: 0, width: 120, right: right)
+            let second = SideTabGeometry.frame(panel: panel, index: 1, width: 120, right: right)
+            XCTAssertEqual(first.minY - second.maxY, 6)
+        }
+    }
     func testWidthsFollowTextAndExpansion() {
         XCTAssertEqual(SideTabGeometry.expandedWidth(textWidth: 10), 48)
         XCTAssertEqual(SideTabGeometry.expandedWidth(textWidth: 82.2), 111)
@@ -70,7 +78,7 @@ final class SideTabGeometryTests: XCTestCase {
                     for width: CGFloat in [10, 48, 120] {
                         let tab = SideTabGeometry.frame(panel: panel, index: index, width: width, right: right)
                         XCTAssertEqual(right ? tab.minX : tab.maxX, right ? panel.maxX : panel.minX, accuracy: 0.000001)
-                        XCTAssertEqual(tab.maxY, panel.maxY - 40 - CGFloat(index) * 38, accuracy: 0.000001)
+                        XCTAssertEqual(tab.maxY, panel.maxY - 40 - CGFloat(index) * 40, accuracy: 0.000001)
                         XCTAssertTrue(window.insetBy(dx: -0.000001, dy: -0.000001).contains(tab))
                     }
                 }
@@ -89,10 +97,10 @@ final class SideTabGeometryTests: XCTestCase {
 
     func testReorderingClampsToVisibleGroupsAndKeepsAllOutsideTheOrder() {
         let ids = ["work", "life", "study"]
-        XCTAssertEqual(SideTabGeometry.destination(source: 0, screenDeltaY: -38, count: 3), 1)
+        XCTAssertEqual(SideTabGeometry.destination(source: 0, screenDeltaY: -40, count: 3), 1)
         XCTAssertEqual(SideTabGeometry.destination(source: 0, screenDeltaY: 1000, count: 3), 0)
         XCTAssertEqual(SideTabGeometry.destination(source: 0, screenDeltaY: -1000, count: 3), 2)
-        XCTAssertEqual(SideTabGeometry.destination(source: 2, screenDeltaY: 76, count: 3), 0)
+        XCTAssertEqual(SideTabGeometry.destination(source: 2, screenDeltaY: 80, count: 3), 0)
         XCTAssertEqual(SideTabGeometry.reordered(ids, id: "work", to: 2), ["life", "study", "work"])
         XCTAssertEqual(SideTabGeometry.reordered(ids, id: "study", to: 0), ["study", "work", "life"])
         XCTAssertEqual(SideTabGeometry.reordered(ids, id: "all", to: 1), ids)
@@ -100,13 +108,68 @@ final class SideTabGeometryTests: XCTestCase {
         XCTAssertTrue(SideTabGeometry.isDrag(CGPoint(x: 0, y: 4.01)))
         XCTAssertTrue(SideTabGeometry.isDrag(CGPoint(x: 3, y: 3)))
         let panel = CGRect(x: 600, y: 100, width: 364, height: 620)
-        let lifted = SideTabGeometry.frame(panel: panel, index: 1, width: 80, right: false, offsetY: -38)
+        let lifted = SideTabGeometry.frame(panel: panel, index: 1, width: 80, right: false, offsetY: -40)
         XCTAssertEqual(lifted, SideTabGeometry.frame(panel: panel, index: 2, width: 80, right: false))
     }
 }
 
 @MainActor
 final class SideTabLabelRenderingTests: XCTestCase {
+    func testCompleteTabTreeRendersNamesAndSixPointGapsInBothAppearances() throws {
+        let names = ["工作計畫", "Work projects", "仕事の計画"]
+        for scheme in [ColorScheme.light, .dark] {
+            for right in [false, true] {
+                let expanded = try XCTUnwrap(SideTabsSnapshot.render(names: names, language: "ja", scheme: scheme,
+                    right: right, expanded: true))
+                let background = try XCTUnwrap(SideTabsSnapshot.render(names: names, language: "ja", scheme: scheme,
+                    right: right, expanded: true, showLabels: false))
+                let collapsed = try XCTUnwrap(SideTabsSnapshot.render(names: names, language: "ja", scheme: scheme,
+                    right: right, expanded: false))
+                let collapsedBackground = try XCTUnwrap(SideTabsSnapshot.render(names: names, language: "ja", scheme: scheme,
+                    right: right, expanded: false, showLabels: false))
+                let pixels = NSBitmapImageRep(cgImage: expanded.image)
+                let paper = NSBitmapImageRep(cgImage: background.image)
+                var counts: [Int] = []
+                for rect in expanded.tabs {
+                    let count = differingPixels(pixels, paper, in: rect)
+                    counts.append(count)
+                    XCTAssertGreaterThan(count, 25, "Every complete tab must contain readable text: \(scheme), right=\(right)")
+                    // Verify the surface actually exists as well as its foreground.
+                    XCTAssertGreaterThan(try XCTUnwrap(pixels.colorAt(x: Int(rect.midX), y: Int(rect.minY + 3))).alphaComponent, 0.8)
+                }
+                for index in 0..<expanded.tabs.count - 1 {
+                    let upper = expanded.tabs[index], lower = expanded.tabs[index + 1]
+                    XCTAssertEqual(lower.minY - upper.maxY, 6)
+                    for y in Int(upper.maxY)..<Int(lower.minY) {
+                        for x in 0..<pixels.pixelsWide {
+                            XCTAssertEqual(pixels.colorAt(x: x, y: y)?.alphaComponent ?? 0, 0,
+                                "All six gap rows must stay transparent; glass must not bridge tabs")
+                        }
+                    }
+                }
+                let narrowPixels = NSBitmapImageRep(cgImage: collapsed.image)
+                let narrowPaper = NSBitmapImageRep(cgImage: collapsedBackground.image)
+                let narrowText = differingPixels(narrowPixels, narrowPaper,
+                    in: CGRect(x: 0, y: 0, width: narrowPixels.pixelsWide, height: narrowPixels.pixelsHigh))
+                XCTAssertEqual(narrowText, 0, "Collapsed tabs must contain no text")
+                print("SideTabs raster \(scheme) right=\(right): text pixels=\(counts); gaps=6pt transparent; collapsed text=\(narrowText)")
+            }
+        }
+    }
+
+    private func differingPixels(_ image: NSBitmapImageRep, _ background: NSBitmapImageRep, in rect: CGRect) -> Int {
+        var count = 0
+        for y in Int(rect.minY)..<Int(rect.maxY) {
+            for x in Int(rect.minX)..<Int(rect.maxX) {
+                guard let a = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      let b = background.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                let contrast = max(abs(a.redComponent - b.redComponent), abs(a.greenComponent - b.greenComponent), abs(a.blueComponent - b.blueComponent))
+                if a.alphaComponent > 0.5 && contrast > 0.12 { count += 1 }
+            }
+        }
+        return count
+    }
+
     func testExpandedNamesRenderAndCollapsedNamesAreFullyTransparent() throws {
         for (language, name) in [("zh-CN", "全部"), ("en", "Work projects"), ("ja", "仕事の計画"), ("zh-Hant", "工作與生活")] {
             let text = name as NSString
@@ -157,7 +220,7 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         let motion = PanelMotion(model: model, panel: parent, size: parent.frame.size, title: { "test" })
         let controller = SideTabsController(parent: parent, model: model, state: TaskPanelState(), motion: motion)
         defer { controller.stop() }
-        let child = try XCTUnwrap(parent.childWindows?.first)
+        let child = try XCTUnwrap(parent.childWindows?.first { $0.identifier?.rawValue == "dotist.side-tabs" })
         let content = try XCTUnwrap(child.contentView)
         try await Task.sleep(for: .milliseconds(60))
         content.layoutSubtreeIfNeeded()
@@ -190,7 +253,7 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         let controller = SideTabsController(parent: parent, model: model, state: TaskPanelState(), motion: motion)
         defer { controller.stop() }
         parent.orderFront(nil)
-        let child = try XCTUnwrap(parent.childWindows?.first)
+        let child = try XCTUnwrap(parent.childWindows?.first { $0.identifier?.rawValue == "dotist.side-tabs" })
         let content = try XCTUnwrap(child.contentView)
         let right = child.frame.midX > parent.frame.midX
         let tab = SideTabGeometry.frame(panel: parent.frame, index: 0, width: 10, right: right)
@@ -246,7 +309,7 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         let controller = SideTabsController(parent: parent, model: model, state: state, motion: motion)
         defer { controller.stop() }
         parent.orderFront(nil)
-        let child = try XCTUnwrap(parent.childWindows?.first)
+        let child = try XCTUnwrap(parent.childWindows?.first { $0.identifier?.rawValue == "dotist.side-tabs" })
         let before = model.visibleGroups.map(\.id)
         XCTAssertGreaterThanOrEqual(before.count, 2)
         let right = child.frame.midX > parent.frame.midX
@@ -338,8 +401,8 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         let motion = PanelMotion(model: model, panel: parent, size: parent.frame.size, title: { "test" })
         let controller = SideTabsController(parent: parent, model: model, state: TaskPanelState(), motion: motion)
         defer { controller.stop() }
-        let child = try XCTUnwrap(parent.childWindows?.first)
-        XCTAssertEqual(parent.childWindows?.count, 1, "All tabs must share one glass container")
+        let child = try XCTUnwrap(parent.childWindows?.first { $0.identifier?.rawValue == "dotist.side-tabs" })
+        XCTAssertEqual(parent.childWindows?.filter { $0.identifier?.rawValue == "dotist.side-tabs" }.count, 1, "All tabs must share one transparent child window")
         XCTAssertFalse(child.isMovable)
         XCTAssertFalse(child.isOpaque)
         XCTAssertEqual(child.backgroundColor, .clear)
@@ -363,6 +426,6 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
             assertAttached()
         }
         controller.stop()
-        XCTAssertTrue(parent.childWindows?.isEmpty ?? true)
+        XCTAssertFalse(parent.childWindows?.contains { $0 === child } ?? false, "Stopping tabs must detach only their own child, preserving other panel children")
     }
 }

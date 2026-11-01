@@ -19,31 +19,6 @@ enum SettingsModule: String, CaseIterable, Identifiable {
         case .about: return "关于"
         }
     }
-    var symbol: String {
-        switch self {
-        case .appearance: return "paintbrush.fill"
-        case .general: return "gearshape.fill"
-        case .filters: return "line.3.horizontal.decrease"
-        case .menubar: return "menubar.rectangle"
-        case .toolbar: return "rectangle.topthird.inset.filled"
-        case .shortcuts: return "keyboard.fill"
-        case .mcp: return "point.3.connected.trianglepath.dotted"
-        case .data: return "externaldrive.fill"
-        case .about: return "info"
-        }
-    }
-    var color: Color {
-        switch self {
-        case .appearance: return .purple
-        case .general: return .gray
-        case .filters: return .orange
-        case .menubar, .toolbar: return .blue
-        case .shortcuts: return .gray
-        case .mcp: return .green
-        case .data: return .orange
-        case .about: return .blue
-        }
-    }
 }
 
 struct SettingsSearchEntry: Identifiable, Equatable {
@@ -123,18 +98,6 @@ enum SettingsSearchIndex {
         case "筛选器": return ["today tomorrow week next overdue undated done 今天 明天 本周 已逾期 无日期 已完成 今日 明日 今週 期限切れ 日付なし 完了 今天 明天 本週 已逾期 無日期 已完成"]
         default: return []
         }
-    }
-}
-
-struct SettingsModuleIcon: View {
-    let module: SettingsModule
-    let language: String
-    var body: some View {
-        Image(systemName: module.symbol)
-            .font(DotistDesign.font(13, weight: .semibold, language: language))
-            .foregroundStyle(.white).frame(width: 27, height: 27)
-            .background(module.color, in: RoundedRectangle(cornerRadius: 6))
-            .accessibilityHidden(true)
     }
 }
 

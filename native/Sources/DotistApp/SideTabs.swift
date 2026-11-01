@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import DotistCore
 import QuartzCore
 import SwiftUI
 
@@ -7,18 +8,24 @@ import SwiftUI
 enum SideTabGeometry {
     static let collapsedWidth: CGFloat = 10
     static let height: CGFloat = 34
-    static let spacing: CGFloat = 4
+    static let spacing: CGFloat = 6
     static let topInset: CGFloat = 40
     static let reorderDuration = 0.16
     static let expansionDuration = 0.16
     static let collapseDelay = 0.12
-    static let shadowInset: CGFloat = 24
+    static let shadowInset: CGFloat = 0
     static var stride: CGFloat { height + spacing }
 
     static func isRight(panelMinX: CGFloat, visibleMinX: CGFloat, expandedWidth: CGFloat) -> Bool {
         panelMinX - expandedWidth < visibleMinX
     }
     static func expandedWidth(textWidth: CGFloat) -> CGFloat { max(48, ceil(textWidth) + 28) }
+    static func expandedWidth(name: String, language: String) -> CGFloat {
+        let text = name as NSString
+        return expandedWidth(textWidth: max(
+            text.size(withAttributes: [.font: DotistDesign.nativeFont(13, serif: true, language: language)]).width,
+            text.size(withAttributes: [.font: DotistDesign.nativeFont(13, weight: .semibold, serif: true, language: language)]).width))
+    }
     static func width(expanded: Bool, fullWidth: CGFloat) -> CGFloat { expanded ? fullWidth : collapsedWidth }
     static func frame(panel: CGRect, index: Int, width: CGFloat, right: Bool, offsetY: CGFloat = 0) -> CGRect {
         CGRect(x: right ? panel.maxX : panel.minX - width,
@@ -81,7 +88,7 @@ struct SideTabExpansion {
 private struct SideTabShape: Shape {
     let right: Bool
     func path(in rect: CGRect) -> Path {
-        let r = min(8, rect.width / 2)
+        let r = min(8, rect.width, rect.height / 2)
         var p = Path()
         if right {
             p.move(to: .init(x: 0, y: 0)); p.addLine(to: .init(x: rect.maxX - r, y: 0))
@@ -119,53 +126,52 @@ private final class SideTabPresentation: ObservableObject {
     @Published var visible = false
 }
 
-private struct SideTabView: View {
-    @ObservedObject var model: AppModel
-    @ObservedObject var state: TaskPanelState
-    let row: SideTabLayout
-    let right: Bool
-    let textOpacity: Double
-    let glass: Namespace.ID
-    let hovered: Bool
-    let pointer: (String, NSEvent.EventType, CGPoint) -> Void
-    @Environment(\.colorScheme) private var scheme
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    var selected: Bool { state.groupID == row.groupID }
+/// A detached, transparent child panel has no in-window backdrop to sample.
+/// Paper is the reliable default there and in ImageRenderer. A host with a real
+/// backdrop can opt into glass; only the background enters that effect graph.
+enum SideTabSurfaceStyle {
+    case paper
+    case glass
+}
 
-    var body: some View {
-        let shape = SideTabShape(right: right)
-        // Size the material before applying glass. Its ID belongs only to the
-        // material: including the foreground in a glass morph can swallow text.
-        Group {
-            if reduceTransparency {
-                shape.fill(DotistDesign.paper)
-                    .overlay(shape.fill(DotistTheme.tint(model.themeColor(forGroup: row.groupID), scheme)))
-            } else {
-                Color.clear
-                    .frame(width: row.rect.width, height: row.rect.height)
-                    .glassEffect(.regular.tint(DotistTheme.tint(model.themeColor(forGroup: row.groupID), scheme)), in: shape)
-                    .glassEffectID(row.id, in: glass)
-            }
-        }
-        .frame(width: row.rect.width, height: row.rect.height)
-        .overlay {
-            // Always lay out the full label, outside the glass effect. Reveal it
-            // inside the current width, never remeasure it at the narrow edge.
-            SideTabLabel(name: model.text(row.name), language: model.language,
-                         selected: selected, hovered: hovered, right: right,
-                         width: row.rect.width, fullWidth: row.fullWidth, textOpacity: textOpacity)
-        }
-        .shadow(color: .black.opacity(row.dragged ? 0.18 : 0), radius: row.dragged ? 7 : 0, y: row.dragged ? 3 : 0)
-        .overlay(SideTabPointer { type, location in pointer(row.id, type, location) })
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(model.text(row.name)))
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityAction { state.groupID = row.groupID }
-        .accessibilityIdentifier("side-tab:\(row.id)")
+private struct SideTabSurfaceStyleKey: EnvironmentKey {
+    static let defaultValue = SideTabSurfaceStyle.paper
+}
+
+extension EnvironmentValues {
+    var sideTabSurfaceStyle: SideTabSurfaceStyle {
+        get { self[SideTabSurfaceStyleKey.self] }
+        set { self[SideTabSurfaceStyleKey.self] = newValue }
     }
 }
 
-/// Foreground stays separate from the glass graph and keeps its expanded layout.
+private struct SideTabBackground: View {
+    let color: DotistGroupColor
+    let selected: Bool
+    let right: Bool
+    @Environment(\.sideTabSurfaceStyle) private var style
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let shape = SideTabShape(right: right)
+        ZStack {
+            // This underlay also protects contrast if a glass host loses sampling.
+            shape.fill(DotistDesign.paper.opacity(reduceTransparency || contrast == .increased ? 1 : selected ? 0.92 : 0.85))
+            shape.fill(DotistTheme.swatch(color).opacity(selected ? 0.12 : 0.06))
+            if style == .glass && !reduceTransparency && contrast != .increased {
+                Color.clear
+                    .glassEffect(.regular.tint(DotistTheme.tint(color, scheme).opacity(selected ? 1 : 0.5)), in: shape)
+            }
+            shape.stroke(DotistDesign.rule, lineWidth: 0.5)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Foreground is an ordinary sibling of the material, never part of a glass ID,
+/// mask or effect container. Its layout always uses the expanded width.
 struct SideTabLabel: View {
     let name: String
     let language: String
@@ -181,14 +187,80 @@ struct SideTabLabel: View {
             .font(DotistDesign.font(13, weight: selected ? .semibold : .regular, serif: true, language: language))
             .foregroundStyle(selected || hovered ? DotistDesign.ink : DotistDesign.faint)
             .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .frame(width: max(0, fullWidth - 28), height: SideTabGeometry.height,
-                   alignment: right ? .leading : .trailing)
+            .fixedSize()
             .padding(.horizontal, 14)
+            .frame(width: fullWidth, height: SideTabGeometry.height, alignment: .leading)
             .frame(width: width, height: SideTabGeometry.height, alignment: right ? .leading : .trailing)
             .clipped()
             .opacity(textOpacity)
             .allowsHitTesting(false)
+    }
+}
+
+private struct SideTabContent: View {
+    let row: SideTabLayout
+    let language: String
+    let color: DotistGroupColor
+    let selected: Bool
+    let hovered: Bool
+    let right: Bool
+    let textOpacity: Double
+
+    var body: some View {
+        ZStack(alignment: right ? .leading : .trailing) {
+            SideTabBackground(color: color, selected: selected, right: right)
+                .frame(width: row.rect.width, height: SideTabGeometry.height)
+            SideTabLabel(name: row.name, language: language, selected: selected,
+                         hovered: hovered, right: right, width: row.rect.width,
+                         fullWidth: row.fullWidth, textOpacity: textOpacity)
+        }
+        .frame(width: row.rect.width, height: SideTabGeometry.height)
+        .clipped()
+    }
+}
+
+/// The live host and raster snapshots share this entire tree, including surfaces,
+/// label clipping and absolute tab positions. Each tab has an independent surface.
+private struct SideTabsCanvas: View {
+    let rows: [SideTabLayout]
+    let size: CGSize
+    let language: String
+    let selectedGroupID: String?
+    let hovered: String?
+    let right: Bool
+    let textOpacity: Double
+    let color: (String?) -> DotistGroupColor
+    var pointer: ((String, NSEvent.EventType, CGPoint) -> Void)?
+    var select: ((String?) -> Void)?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear.frame(width: size.width, height: size.height)
+            ForEach(rows) { row in
+                SideTabContent(row: row, language: language, color: color(row.groupID),
+                    selected: selectedGroupID == row.groupID, hovered: hovered == row.id,
+                    right: right, textOpacity: textOpacity)
+                    .overlay {
+                        if let pointer {
+                            SideTabPointer { type, location in pointer(row.id, type, location) }
+                        }
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Text(row.name))
+                    .accessibilityAddTraits(selectedGroupID == row.groupID ? [.isButton, .isSelected] : .isButton)
+                    .accessibilityAction { select?(row.groupID) }
+                    .accessibilityIdentifier("side-tab:\(row.id)")
+                    .offset(x: row.rect.minX)
+                    // Width and horizontal attachment use the controller's sample
+                    // directly; only reorder movement gets a SwiftUI animation.
+                    .animation(reduceMotion || row.dragged ? nil : .easeOut(duration: SideTabGeometry.reorderDuration)) { content in
+                        content.offset(y: size.height - row.rect.maxY)
+                    }
+                    .zIndex(row.dragged ? 1 : 0)
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
     }
 }
 
@@ -197,29 +269,52 @@ private struct SideTabsView: View {
     @ObservedObject var state: TaskPanelState
     @ObservedObject var presentation: SideTabPresentation
     let pointer: (String, NSEvent.EventType, CGPoint) -> Void
-    @Namespace private var glass
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        GlassEffectContainer(spacing: SideTabGeometry.spacing * 2) {
-            ZStack(alignment: .topLeading) {
-                ForEach(presentation.rows) { row in
-                    SideTabView(model: model, state: state, row: row, right: presentation.right,
-                                textOpacity: presentation.textOpacity, glass: glass, hovered: presentation.hovered == row.id, pointer: pointer)
-                        .position(x: row.rect.midX, y: 0)
-                        // Scope animation to vertical reordering. Width, horizontal
-                        // attachment and label opacity keep the controller's sample,
-                        // even if a reorder starts before expansion has finished.
-                        .animation(reduceMotion || row.dragged ? nil : .easeOut(duration: SideTabGeometry.reorderDuration)) { content in
-                            content.offset(y: presentation.size.height - row.rect.midY)
-                        }
-                        .zIndex(row.dragged ? 1 : 0)
-                }
-            }
-            .frame(width: presentation.size.width, height: presentation.size.height)
+        SideTabsCanvas(rows: presentation.rows, size: presentation.size, language: model.language,
+            selectedGroupID: state.groupID, hovered: presentation.hovered, right: presentation.right,
+            textOpacity: presentation.textOpacity, color: { model.themeColor(forGroup: $0) },
+            pointer: pointer, select: { state.groupID = $0 })
+            .environment(\.sideTabSurfaceStyle, .paper)
+            .modifier(DotistTheme(theme: model.settings.theme))
+            .accessibilityHidden(!presentation.visible)
+    }
+}
+
+/// Callable offscreen entry point. Rectangles use bitmap coordinates (top down).
+/// Rendering paper is intentional: ImageRenderer cannot sample Liquid Glass.
+@MainActor
+struct SideTabsSnapshot {
+    let image: CGImage
+    let tabs: [CGRect]
+
+    static func render(names: [String], language: String, scheme: ColorScheme,
+                       right: Bool, expanded: Bool, showLabels: Bool = true) -> SideTabsSnapshot? {
+        let widths = names.map { SideTabGeometry.expandedWidth(name: $0, language: language) }
+        let panel = CGRect(x: widths.max() ?? 48, y: 0, width: 364, height: 620)
+        let sample = SideTabGeometry.snapshot(panel: panel, fullWidths: widths, progress: expanded ? 1 : 0, right: right)
+        let rows = names.enumerated().map { index, name in
+            SideTabLayout(id: String(index), groupID: String(index), name: name,
+                rect: sample.tabs[index].offsetBy(dx: -sample.window.minX, dy: -sample.window.minY),
+                fullWidth: widths[index], dragged: false)
         }
-        .modifier(DotistTheme(theme: model.settings.theme))
-        .accessibilityHidden(!presentation.visible)
+        let content = SideTabsCanvas(rows: rows, size: sample.window.size, language: language,
+            selectedGroupID: "0", hovered: nil, right: right, textOpacity: showLabels ? sample.textOpacity : 0,
+            color: { _ in .teal })
+            .environment(\.sideTabSurfaceStyle, .paper)
+            .environment(\.colorScheme, scheme)
+            .transaction { $0.disablesAnimations = true }
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 1
+        renderer.proposedSize = ProposedViewSize(sample.window.size)
+        let appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+        var image: CGImage?
+        appearance?.performAsCurrentDrawingAppearance { image = renderer.cgImage }
+        guard let image else { return nil }
+        return SideTabsSnapshot(image: image, tabs: rows.map {
+            CGRect(x: $0.rect.minX, y: sample.window.height - $0.rect.maxY,
+                   width: $0.rect.width, height: $0.rect.height)
+        })
     }
 }
 
@@ -256,7 +351,7 @@ private final class SideTabDisplayTarget: NSObject {
     @objc func tick(_ link: CADisplayLink) { controller?.synchronize() }
 }
 
-/// A single transparent child gives all tabs one glass container. Window-level mouse
+/// A transparent child hosts independently painted tabs. Window-level mouse
 /// passthrough keeps the unused area (including the gaps) out of the hit-test surface.
 @MainActor
 final class SideTabsController: NSObject {
@@ -286,6 +381,7 @@ final class SideTabsController: NSObject {
         self.parent = parent; self.model = model; self.state = state; self.motion = motion
         window = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
+        window.identifier = NSUserInterfaceItemIdentifier("dotist.side-tabs")
         window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false
         window.alphaValue = 0
         window.isReleasedWhenClosed = false; window.isMovable = false; window.isMovableByWindowBackground = false
@@ -381,12 +477,10 @@ final class SideTabsController: NSObject {
             names[id].map { (id: id, groupID: Optional(id), name: $0) }
         }
         let widths = items.map { item -> CGFloat in
-            let name = model.text(item.name) as NSString
+            let name = model.text(item.name)
             let key = "\(model.language)|\(name)"
             if let measured = measuredWidths[key] { return measured }
-            let regular = DotistDesign.nativeFont(13, serif: true, language: model.language)
-            let semibold = DotistDesign.nativeFont(13, weight: .semibold, serif: true, language: model.language)
-            let measured = SideTabGeometry.expandedWidth(textWidth: max(name.size(withAttributes: [.font: regular]).width, name.size(withAttributes: [.font: semibold]).width))
+            let measured = SideTabGeometry.expandedWidth(name: name, language: model.language)
             measuredWidths[key] = measured
             return measured
         }
@@ -436,7 +530,7 @@ final class SideTabsController: NSObject {
                 width: sample.tabs[index].width, right: right,
                 offsetY: lifted ? deltaY : 0)
             hitRects.append(rect)
-            return SideTabLayout(id: item.id, groupID: item.groupID, name: item.name,
+            return SideTabLayout(id: item.id, groupID: item.groupID, name: model.text(item.name),
                 rect: rect.offsetBy(dx: -bounds.minX, dy: -bounds.minY), fullWidth: widths[index], dragged: lifted)
         }
         if presentation.size != bounds.size { presentation.size = bounds.size }

@@ -73,9 +73,8 @@ struct SettingsWindow: View {
                                 active = module; searchTarget = nil; emphasized = nil; searchRequest = UUID()
                             } label: {
                                 HStack(spacing: 10) {
-                                    SettingsModuleIcon(module: module, language: model.language)
                                     Text(model.text(module.title)).font(font(13, active == module ? .semibold : .regular))
-                                        .foregroundStyle(active == module ? DotistDesign.accent : DotistDesign.ink)
+                                        .foregroundStyle(active == module ? DotistDesign.ink : DotistDesign.muted)
                                     Spacer(minLength: 0)
                                 }.padding(.horizontal, 15).frame(height: 38).contentShape(Rectangle())
                             }.buttonStyle(.plain).modifier(DotistFocusRing())
@@ -97,14 +96,13 @@ struct SettingsWindow: View {
                                 searchRequest = UUID()
                             } label: {
                                 HStack(alignment: .center, spacing: 9) {
-                                    SettingsModuleIcon(module: result.module, language: model.language)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(model.text(result.title)).font(font(12, searchTarget == result.target ? .semibold : .regular))
-                                            .foregroundStyle(searchTarget == result.target ? DotistDesign.accent : DotistDesign.ink)
+                                            .foregroundStyle(searchTarget == result.target ? DotistDesign.ink : DotistDesign.muted)
                                         Text(model.text(result.module.title)).font(font(11)).foregroundStyle(DotistDesign.muted)
                                     }
                                     Spacer(minLength: 0)
-                                }.padding(.horizontal, 12).padding(.vertical, 5).contentShape(Rectangle())
+                                }.padding(.horizontal, 15).padding(.vertical, 5).contentShape(Rectangle())
                             }.buttonStyle(.plain).modifier(DotistFocusRing())
                                 .accessibilityIdentifier("settings-result-" + result.target)
                         }
@@ -225,11 +223,10 @@ struct SettingsWindow: View {
                     settingMenu("启动时打开", value: model.settings.defaultFilter, options: model.settings.filters.map { ($0, model.text(filterLabel($0))) }) { value in update { $0.defaultFilter = value } }
                 }
             }
-            settingsGroup("筛选器", footer: "主窗口顶部的筛选条可以左右滑动。在这里选择显示哪些，拖动手柄调整顺序。") {
+            settingsGroup("筛选器") {
                 List {
                     ForEach(model.settings.filters, id: \.self) { id in
                         HStack(spacing: 10) {
-                            Image(systemName: "line.3.horizontal").foregroundStyle(DotistDesign.faint).accessibilityHidden(true)
                             Text(model.text(filterLabel(id)))
                             Spacer()
                             Button { setFilter(id, enabled: false) } label: { Image(systemName: "xmark").frame(width: 20, height: 20) }
@@ -310,8 +307,6 @@ struct SettingsWindow: View {
                     let to = direction == .increment ? min(from + 1, items.count - 1) : max(from - 1, 0)
                     if from != to { toolbar.move(item, onto: items[to]) }
                 }
-            Image(systemName: toolbarSymbol(item)).font(font(13)).foregroundStyle(DotistDesign.muted)
-                .frame(width: 18).accessibilityHidden(true)
             Text(model.text(toolbarTitle(item))).font(font(13, emphasized == rowID(toolbarTitle(item)) ? .semibold : .regular))
                 .foregroundStyle(emphasized == rowID(toolbarTitle(item)) ? DotistDesign.accent : DotistDesign.ink)
             Spacer(minLength: 8)
@@ -335,15 +330,6 @@ struct SettingsWindow: View {
         case .lock: return "固定窗口"
         case .collapse: return "收起为悬浮球"
         default: return "颜色"
-        }
-    }
-    private func toolbarSymbol(_ item: ToolbarItem) -> String {
-        switch item {
-        case .views: return "rectangle.split.2x1"
-        case .pin: return "pin"
-        case .lock: return "lock"
-        case .collapse: return "arrow.down.right.and.arrow.up.left"
-        default: return "paintpalette"
         }
     }
     private var shortcuts: some View {

@@ -149,7 +149,8 @@ final class AppModel: ObservableObject {
     var remainingCount: Int { remaining }
     var nextTask: DotistTask? { next }
     var bubbleTitle: String {
-        nextTask?.title ?? text(topLevelTasks.isEmpty ? "把要做的事，放在这里。" : "今天的事都做完了")
+        guard let nextTask else { return text(topLevelTasks.isEmpty ? "把要做的事，放在这里。" : "今天的事都做完了") }
+        return BubbleContent.clean(nextTask.title) ?? text("未命名任务")
     }
     func ordered(_ values: [DotistTask]) -> [DotistTask] {
         values.sorted { $0.position == $1.position ? $0.id < $1.id : $0.position < $1.position }

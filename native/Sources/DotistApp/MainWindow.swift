@@ -13,11 +13,13 @@ struct MainWindow: View {
     let collapse: () -> Void
     var close: (() -> Void)? = nil
     var primary = true
-    @ObservedObject private var toolbarConfig = ToolbarConfig.shared
+    @ObservedObject var toolbarConfig = ToolbarConfig.shared
     @State private var panelHovered = false
     @State private var composerHovered = false
     @State private var composerFocused = false
-    @State private var draggedToolbarItem: ToolbarItem?
+    @State private var toolbarDrag: ToolbarDragSession?
+    @GestureState private var toolbarGestureActive = false
+    @State private var toolbarFrames: [ToolbarItem: CGRect] = [:]
     @State private var showColorPicker = false
     @State private var shelfTarget: String?
     @State private var composer = ""
@@ -54,14 +56,21 @@ struct MainWindow: View {
     @State private var groupFrames: [TaskListGroupFrame] = []
     @State private var shelfFrames: [String: CGRect] = [:]
     @State private var listViewport = CGRect.zero
-    @State private var drag: TaskListDrag?
     @State private var dragCancelled = false
     @GestureState private var reorderGestureActive = false
-    @StateObject private var reorderRuntime = TaskReorderRuntime()
+    @StateObject var reorderRuntime = TaskReorderRuntime()
     @State var dragMotion = TaskDragMotion()
     @StateObject var selection = TaskSelectionController()
     @State private var notice: String?
-    @State private var noticeToken = UUID()
+    @State private var noticeLifetime = PausableToastLifetime(duration: 2)
+    @State private var undoToastLifetime = PausableToastLifetime(duration: 7)
+    @State private var undoToastVisible = false
+    @State private var ghostFrame = CGRect.zero
+
+    private var drag: TaskListDrag? {
+        get { reorderRuntime.drag }
+        nonmutating set { reorderRuntime.drag = newValue }
+    }
 
     private var textColor: Color { DotistDesign.ink }
     private var panelTasks: [DotistTask] {
@@ -93,11 +102,13 @@ struct MainWindow: View {
             }
         }
         .coordinateSpace(name: Self.listSpace)
-        .overlay(alignment: .topLeading) { liftedTaskBlock }
-        .background(TaskReorderInteractionGuard(rowFrames: rowFrames.map(\.frame), dragging: drag != nil, cancel: cancelReorder, undoRedo: handleUndoShortcut))
+        .overlay(alignment: .topLeading) { ghostConnector }
+        .background(TaskReorderInteractionGuard(rowFrames: rowFrames.map(\.frame) + Array(toolbarFrames.values), dragging: drag != nil, cancel: cancelReorder, undoRedo: handleUndoShortcut))
         .onPreferenceChange(TaskListRowFrame.Key.self) { if rowFrames != $0 { rowFrames = $0 } }
         .onPreferenceChange(TaskListGroupFrame.Key.self) { if groupFrames != $0 { groupFrames = $0 } }
-        .onPreferenceChange(TaskGhostFrameKey.self) { reorderRuntime.ghostFrame = $0 }
+        .onPreferenceChange(TaskGhostFrameKey.self) { if ghostFrame != $0 { ghostFrame = $0 } }
+        .onPreferenceChange(ToolbarFrameKey.self) { toolbarFrames = $0 }
+        .onChange(of: toolbarGestureActive) { active in if !active { toolbarDrag = nil } }
         .onPreferenceChange(TaskShelfFrameKey.self) { shelfFrames = $0 }
         .onChange(of: reorderGestureActive) { active in
             if !active {
@@ -106,6 +117,15 @@ struct MainWindow: View {
             }
         }
         .onReceive(Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect()) { _ in autoScrollReorder() }
+        .onReceive(model.$undo) { entry in
+            undoToastVisible = entry != nil
+            undoToastLifetime.restart(at: ProcessInfo.processInfo.systemUptime)
+        }
+        .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
+            let now = ProcessInfo.processInfo.systemUptime
+            if undoToastVisible && !undoToastLifetime.isVisible(at: now) { undoToastVisible = false }
+            if notice != nil && !noticeLifetime.isVisible(at: now) { notice = nil }
+        }
         .onDisappear { cancelReorder(); leaveInputs(); selection.update { $0.clear() } }
         .onHover { panelHovered = $0 }
         .foregroundColor(textColor)
@@ -148,7 +168,6 @@ struct MainWindow: View {
                     // beyond the viewport. A lazy stack may recycle it mid-drag.
                     VStack(alignment: .leading, spacing: 0) {
                         listSections
-                        emptyDropGroups
                     }.padding(.horizontal, 16).padding(.bottom, 12)
                         .frame(minHeight: space.size.height, alignment: .topLeading)
                         .background(WindowDragArea())
@@ -201,21 +220,26 @@ struct MainWindow: View {
                 if let notice {
                     Text(model.text(notice)).font(font(13)).foregroundStyle(DotistDesign.muted)
                         .padding(.horizontal, 16).frame(height: 36).glassEffect(.regular, in: .capsule).fixedSize().offset(y: -48)
+                        .onHover { noticeLifetime.setHovered($0, at: ProcessInfo.processInfo.systemUptime) }
+                        .onDisappear { noticeLifetime.setHovered(false, at: ProcessInfo.processInfo.systemUptime) }
                 } else { undoToast }
             }
         }
     }
 
     @ViewBuilder private var undoToast: some View {
-        if let undo = model.undo {
+        if undoToastVisible, let undo = model.undo {
             HStack(spacing: 8) {
                 Text(model.text(undo.group ? "已删除分组「{title}」，任务已移至无分组" : "已删除「{title}」").replacingOccurrences(of: "{title}", with: undo.title)).lineLimit(1)
                 Button(model.text("撤销")) { model.restore() }.font(font(13, .medium)).foregroundColor(DotistDesign.accent)
-                Button { model.undo = nil } label: { Image(systemName: "xmark").font(font(11)).frame(width: 22, height: 22) }
+                Button { undoToastVisible = false } label: { Image(systemName: "xmark").font(font(11)).frame(width: 22, height: 22) }
                     .accessibilityLabel(Text(model.text("关闭")))
             }.buttonStyle(.plain).font(font(13)).foregroundColor(DotistDesign.muted)
                 .padding(.leading, 16).padding(.trailing, 6).frame(height: 36)
                 .glassEffect(.regular, in: .capsule).fixedSize().offset(y: -48)
+                .onHover { undoToastLifetime.setHovered($0, at: ProcessInfo.processInfo.systemUptime) }
+                .onDisappear { undoToastLifetime.setHovered(false, at: ProcessInfo.processInfo.systemUptime) }
+                .accessibilityIdentifier("undo-toast")
         }
     }
 
@@ -235,23 +259,16 @@ struct MainWindow: View {
         }
     }
 
-    @ViewBuilder private var emptyDropGroups: some View {
-        if drag != nil && state.scope != "all" && state.groupID == nil {
-            ForEach(dropGroupIDs.filter { id in !rowFrames.contains { $0.task.category == id } }, id: \.self) { id in
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(model.groupDisplayName(id)).font(font(15, .semibold, serif: true)).foregroundColor(DotistDesign.faint).frame(height: 34)
-                    emptyGroupGhost(id, region: "empty:\(id)")
-                }.frame(maxWidth: .infinity, alignment: .leading)
-                    .background(groupGeometry(id, region: "empty:\(id)"))
-            }
-        }
+    private var showsInsertionGhost: Bool {
+        guard let drag, shelfTarget == nil else { return false }
+        return drag.target != drag.initialTarget
     }
 
-    private var ghostBeforeID: String? { shelfTarget == nil ? drag?.ghostBeforeID : nil }
-    private var ghostAfterID: String? { shelfTarget == nil ? drag?.ghostAfterID : nil }
+    private var ghostBeforeID: String? { showsInsertionGhost ? drag?.ghostBeforeID : nil }
+    private var ghostAfterID: String? { showsInsertionGhost ? drag?.ghostAfterID : nil }
 
     @ViewBuilder private func emptyGroupGhost(_ id: String, region: String) -> some View {
-        if let drag, drag.target?.groupID == id, drag.region == region, drag.targetIsEmpty, shelfTarget == nil {
+        if let drag, showsInsertionGhost, drag.target?.groupID == id, drag.region == region, drag.targetIsEmpty {
             taskGhost(compensatingIndent: 0)
         }
     }
@@ -281,17 +298,26 @@ struct MainWindow: View {
         return min(4, target.level + model.depth(of: row.task) - (root.map { model.depth(of: $0) } ?? drag.sourceDepth))
     }
 
-    @ViewBuilder private var liftedTaskBlock: some View {
-        if let drag {
-            TaskLiftedLayer(motion: dragMotion, origin: drag.startFrame.origin, start: drag.startLocation, content:
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(drag.visibleBlock, id: \.task.id) { row in
-                        rowContent(row.task, children: model.children(of: row.task), sub: row.sub, allTasks: row.allTasks, previous: nil, hideDue: row.hideDue, titleParts: model.tags(for: row.task), actionsVisible: false, selected: selection.value.ids.contains(row.task.id))
-                            .frame(width: row.frame.width, height: row.frame.height)
+    @ViewBuilder private var ghostConnector: some View {
+        if let drag, let target = drag.target, target.level > 0, shelfTarget == nil,
+           let parent = rowFrames.first(where: { $0.task.id == target.parentID }),
+           let first = drag.visibleBlock.first {
+            let frame = showsInsertionGhost ? ghostFrame : drag.startFrame
+            if frame != .zero {
+                let parentDepth = model.depth(of: parent.task)
+                let start = CGPoint(x: parent.frame.minX + TaskRowMetrics.circleX(parentDepth) - TaskRowMetrics.inset + TaskRowMetrics.diameter(parentDepth) / 2,
+                                    y: parent.frame.midY + TaskRowMetrics.diameter(parentDepth) / 2 + 2)
+                let end = CGPoint(x: frame.minX + TaskRowMetrics.circleX(target.level) - TaskRowMetrics.inset - 2,
+                                  y: frame.minY + first.frame.height / 2)
+                TaskGhostConnector(start: start, end: end)
+                    .stroke(DotistDesign.rule, style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round))
+                    .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.12), value: end)
+                    .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.12), value: start)
+                    .mask(alignment: .topLeading) {
+                        Rectangle().frame(width: listViewport.width, height: listViewport.height).offset(x: listViewport.minX, y: listViewport.minY)
                     }
-                }.frame(width: drag.startFrame.width, alignment: .leading)
-                    .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
-            ).allowsHitTesting(false).accessibilityHidden(true)
+                    .allowsHitTesting(false).accessibilityHidden(true)
+            }
         }
     }
 
@@ -323,12 +349,18 @@ struct MainWindow: View {
         let block = rowFrames.filter { ids.contains($0.task.id) && $0.frame.height > 0 }.sorted { $0.frame.minY < $1.frame.minY }
         guard let first = block.first else { return }
         dragMotion.location = start
-        reorderRuntime.ghostFrame = .zero
+        ghostFrame = .zero
         drag = TaskListDrag(taskID: task.id, blockIDs: ids, visibleBlock: block, startFrame: CGRect(x: head.frame.minX, y: first.frame.minY, width: head.frame.width, height: block.reduce(0) { $0 + $1.frame.height }), startLocation: start,
                             rootIDs: roots.map(\.id), sourceDepth: roots.first.map { model.depth(of: $0) } ?? model.depth(of: task), subtreeHeight: roots.map { model.subtreeHeight(of: $0) }.max() ?? 0)
+        // Resolve against pre-drag geometry. Neither the source row nor the
+        // composer changes height, and the initial slot adds no duplicate gap.
+        drag?.baselineRows = rowFrames
+        drag?.baselineGroups = groupFrames
+        drag?.scrollOriginY = reorderRuntime.scrollOriginY
         model.beginDrag(task.id, scope: "list:\(state.scope)")
         model.focusId = task.id
         retargetReorder()
+        drag?.initialTarget = drag?.target
     }
 
     private func retargetReorder() {
@@ -341,16 +373,18 @@ struct MainWindow: View {
             if next.target != target { next.target = target; drag = next }
             return
         }
-        let groups = groupFrames.sorted { $0.frame.minY < $1.frame.minY }
-        let engineGroups = groups.map { TaskReorderEngine.Group(id: $0.id, minY: $0.frame.minY, maxY: $0.frame.maxY) }
-        let rows = rowFrames.sorted { $0.frame.midY < $1.frame.midY }.map { row in
-            TaskReorderEngine.Row(id: row.task.id, depth: model.depth(of: row.task), groupID: row.task.category, parentID: row.task.parentId, midY: row.frame.midY)
+        let logicalY = showsInsertionGhost ? TaskDragGeometry.pointerY(location.y, excludingGhost: ghostFrame) : location.y
+        let scrollDelta = reorderRuntime.scrollOriginY - next.scrollOriginY
+        let groups = next.baselineGroups.sorted { $0.frame.minY < $1.frame.minY }
+        let engineGroups = groups.map { TaskReorderEngine.Group(id: $0.id, minY: $0.frame.minY - scrollDelta, maxY: $0.frame.maxY - scrollDelta) }
+        let rows = next.baselineRows.sorted { $0.frame.midY < $1.frame.midY }.map { row in
+            TaskReorderEngine.Row(id: row.task.id, depth: model.depth(of: row.task), groupID: row.task.category, parentID: row.task.parentId, midY: row.frame.midY - scrollDelta)
         }
-        let target = TaskReorderEngine.target(rows: rows, groups: engineGroups, draggedID: next.rootIDs.first ?? next.taskID, blockIDs: next.blockIDs, startY: next.startLocation.y, offsetY: location.y - next.startLocation.y, offsetX: location.x - next.startLocation.x, indentStep: 22, subtreeHeight: next.subtreeHeight)
-        let region = groups.first { $0.id == target?.groupID && location.y >= $0.frame.minY && location.y < $0.frame.maxY }
-            ?? groups.filter { $0.id == target?.groupID }.min { abs($0.frame.midY - location.y) < abs($1.frame.midY - location.y) }
-        // Pointer movement is published ONLY to TaskLiftedLayer. The outline
-        // changes once per slot/level/region transition, never per mouse event.
+        let target = TaskReorderEngine.target(rows: rows, groups: engineGroups, draggedID: next.rootIDs.first ?? next.taskID, blockIDs: next.blockIDs, startY: next.startLocation.y, offsetY: logicalY - next.startLocation.y, offsetX: location.x - next.startLocation.x, indentStep: 22, subtreeHeight: next.subtreeHeight)
+        let region = groups.first { $0.id == target?.groupID && logicalY >= $0.frame.minY - scrollDelta && logicalY < $0.frame.maxY - scrollDelta }
+            ?? groups.filter { $0.id == target?.groupID }.min { abs($0.frame.midY - scrollDelta - logicalY) < abs($1.frame.midY - scrollDelta - logicalY) }
+        // Frozen pre-drag geometry prevents a newly inserted gap from
+        // feeding back into target selection or shifting the scroll origin.
         guard target != next.target || region?.region != next.region else { return }
         let rest = rows.filter { $0.groupID == target?.groupID && !next.blockIDs.contains($0.id) }
         let slot = target?.slot ?? 0
@@ -359,29 +393,26 @@ struct MainWindow: View {
         next.ghostAfterID = slot >= rest.count ? rest.last?.id : nil
         next.targetIsEmpty = rest.isEmpty
         next.region = region?.region
-        withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.16)) { drag = next }
+        if drag?.initialTarget == nil {
+            var transaction = Transaction(); transaction.disablesAnimations = true
+            withTransaction(transaction) { drag = next }
+        } else {
+            withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.12)) { drag = next }
+        }
     }
 
     private func finishReorder() {
         guard let drag, !drag.committing else { return }
         guard let target = drag.target, listViewport.contains(dragMotion.location) || shelfTarget != nil else { cancelReorder(); return }
         self.drag?.committing = true
-        let reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        if reorderRuntime.ghostFrame != .zero && shelfTarget == nil {
-            withAnimation(reduced ? nil : .easeOut(duration: 0.14)) {
-                dragMotion.location.y = drag.startLocation.y + reorderRuntime.ghostFrame.minY - drag.startFrame.minY
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + (reduced ? 0 : 0.14)) {
-            let complete = { clearReorder() }
-            if drag.rootIDs.count == 1 {
-                model.commitReorder(taskID: drag.rootIDs[0], to: target, completed: complete, failed: { clearReorder() })
-            } else {
-                // Preflight every root before applying the gesture. Core owns
-                // each subtree move and the model freezes observation until done.
-                model.change(completed: complete, failed: { clearReorder() }) { store in
-                    try TaskDragBatch.commit(ids: drag.rootIDs, target: target, store: store)
-                }
+        let complete = { clearReorder() }
+        if drag.rootIDs.count == 1 {
+            model.commitReorder(taskID: drag.rootIDs[0], to: target, completed: complete, failed: { clearReorder() })
+        } else {
+            // Preflight every root before applying the gesture. Core owns
+            // each subtree move and the model freezes observation until done.
+            model.change(completed: complete, failed: { clearReorder() }) { store in
+                try TaskDragBatch.commit(ids: drag.rootIDs, target: target, store: store)
             }
         }
     }
@@ -394,6 +425,7 @@ struct MainWindow: View {
 
     private func clearReorder() {
         drag = nil
+        ghostFrame = .zero
         shelfTarget = nil
         model.endDrag()
     }
@@ -411,20 +443,54 @@ struct MainWindow: View {
         if reorderRuntime.scroll(by: delta) { retargetReorder() }
     }
 
+    private var sortableToolbarItems: [ToolbarItem] {
+        toolbarConfig.order.filter { $0 != .collapse && toolbarConfig.visibility(of: $0) != .hidden }
+    }
+
+    private var toolbarAnimation: Animation? {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.16)
+    }
+
     private var header: some View {
         HStack(spacing: 4) {
             Spacer(minLength: 4)
-            ForEach(toolbarConfig.order, id: \.self) { item in
-                if toolbarConfig.visibility(of: item) != .hidden {
-                    toolbarItem(item)
-                        .opacity(toolbarConfig.visibility(of: item) == .always || panelHovered ? 1 : 0)
-                        .allowsHitTesting(toolbarConfig.visibility(of: item) == .always || panelHovered)
-                        .accessibilityHidden(toolbarConfig.visibility(of: item) == .hover && !panelHovered)
-                        .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration: 0.15), value: panelHovered)
-                }
+            ForEach(sortableToolbarItems, id: \.self) { item in
+                toolbarItem(item)
+                    .opacity(toolbarConfig.visibility(of: item) == .always || panelHovered || toolbarDrag != nil ? 1 : 0)
+                    .allowsHitTesting(toolbarConfig.visibility(of: item) == .always || panelHovered)
+                    .accessibilityHidden(toolbarConfig.visibility(of: item) == .hover && !panelHovered)
+                    .offset(x: toolbarDrag?.offset(for: item) ?? 0)
+                    .zIndex(toolbarDrag?.item == item ? 1 : 0)
+                    .animation(toolbarDrag?.item == item ? nil : toolbarAnimation, value: toolbarDrag?.target)
+                    .animation(toolbarAnimation, value: panelHovered)
+                    .highPriorityGesture(toolbarReorderGesture(item))
             }
             if !primary, let close { toolbarButton("xmark", label: model.text("关闭面板"), action: close) }
+            toolbarItem(.collapse)
         }.padding(.leading, 16).padding(.trailing, 10).frame(height: 44).background(WindowDragArea())
+    }
+
+    private func toolbarReorderGesture(_ item: ToolbarItem) -> some Gesture {
+        DragGesture(minimumDistance: 3, coordinateSpace: .named(Self.listSpace))
+            .updating($toolbarGestureActive) { _, active, _ in active = true }
+            .onChanged { value in
+                guard item != .collapse else { return }
+                if toolbarDrag == nil {
+                    guard (NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags).contains(.command) else { return }
+                    toolbarDrag = ToolbarDragSession(item: item, items: sortableToolbarItems)
+                }
+                guard toolbarDrag?.item == item else { return }
+                toolbarDrag?.translation = value.translation.width
+            }
+            .onEnded { _ in
+                guard let session = toolbarDrag, session.item == item else { return }
+                withAnimation(toolbarAnimation) {
+                    if session.items.indices.contains(session.target) {
+                        toolbarConfig.move(item, onto: session.items[session.target])
+                    }
+                    toolbarDrag = nil
+                }
+            }
     }
 
     private func toolbarItem(_ item: ToolbarItem) -> some View {
@@ -432,7 +498,7 @@ struct MainWindow: View {
         case .views: "rectangle.split.2x1"
         case .pin: model.settings.alwaysOnTop ? "pin.fill" : "pin"
         case .lock: model.settings.locked ? "lock.fill" : "lock.open"
-        case .color: "paintpalette"
+        case .color: "circle"
         case .collapse: "arrow.down.right.and.arrow.up.left"
         }
         let labelKey: String = switch item {
@@ -443,7 +509,8 @@ struct MainWindow: View {
         case .collapse: "收起为悬浮球"
         }
         let label = model.text(labelKey)
-        return toolbarButton(symbol, label: label) {
+        return Button {
+            guard toolbarDrag == nil else { return }
             switch item {
             case .views: showViews()
             case .color: showColorPicker.toggle()
@@ -451,17 +518,21 @@ struct MainWindow: View {
             case .pin: var patch = DotistSettingsPatch(); patch.alwaysOnTop = !model.settings.alwaysOnTop; model.updateSettings(patch)
             case .lock: var patch = DotistSettingsPatch(); patch.locked = !model.settings.locked; model.updateSettings(patch)
             }
-        }.accessibilityIdentifier("toolbar:\(item.rawValue)")
-        .popover(isPresented: Binding(get: { item == .color && showColorPicker }, set: { if item == .color { showColorPicker = $0 } })) {
-            colorPicker
-        }.onDrag {
-            guard NSEvent.modifierFlags.contains(.command) else { return NSItemProvider() }
-            draggedToolbarItem = item
-            return NSItemProvider(object: item.rawValue as NSString)
-        }.onDrop(of: ["public.utf8-plain-text"], isTargeted: nil) { _ in
-            guard let source = draggedToolbarItem else { return false }
-            toolbarConfig.move(source, onto: item); draggedToolbarItem = nil; return true
-        }
+        } label: {
+            Group {
+                if item == .color {
+                    let color = state.selectedColor(in: model)
+                    Circle().fill(color == .none ? Color.clear : DotistTheme.swatch(color))
+                        .overlay { if color == .none { Circle().strokeBorder(DotistDesign.faint, lineWidth: 1) } }
+                        .frame(width: 14, height: 14)
+                } else { Image(systemName: symbol).font(font(14)) }
+            }.frame(width: 28, height: 28).contentShape(Rectangle())
+        }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted)
+            .help(label).accessibilityLabel(Text(label)).accessibilityIdentifier("toolbar:\(item.rawValue)")
+            .popover(isPresented: Binding(get: { item == .color && showColorPicker }, set: { if item == .color { showColorPicker = $0 } })) { colorPicker }
+            .background(GeometryReader { geometry in
+                Color.clear.preference(key: ToolbarFrameKey.self, value: [item: geometry.frame(in: .named(Self.listSpace))])
+            })
     }
 
     private var colorPicker: some View {
@@ -472,18 +543,18 @@ struct MainWindow: View {
                     state.selectColor(color, in: model)
                     showColorPicker = false
                 } label: {
-                    ZStack {
-                        Rectangle().fill(color == .none ? DotistDesign.paper : DotistTheme.swatch(color))
-                        if color == .none && !selected {
-                            Image(systemName: "nosign").font(font(13)).foregroundStyle(DotistDesign.muted)
-                        }
-                        if selected {
-                            Image(systemName: "checkmark").font(font(11, .semibold))
-                                .foregroundStyle(color == .none ? DotistDesign.ink : Color.black)
-                        }
-                    }.frame(width: 22, height: 22)
-                        .overlay(Rectangle().strokeBorder(selected ? DotistDesign.ink : DotistDesign.rule, lineWidth: selected ? 2 : 0.5))
-                        .padding(2).contentShape(Rectangle())
+                    Circle().fill(color == .none ? Color.clear : DotistTheme.swatch(color))
+                        .overlay {
+                            if color == .none {
+                                Circle().strokeBorder(DotistDesign.faint, lineWidth: 1)
+                                Path { path in
+                                    path.move(to: CGPoint(x: 4, y: 18)); path.addLine(to: CGPoint(x: 18, y: 4))
+                                }.stroke(DotistDesign.faint, lineWidth: 1)
+                            }
+                        }.frame(width: 22, height: 22)
+                        .padding(4)
+                        .overlay { if selected { Circle().strokeBorder(DotistDesign.accent, lineWidth: 2) } }
+                        .contentShape(Circle())
                 }.buttonStyle(.plain)
                     .help(model.text(colorLabel(color)))
                     .accessibilityLabel(Text(model.text(colorLabel(color))))
@@ -617,7 +688,6 @@ struct MainWindow: View {
                             Menu(model.text("颜色")) { groupColorMenu(group.id) }
                         }
                 }
-                if !showsHeader && roots.isEmpty && drag != nil { Color.clear.frame(height: 32) }
                 ForEach(Array(open.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? open[index - 1].id : nil, next: index + 1 < open.count ? open[index + 1].id : nil, result: openResult) }
                 emptyGroupGhost(group.id, region: group.id)
                 if addingToGroup == group.id {
@@ -730,7 +800,7 @@ struct MainWindow: View {
     }
     private func todaySection(_ title: String, result: TaskFilterResult, hideDue: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) { Text(model.text(title)).font(font(15, .semibold, serif: true)).foregroundColor(title == "已逾期" ? DotistDesign.danger : DotistDesign.ink) }.frame(height: 30).padding(.top, 4)
+            HStack(alignment: .firstTextBaseline, spacing: 6) { Text(model.text(title)).font(font(15, .semibold)).foregroundColor(title == "已逾期" ? DotistDesign.danger : DotistDesign.ink) }.frame(height: 30).padding(.top, 4)
             flatRows(result.tasks, hideDue: hideDue, contextIDs: result.contextIDs)
         }
     }
@@ -799,10 +869,8 @@ struct MainWindow: View {
         }
         .contextMenu { rowMenu(task, sub: sub, allTasks: allTasks, previous: previous, next: next) }
         .accessibilityElement(children: .contain)
-        // Keep the source and its gesture mounted, even when its layout space is
-        // occupied by a ghost in another group. Removing it ends SwiftUI's drag.
-        .opacity(carried ? 0 : 1)
-        .frame(height: carried ? 0 : nil, alignment: .top)
+        // Preserve the full source geometry and the live gesture throughout.
+        .opacity(carried ? 0.35 : 1)
         .background(rowGeometry(task, sub: sub, allTasks: allTasks, hideDue: hideDue))
         .accessibilityIdentifier("task-row:\(task.id)")
     }
@@ -835,6 +903,8 @@ struct MainWindow: View {
 
     private func rowContent(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool, selected: Bool = false, focused: Bool = false) -> some View {
         let depth = model.depth(of: task)
+        let actionCount = (depth < 4 && !allTasks ? 1 : 0) + (task.dueDate == nil ? 1 : 0) + 1
+        let fadeWidth: CGFloat = actionsVisible ? CGFloat(actionCount * 22 + max(0, actionCount - 1)) + 8 : 0
         return TaskRowLayout(depth: depth) {
             Button { selection.update { $0.clear() }; model.complete(task) } label: {
                 TaskCheckmark(depth: depth, completed: task.completed, children: children.map(\.completed), emphasized: selected || focused || drag?.target?.parentID == task.id)
@@ -861,6 +931,9 @@ struct MainWindow: View {
                     }
                     Spacer(minLength: 0)
                 }.frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
+                    .mask { if fadeWidth > 0 { TaskTitleFade(trailing: fadeWidth) } else { Rectangle() } }
+                    .contentShape(Rectangle())
+                    .onTapGesture { clickRow(task) }
 
             }
             rowMetadata(task, children: children, allTasks: allTasks)
@@ -891,6 +964,7 @@ struct MainWindow: View {
                     .accessibilityLabel(Text(model.text("子任务 {done}/{total}").replacingOccurrences(of: "{done}", with: "\(children.filter(\.completed).count)").replacingOccurrences(of: "{total}", with: "\(children.count)")))
             }
             }.lineLimit(1).fixedSize(horizontal: true, vertical: false).layoutPriority(1)
+                .contentShape(Rectangle()).onTapGesture { }
     }
 
     @ViewBuilder private func rowActions(_ task: DotistTask, allTasks: Bool, visible: Bool) -> some View {
@@ -911,11 +985,6 @@ struct MainWindow: View {
                         .accessibilityLabel(Text(model.text("删除 {title}").replacingOccurrences(of: "{title}", with: task.title)))
                 }.buttonStyle(.plain).font(font(11, .regular)).foregroundColor(DotistDesign.muted)
                     .fixedSize()
-                    .background(DotistDesign.paper)
-                    .background(alignment: .leading) {
-                        LinearGradient(colors: [.clear, DotistDesign.paper], startPoint: .leading, endPoint: .trailing)
-                            .frame(width: 24).offset(x: -24).allowsHitTesting(false)
-                    }
                     .opacity(visible ? 1 : 0).allowsHitTesting(visible).accessibilityHidden(!visible)
                     .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.15), value: visible)
             }
@@ -941,8 +1010,8 @@ struct MainWindow: View {
     }
 
     private func showNotice(_ message: String) {
-        let token = UUID(); noticeToken = token; notice = message
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { if noticeToken == token { notice = nil } }
+        noticeLifetime.restart(at: ProcessInfo.processInfo.systemUptime)
+        notice = message
     }
 
     private func handleUndoShortcut(redo: Bool) -> Bool {
@@ -1164,7 +1233,7 @@ struct MainWindow: View {
             Button("＋ " + model.text("新分组")) { manageGroups = true }
                 .buttonStyle(.plain).font(font(14)).foregroundColor(DotistDesign.faint)
         }.padding(.horizontal, 16).frame(height: 48)
-        }.frame(height: 52)
+        }.frame(height: ComposerMetrics.barHeight)
     }
 
     private var tagSuggestions: [String] {

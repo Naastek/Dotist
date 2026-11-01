@@ -7,6 +7,11 @@ final class SettingsSearchTests: XCTestCase {
         XCTAssertEqual(Set(entries.map(\.module)), Set(SettingsModule.allCases))
         XCTAssertEqual(Set(entries.map(\.id)).count, entries.count)
     }
+    func testEveryModuleRemainsSearchableByItsTextLabel() {
+        for module in SettingsModule.allCases {
+            XCTAssertTrue(SettingsSearchIndex.matches(module.title).contains { $0.module == module }, module.title)
+        }
+    }
     func testEmptyWhitespaceAndUnknownQueryHaveNoResults() {
         for query in ["", "  \n\t", "no-such-setting-12345"] {
             XCTAssertTrue(SettingsSearchIndex.matches(query).isEmpty)

@@ -2,6 +2,41 @@ import AppKit
 import DotistCore
 import SwiftUI
 
+/// One source for the strip's task, metadata, count and measured width. Group identity
+/// is an ID, never a display name (names can be empty, duplicated or renamed).
+@MainActor
+struct BubbleContent {
+    let task: DotistTask?
+    let title: String
+    let group: String?
+    let due: String?
+    let remaining: Int
+    var subtitle: String { [group, due].compactMap { $0 }.joined(separator: " · ") }
+
+    init(model: AppModel, groupID: String? = nil, fallbackTitle: String? = nil) {
+        let open = model.topLevelTasks.filter { $0.parentId == nil && !$0.completed && (groupID == nil || $0.category == groupID) }
+        let next = groupID == nil ? model.nextTask : model.ordered(open).first
+        task = next
+        remaining = open.count
+        title = Self.clean(next?.title) ?? (next == nil ? Self.clean(fallbackTitle) ?? model.bubbleTitle : model.text("未命名任务"))
+        group = next.flatMap { model.group(for: $0) }.flatMap { Self.clean($0.name) }
+        due = next?.dueDate.flatMap(Self.clean).flatMap { Self.clean(model.dueLabel($0)) }
+    }
+
+    static func clean(_ value: String?) -> String? {
+        let text = value?.split(whereSeparator: \.isWhitespace).joined(separator: " ") ?? ""
+        return text.isEmpty ? nil : text
+    }
+
+    func textWidth(language: String) -> CGFloat {
+        let titleWidth = (title as NSString).size(withAttributes: [.font: DotistDesign.nativeFont(13, weight: .medium, language: language)]).width
+        let groupWidth = ((group ?? "") as NSString).size(withAttributes: [.font: DotistDesign.nativeFont(12, weight: .semibold, serif: true, language: language)]).width
+        let detail = (group != nil && due != nil ? " · " : "") + (due ?? "")
+        let detailWidth = (detail as NSString).size(withAttributes: [.font: DotistDesign.nativeFont(12, language: language)]).width
+        return max(titleWidth, groupWidth + detailWidth)
+    }
+}
+
 /// All task panels share one motion implementation, with independent window state.
 @MainActor
 final class PanelMotion: ObservableObject {
@@ -15,6 +50,8 @@ final class PanelMotion: ObservableObject {
     let panel: DotistPanel
     private let model: AppModel
     private let title: () -> String
+    private let bubbleContent: (() -> BubbleContent)?
+    private let shadow: PanelShadowController
     private let rememberFrame: (NSRect) -> Void
     private var lastActive = Date()
     private var hoverClose: DispatchWorkItem?
@@ -23,16 +60,28 @@ final class PanelMotion: ObservableObject {
     private var hoverRequiresExit = false
     private var bubbleMenuOpen = false
 
-    init(model: AppModel, panel: DotistPanel, size: NSSize, title: @escaping () -> String, rememberFrame: @escaping (NSRect) -> Void = { _ in }) {
+    init(model: AppModel, panel: DotistPanel, size: NSSize, title: @escaping () -> String, bubbleContent: (() -> BubbleContent)? = nil, rememberFrame: @escaping (NSRect) -> Void = { _ in }) {
         self.model = model
         self.panel = panel
         expandedSize = size
         transitionSize = size
         self.title = title
+        self.bubbleContent = bubbleContent
         self.rememberFrame = rememberFrame
+        panel.hasShadow = true
+        shadow = PanelShadowController(panel: panel)
     }
     deinit { hoverClose?.cancel() }
-    func stop() { hoverClose?.cancel(); hoverClose = nil }
+    func stop() { hoverClose?.cancel(); hoverClose = nil; shadow.stop() }
+
+    func refreshShadow() {
+        shadow.update(compact: bubble, transitioning: animationInProgress, onRight: bubbleOnRight)
+        panel.invalidateShadow()
+        // SwiftUI may not have committed its glass/tint change until the next turn.
+        DispatchQueue.main.async { [weak self] in self?.panel.invalidateShadow() }
+    }
+
+    func setShadowReveal(_ reveal: CGFloat) { shadow.state.reveal = reveal }
 
     func toggleBubble() {
         guard !animationInProgress, let screen = panel.screen ?? NSScreen.main else { return }
@@ -70,6 +119,7 @@ final class PanelMotion: ObservableObject {
             hovering = false
             bubble = false
         }
+        refreshShadow()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = reduced ? 0 : (bubble ? 0.28 : 0.34)
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
@@ -78,6 +128,7 @@ final class PanelMotion: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.animationInProgress = false
+                self.refreshShadow()
                 if self.bubble {
                     // A collapse click often leaves the pointer inside the new circle.
                     // Only a fresh pointer entry should reveal the detail capsule.
@@ -122,14 +173,15 @@ final class PanelMotion: ObservableObject {
         guard hovering != active else { return }
         hoverAnimating = true
         let frame = panel.frame
-        let titleWidth = (title() as NSString).size(withAttributes: [.font: DotistDesign.nativeFont(13, weight: .medium, language: model.language)]).width
-        let width: CGFloat = active ? min(max(120, ceil(48 + 12 + titleWidth + 18)), min(440, screen.visibleFrame.width / 2)) : 48
+        let details = bubbleContent?() ?? BubbleContent(model: model, fallbackTitle: title())
+        let width: CGFloat = active ? min(max(250, ceil(78 + details.textWidth(language: model.language))), min(440, screen.visibleFrame.width / 2)) : 48
         let coreX = bubbleOnRight ? frame.maxX - 24 : frame.minX + 24
         let target = NSRect(x: bubbleOnRight ? coreX + 24 - width : coreX - 24, y: frame.minY, width: width, height: 48)
         // Resize the coordinate space without animation; only the glass surface morphs.
         // Animating the whole tree also moves the hit target away from the pointer.
         if active { panel.setFrame(target, display: true) }
         hovering = active
+        refreshShadow()
     }
 
     func finishHover(_ active: Bool) {
@@ -145,6 +197,7 @@ final class PanelMotion: ObservableObject {
             if let screen = panel.screen ?? NSScreen.main { bubbleOnRight = coreX > screen.visibleFrame.midX }
         }
         hoverAnimating = false
+        refreshShadow()
         if pendingBubbleToggle {
             pendingBubbleToggle = false
             toggleBubble()
@@ -176,6 +229,7 @@ final class PanelMotion: ObservableObject {
         let top = min(max(y + 46, area.minY + height), area.maxY)
         let expanded = NSRect(x: right - width, y: top - height, width: width, height: height)
         rememberFrame(expanded)
+        refreshShadow()
         return expanded
     }
 
@@ -208,9 +262,117 @@ final class PanelMotion: ObservableObject {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : (faded ? Double(prefs.idleFadeSecs) : 0.12)
             panel.animator().alphaValue = target
+            shadow.fade(to: target)
         }
     }
 
+}
+
+/// A noninteractive child behind the real panel gives the shadow transparent
+/// breathing room without changing any panel frames, drag coordinates or hit areas.
+@MainActor
+private final class PanelShadowController {
+    static let margin: CGFloat = 48
+    let state = PanelShadowState()
+    private weak var panel: NSWindow?
+    private let window: PanelShadowWindow
+    private var observations: [NSObjectProtocol] = []
+    private var stopped = false
+
+    init(panel: NSWindow) {
+        self.panel = panel
+        window = PanelShadowWindow(contentRect: panel.frame.insetBy(dx: -Self.margin, dy: -Self.margin),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.ignoresMouseEvents = true
+        window.isMovable = false
+        window.isExcludedFromWindowsMenu = true
+        window.animationBehavior = .none
+        window.level = panel.level
+        window.collectionBehavior = panel.collectionBehavior
+        let host = NSHostingView(rootView: PanelShadowView(state: state))
+        host.sizingOptions = []
+        window.contentView = host
+        for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
+            observations.append(NotificationCenter.default.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.synchronizeFrame() }
+            })
+        }
+    }
+
+    deinit { observations.forEach { NotificationCenter.default.removeObserver($0) } }
+
+    func synchronizeFrame() {
+        guard !stopped, let panel else { return }
+        let frame = panel.frame.insetBy(dx: -Self.margin, dy: -Self.margin)
+        if window.frame != frame { window.setFrame(frame, display: true) }
+        window.contentView?.layoutSubtreeIfNeeded()
+        panel.invalidateShadow()
+    }
+
+    func update(compact: Bool, transitioning: Bool, onRight: Bool) {
+        guard !stopped else { return }
+        if let panel, window.parent == nil { panel.addChildWindow(window, ordered: .below) }
+        if let panel, panel.isVisible, let sibling = panel.childWindows?.first(where: { $0 !== window }) {
+            window.order(.below, relativeTo: sibling.windowNumber)
+        }
+        if state.compact != compact { state.compact = compact }
+        if state.transitioning != transitioning { state.transitioning = transitioning }
+        if state.onRight != onRight { state.onRight = onRight }
+        if let panel { window.level = panel.level }
+        synchronizeFrame()
+    }
+
+    func fade(to alpha: CGFloat) { window.animator().alphaValue = alpha }
+
+    func stop() {
+        guard !stopped else { return }
+        stopped = true
+        observations.forEach { NotificationCenter.default.removeObserver($0) }
+        observations.removeAll()
+        panel?.removeChildWindow(window)
+        window.orderOut(nil)
+        window.close()
+    }
+}
+
+private final class PanelShadowWindow: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+@MainActor
+final class PanelShadowState: ObservableObject {
+    @Published var compact = false
+    @Published var transitioning = false
+    @Published var onRight = true
+    @Published var reveal: CGFloat = 0
+}
+
+struct PanelShadowView: View {
+    @ObservedObject var state: PanelShadowState
+    var body: some View {
+        GeometryReader { geometry in
+            let width = max(0, geometry.size.width - 96)
+            let height = max(0, geometry.size.height - 96)
+            let surfaceWidth = state.compact && !state.transitioning ? 48 + (width - 48) * state.reveal : width
+            let shape = RoundedRectangle(cornerRadius: state.compact ? 24 : DotistDesign.windowCornerRadius, style: .continuous)
+            shape.fill(.black)
+                .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
+                .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                // Draw only outside the surface, preserving the original glass tint.
+                .overlay(shape.fill(.black).blendMode(.destinationOut))
+                .compositingGroup()
+                .frame(width: surfaceWidth, height: height)
+                .frame(width: width, height: height, alignment: state.onRight ? .trailing : .leading)
+                .padding(48)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
 }
 
 struct FloatingPanelView<Content: View>: View {
@@ -225,6 +387,9 @@ struct FloatingPanelView<Content: View>: View {
     let content: Content
     @State private var hoverReveal: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.colorScheme) private var scheme
     var body: some View {
         GeometryReader { geometry in
             let fixed = motion.bubble || motion.animationInProgress
@@ -239,7 +404,9 @@ struct FloatingPanelView<Content: View>: View {
                     .accessibilityHidden(motion.bubble)
                 // Keep text, font cascade and SwiftUI metadata warm before the first
                 // collapse. The circle's content never lays out at intermediate widths.
-                FloatingBubble(model: model, motion: motion, title: title, remaining: remaining, total: total, groupName: groupName, contextMenu: contextMenu, width: motion.bubble && !motion.animationInProgress ? geometry.size.width : 48, reveal: hoverReveal)
+                FloatingBubble(model: model, motion: motion,
+                    details: BubbleContent(model: model, groupID: groupName == nil ? nil : colorState.groupID, fallbackTitle: title),
+                    groupName: groupName, contextMenu: contextMenu, width: motion.bubble && !motion.animationInProgress ? geometry.size.width : 48, reveal: hoverReveal)
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: motion.animationInProgress || motion.bubbleOnRight ? .topTrailing : .topLeading)
                     .opacity(motion.bubble ? 1 : 0)
                     .allowsHitTesting(motion.bubble && !motion.animationInProgress)
@@ -249,15 +416,25 @@ struct FloatingPanelView<Content: View>: View {
             .background(FloatingSurface(model: model, motion: motion, size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID)))
             .clipped()
         }
-        .onChange(of: motion.hovering) { active in
+        .onAppear { motion.refreshShadow() }
+        .onChange(of: model.settings) { motion.refreshShadow() }
+        .onChange(of: model.groups) { motion.refreshShadow() }
+        .onChange(of: colorState.groupID) { motion.refreshShadow() }
+        .onChange(of: title) { motion.refreshShadow() }
+        .onChange(of: scheme) { motion.refreshShadow() }
+        .onChange(of: reduceTransparency) { motion.refreshShadow() }
+        .onChange(of: contrast) { motion.refreshShadow() }
+        .onChange(of: motion.hovering) { _, active in
             // The window already has its final width. Reveal text and glass in the
             // same transaction, then shrink the window after both have settled.
             if reduceMotion {
                 hoverReveal = active ? 1 : 0
+                motion.setShadowReveal(hoverReveal)
                 motion.finishHover(active)
             } else {
                 withAnimation(.easeInOut(duration: 0.26), completionCriteria: .removed) {
                     hoverReveal = active ? 1 : 0
+                    motion.setShadowReveal(hoverReveal)
                 } completion: {
                     motion.finishHover(active)
                 }
@@ -335,9 +512,7 @@ struct FloatingPanelSurface: View {
 private struct FloatingBubble: View {
     @ObservedObject var model: AppModel
     @ObservedObject var motion: PanelMotion
-    let title: String
-    let remaining: Int
-    let total: Int
+    let details: BubbleContent
     let groupName: String?
     let contextMenu: (NSEvent, NSView) -> Void
     let width: CGFloat
@@ -346,15 +521,14 @@ private struct FloatingBubble: View {
         Button(action: motion.toggleBubble) {
             ZStack(alignment: motion.bubbleOnRight ? .trailing : .leading) {
                 VStack(alignment: .leading, spacing: 1) {
-                    let next = model.ordered(model.topLevelTasks.filter { !$0.completed && (groupName == nil || model.group(for: $0)?.name == groupName) }).first
-                    Text(next?.title ?? title).font(DotistDesign.textFont(13, weight: .medium, language: model.language)).foregroundColor(DotistDesign.ink).lineLimit(1)
-                    if let next {
-                        HStack(spacing: 4) {
-                            if let group = model.group(for: next) {
-                                Text(group.name).font(DotistDesign.nameFont(12, language: model.language))
-                                if next.dueDate != nil { Text("·") }
+                    Text(details.title).font(DotistDesign.textFont(13, weight: .medium, language: model.language)).foregroundColor(DotistDesign.ink).lineLimit(1)
+                    if !details.subtitle.isEmpty {
+                        HStack(spacing: 0) {
+                            if let group = details.group {
+                                Text(group).font(DotistDesign.font(12, weight: .semibold, serif: true, language: model.language))
                             }
-                            if let due = next.dueDate { Text(model.dueLabel(due)) }
+                            if details.group != nil && details.due != nil { Text(" · ") }
+                            if let due = details.due { Text(due) }
                         }.font(DotistDesign.textFont(12, language: model.language)).foregroundColor(DotistDesign.muted).lineLimit(1)
                     }
                 }
@@ -370,7 +544,7 @@ private struct FloatingBubble: View {
                     .frame(width: width, height: 48, alignment: motion.bubbleOnRight ? .leading : .trailing)
                     .accessibilityHidden(true)
                 ZStack {
-                    Text("\(remaining)").font(DotistDesign.textFont(20, weight: .semibold, language: model.language)).monospacedDigit().foregroundColor(DotistDesign.ink)
+                    Text("\(details.remaining)").font(DotistDesign.textFont(20, weight: .semibold, language: model.language)).monospacedDigit().foregroundColor(DotistDesign.ink)
                 }.frame(width: 48, height: 48).contentShape(Circle())
             }.frame(width: width, height: 48, alignment: motion.bubbleOnRight ? .trailing : .leading)
                 .contentShape(Rectangle())
@@ -378,6 +552,6 @@ private struct FloatingBubble: View {
         .buttonStyle(.plain)
         .modifier(DotistFocusRing())
         .overlay(BubblePointer(action: motion.toggleBubble, drag: motion.beginBubbleDrag, hover: motion.setHover, contextMenu: contextMenu, dragEnd: { motion.finishBubbleMove() }).accessibilityHidden(true))
-        .accessibilityLabel(Text(groupName.map { model.text("展开分组 {name}").replacingOccurrences(of: "{name}", with: $0) } ?? (remaining > 0 ? model.text("还有 {n} 件，点击展开").replacingOccurrences(of: "{n}", with: "\(remaining)") : model.text("全部完成，点击展开"))))
+        .accessibilityLabel(Text(groupName.map { model.text("展开分组 {name}").replacingOccurrences(of: "{name}", with: $0) } ?? (details.remaining > 0 ? model.text("还有 {n} 件，点击展开").replacingOccurrences(of: "{n}", with: "\(details.remaining)") : model.text("全部完成，点击展开"))))
     }
 }
