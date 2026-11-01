@@ -22,7 +22,7 @@ final class TaskPanelTests: XCTestCase {
         XCTAssertEqual(model.tasks.first?.title, "另一个面板的修改")
     }
 
-    func testGroupPanelsKeepNavigationAndCompactGeometryIndependent() async throws {
+    func testGroupPanelsKeepNavigationAndCompactGeometryIndependent() throws {
         guard NSScreen.main != nil else { throw XCTSkip("Group-panel placement requires a WindowServer display") }
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-panel-test-\(UUID().uuidString)")
@@ -37,6 +37,9 @@ final class TaskPanelTests: XCTestCase {
             if life.window?.contentView != nil { life.close() }
             try? FileManager.default.removeItem(at: directory)
         }
+        let input = PanelMotionTestEnvironment(area: try XCTUnwrap(NSScreen.main?.visibleFrame))
+        work.motion.environment = input.environment
+        life.motion.environment = input.environment
         work.state.scope = "today"
         work.state.groupID = "study"
         XCTAssertEqual(life.state.groupID, "life")
@@ -45,16 +48,24 @@ final class TaskPanelTests: XCTestCase {
         let expanded = try XCTUnwrap(work.window).frame.size
         work.toggleCompact()
         life.toggleCompact()
-        let collapsed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !work.motion.animationInProgress && !life.motion.animationInProgress }, object: nil)
-        await fulfillment(of: [collapsed], timeout: 3)
+        XCTAssertTrue(work.motion.animationInProgress)
+        XCTAssertTrue(life.motion.animationInProgress)
+        XCTAssertEqual(input.pendingFrameAnimationCount, 2)
+        try input.completeFrameAnimation(for: try XCTUnwrap(life.window))
+        XCTAssertFalse(life.motion.animationInProgress)
+        XCTAssertTrue(work.motion.animationInProgress, "Each panel must receive its own completion")
+        try input.completeFrameAnimation(for: try XCTUnwrap(work.window))
+        XCTAssertFalse(work.motion.animationInProgress)
         XCTAssertEqual(work.window?.frame.size, NSSize(width: 48, height: 48))
         XCTAssertEqual(life.window?.frame.size, NSSize(width: 48, height: 48))
         work.toggleCompact()
-        let expandedAgain = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !work.motion.animationInProgress }, object: nil)
-        await fulfillment(of: [expandedAgain], timeout: 3)
+        XCTAssertTrue(work.motion.animationInProgress)
+        try input.completeFrameAnimation(for: try XCTUnwrap(work.window))
+        XCTAssertFalse(work.motion.animationInProgress)
         XCTAssertEqual(work.window?.frame.size, expanded)
         XCTAssertFalse(work.compact)
         XCTAssertTrue(life.compact)
+        XCTAssertEqual(input.pendingFrameAnimationCount, 0)
         work.close()
         life.close()
         XCTAssertEqual(closed, 2)

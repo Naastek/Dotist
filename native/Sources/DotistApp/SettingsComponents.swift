@@ -36,7 +36,7 @@ struct SettingsSearchEntry: Identifiable, Equatable {
 enum SettingsSearchIndex {
     static let entries: [SettingsSearchEntry] = {
         let rows: [(SettingsModule, [String])] = [
-            (.appearance, ["主题", "玻璃预设", "透明程度", "磨砂程度", "字体", "西文衬线", "西文无衬线", "中文衬线", "中文无衬线", "恢复默认字体", "失焦淡出", "淡出前等待", "淡出用时", "淡出后的不透明度", "全部（默认颜色）"]),
+            (.appearance, ["主题", "玻璃预设", "透明程度", "磨砂程度", "字体", "西文衬线", "西文无衬线", "中文衬线", "中文无衬线", "恢复默认字体", "失焦淡出", "淡出前等待", "淡出用时", "淡出后的不透明度", "全部", "分组便签不透明度"]),
             (.general, ["语言", "显示在 Dock", "显示在菜单栏", "开机启动", "悬停显示详情", "窗口大小", "固定窗口", "自动收起", "收起等待时间", "窗口置顶", "分组", "标签"]),
             (.filters, ["启动时打开", "筛选器"]),
             (.menubar, ["显示内容", "日期透视", "分组", "轮播间隔", "左键点击", "右键点击"]),
@@ -97,7 +97,7 @@ enum SettingsSearchIndex {
         case "中文衬线": return ["Fonts CJK serif 中文襯線 CJKセリフ 思源宋体 思源宋體 Noto Serif Chiron Sung HK 昭源宋体 昭源宋體 Songti 系统 系統 システム system"]
         case "中文无衬线": return ["Fonts CJK sans serif 中文無襯線 CJKサンセリフ 思源黑体 思源黑體 Noto Sans PingFang 苹方 蘋方 系统 系統 システム system"]
         case "恢复默认字体": return ["Restore default fonts フォントを初期設定に戻す 恢復預設字體"]
-        case "全部（默认颜色）": return ["默认颜色 預設顏色 デフォルトカラー All default color colour 全部 颜色主题 顏色主題 カラーテーマ"]
+        case "全部": return ["默认颜色 預設顏色 デフォルトカラー All default color colour 全部 颜色主题 顏色主題 カラーテーマ"]
         case "颜色": return ["Color Colour カラー 顏色"]
         case "语言": return ["language locale 言語 語言 English 日本語 简体中文 繁體中文 跟随系统 跟隨系統"]
         case "主题": return ["system light dark 浅色 深色 ライト ダーク 淺色 跟随系统"]
@@ -202,17 +202,21 @@ struct SettingsColorPalette: View {
     let choose: (DotistGroupColor) -> Void
     private let names = ["无颜色", "红色", "橙色", "黄色", "绿色", "青色", "蓝色", "紫色", "粉色"]
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 0) {
             ForEach(Array(DotistGroupColor.allCases.enumerated()), id: \.element.rawValue) { index, color in
                 Button { choose(color) } label: {
-                    RoundedRectangle(cornerRadius: 4).fill(DotistTheme.swatch(color)).frame(width: 19, height: 19)
-                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(color == selected ? DotistDesign.ink : DotistDesign.rule, lineWidth: color == selected ? 1.5 : 0.5))
+                    Circle().fill(color == .none ? Color.clear : DotistTheme.swatch(color))
                         .overlay {
-                            if selected == color {
-                                OpticalSymbol(name: "checkmark", size: 10, weight: .bold)
-                                    .foregroundStyle(color == .none ? DotistDesign.ink : .white)
+                            if color == .none {
+                                Circle().strokeBorder(DotistDesign.faint, lineWidth: 1)
+                                Path { path in
+                                    path.move(to: CGPoint(x: 4, y: 18)); path.addLine(to: CGPoint(x: 18, y: 4))
+                                }.stroke(DotistDesign.faint, lineWidth: 1)
                             }
-                        }.frame(width: 23, height: 26).contentShape(Rectangle())
+                        }.frame(width: 22, height: 22)
+                        .padding(4)
+                        .overlay { if selected == color { Circle().strokeBorder(DotistDesign.accent, lineWidth: 2) } }
+                        .contentShape(Circle())
                 }.buttonStyle(.plain).modifier(DotistFocusRing())
                     .help(model.text(names[index])).accessibilityLabel(model.text(names[index]))
                     .accessibilityAddTraits(selected == color ? .isSelected : [])

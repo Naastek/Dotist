@@ -63,44 +63,47 @@ final class SideTabGeometryTests: XCTestCase {
 
     func testDirectionUsesExpandedWidthAndEightyPointHysteresis() {
         var placement = SideTabPlacement()
-        placement.update(availableSpace: 110, expandedWidth: 110, progress: 0)
+        placement.update(availableSpace: 110, expandedWidth: 110)
         XCTAssertFalse(placement.inward)
-        placement.update(availableSpace: 109, expandedWidth: 110, progress: 0)
+        placement.update(availableSpace: 109, expandedWidth: 110)
         XCTAssertTrue(placement.inward)
         for room: CGFloat in [110, 109, 111, 150, 190] {
-            placement.update(availableSpace: room, expandedWidth: 110, progress: 0)
+            placement.update(availableSpace: room, expandedWidth: 110)
             XCTAssertTrue(placement.inward)
         }
-        placement.update(availableSpace: 191, expandedWidth: 110, progress: 0)
+        placement.update(availableSpace: 191, expandedWidth: 110)
         XCTAssertFalse(placement.inward)
         XCTAssertTrue(SideTabGeometry.expandsInward(availableSpace: -900 - (-1000), expandedWidth: 120, wasInward: false))
     }
 
-    func testModeSwitchWaitsForRetractionAndDoesNotOscillateDuringDrag() {
+    func testModeSwitchUsesCurrentSpaceImmediatelyWithoutRetractingOrRestartingExpansion() {
         var placement = SideTabPlacement()
         var animation = SideTabExpansion()
-        placement.update(availableSpace: 240, expandedWidth: 120, progress: 0)
+        placement.update(availableSpace: 240, expandedWidth: 120)
         animation.setExpanded(true, at: 10, reduceMotion: false)
-        XCTAssertEqual(animation.progress(at: 11), 1)
+        let midExpansion = animation.progress(at: 10.08)
+        XCTAssertGreaterThan(midExpansion, 0)
+        XCTAssertLessThan(midExpansion, 1)
+        placement.update(availableSpace: 119, expandedWidth: 120)
+        XCTAssertTrue(placement.inward, "Switch anchors at the threshold, including during expansion")
+        XCTAssertEqual(animation.progress(at: 10.08), midExpansion)
+        XCTAssertEqual(animation.target, 1)
+        XCTAssertEqual(animation.progress(at: 10.16), 1, accuracy: 0.000001)
         for (step, room) in [119.0, 121, 118, 120, 122, 119].enumerated() {
             let time = 11 + Double(step) * 0.02
-            let progress = animation.progress(at: time)
-            placement.update(availableSpace: room, expandedWidth: 120, progress: progress)
-            XCTAssertFalse(placement.inward, "Never change shape while a tab is expanded or retracting")
-            XCTAssertTrue(placement.needsCollapse, "Crossing back by a few points must not cancel retraction")
-            animation.setExpanded(false, at: time, reduceMotion: false)
+            placement.update(availableSpace: room, expandedWidth: 120)
+            XCTAssertTrue(placement.inward, "Small reversals must stay inside the hysteresis band")
+            XCTAssertEqual(animation.progress(at: time), 1)
         }
-        placement.update(availableSpace: 121, expandedWidth: 120, progress: animation.progress(at: 12))
-        XCTAssertTrue(placement.inward)
-        XCTAssertFalse(placement.needsCollapse)
         for room: CGFloat in [120, 119, 121, 150, 199, 200] {
-            placement.update(availableSpace: room, expandedWidth: 120, progress: 0)
+            placement.update(availableSpace: room, expandedWidth: 120)
             XCTAssertTrue(placement.inward)
         }
-        placement.update(availableSpace: 201, expandedWidth: 120, progress: 0, canSwitch: false)
+        placement.update(availableSpace: 201, expandedWidth: 120, canSwitch: false)
         XCTAssertTrue(placement.inward, "Do not change direction during native tab mouse capture")
-        placement.update(availableSpace: 201, expandedWidth: 120, progress: 0)
+        placement.update(availableSpace: 201, expandedWidth: 120)
         XCTAssertFalse(placement.inward)
+        XCTAssertEqual(animation.progress(at: 12), 1)
     }
 
     func testInwardFramesUseAvailableLeftStripAndOverlayOnlyBelowToolbar() {
@@ -232,15 +235,18 @@ final class SideTabLabelRenderingTests: XCTestCase {
         }
     }
 
-    func testInwardTabsRoundOnlyTheRightEdge() throws {
+    func testExpandedTabsRoundEveryExposedCornerInEitherDirection() throws {
         for inward in [false, true] {
             let sample = try XCTUnwrap(SideTabsSnapshot.render(names: ["Work"], language: "en",
                 scheme: .light, inward: inward, expanded: true, showLabels: false))
             let bitmap = NSBitmapImageRep(cgImage: sample.image)
-            let flatX = inward ? 1 : bitmap.pixelsWide - 2
-            let roundX = inward ? bitmap.pixelsWide - 1 : 0
-            XCTAssertGreaterThan(bitmap.colorAt(x: flatX, y: 0)?.alphaComponent ?? 0, 0.8)
-            XCTAssertEqual(bitmap.colorAt(x: roundX, y: 0)?.alphaComponent ?? 0, 0)
+            for x in [0, bitmap.pixelsWide - 1] {
+                for y in [0, bitmap.pixelsHigh - 1] {
+                    XCTAssertEqual(bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0, 0,
+                        "Every exposed corner must be soft, including the attachment edge")
+                }
+                XCTAssertGreaterThan(bitmap.colorAt(x: x, y: bitmap.pixelsHigh / 2)?.alphaComponent ?? 0, 0.8)
+            }
         }
     }
 
@@ -559,7 +565,7 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         XCTAssertNil(resting.superview, "Stopping tabs must also remove the in-panel ear")
     }
 
-    func testDraggingPanelAcrossThresholdRetractsBeforeChangingAnchorWithoutJitter() async throws {
+    func testDraggingPanelAcrossThresholdChangesAnchorImmediatelyAtFullWidthWithoutJitter() async throws {
         _ = NSApplication.shared
         guard let area = NSScreen.main?.visibleFrame else {
             throw XCTSkip("Live panel dragging requires a WindowServer display")
@@ -585,32 +591,26 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
             controller.synchronize(mouse: mouse)
         }
         XCTAssertEqual(child.frame.width, width, accuracy: 0.001)
-        // Every move is a real AppKit didMove synchronization; slight reversals
-        // cross the threshold repeatedly while the outward tab retracts.
-        let outside = CGPoint(x: area.maxX - 10, y: area.minY + 10)
-        var sawInward = false
+        // Every move triggers AppKit didMove. Keep the pointer on the new tab so
+        // ordinary mouse-leave collapse cannot mask a forced direction collapse.
         for step in 0..<40 {
             parent.setFrameOrigin(CGPoint(x: area.minX + width + (step.isMultiple(of: 2) ? -1 : 1), y: parent.frame.minY))
-            controller.synchronize(mouse: outside)
-            let inward = abs(child.frame.minX - (parent.frame.minX - 10)) < 0.001
-            if inward && !sawInward {
-                XCTAssertEqual(child.frame.width, 10, accuracy: 0.001, "Switch only after full retraction")
-                sawInward = true
-            }
-            if sawInward {
-                XCTAssertTrue(inward, "Do not jump back outward in the hysteresis band")
-            } else {
-                XCTAssertEqual(child.frame.maxX, parent.frame.minX, accuracy: 0.001)
-            }
+            let point = CGPoint(x: parent.frame.minX + 5, y: parent.frame.maxY - 50)
+            controller.synchronize(mouse: point)
+            XCTAssertEqual(child.frame.minX, parent.frame.minX - 10, accuracy: 0.001,
+                "Switch on the first frame and stay inward throughout the hysteresis band")
+            XCTAssertEqual(child.frame.width, width, accuracy: 0.001, "Direction changes must not retract the tabs")
+            try assertOrderedAbove(child, parent)
+            XCTAssertFalse(child.ignoresMouseEvents)
             XCTAssertEqual(child.frame.maxY, parent.frame.maxY - 40, accuracy: 0.001)
             XCTAssertEqual(child.alphaValue, parent.alphaValue, "Never hide the child to switch modes")
             XCTAssertTrue(child.parent === parent)
             try await Task.sleep(for: .milliseconds(10))
         }
-        XCTAssertTrue(sawInward)
         parent.setFrameOrigin(CGPoint(x: area.minX + width + 81, y: parent.frame.minY))
-        controller.synchronize(mouse: outside)
+        controller.synchronize(mouse: CGPoint(x: parent.frame.minX - 5, y: parent.frame.maxY - 50))
         XCTAssertEqual(child.frame.maxX, parent.frame.minX, accuracy: 0.001)
+        XCTAssertEqual(child.frame.width, width, accuracy: 0.001)
         try assertOrderedAbove(parent, child)
     }
 
@@ -641,7 +641,7 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
             let visibleMinX = (parent.screen ?? NSScreen.main)?.visibleFrame.minX ?? frame.minX
             let maxWidth = ([model.text("全部")] + model.visibleGroups.map { model.text($0.name) })
                 .map { SideTabGeometry.expandedWidth(name: $0, language: model.language) }.max() ?? 10
-            placement.update(availableSpace: frame.minX - visibleMinX, expandedWidth: maxWidth, progress: 0)
+            placement.update(availableSpace: frame.minX - visibleMinX, expandedWidth: maxWidth)
             let inward = placement.inward
             XCTAssertEqual(child.frame, SideTabGeometry.snapshot(panel: frame,
                 fullWidths: Array(repeating: SideTabGeometry.collapsedWidth, count: model.visibleGroups.count + 1),

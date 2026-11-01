@@ -7,17 +7,27 @@ import Foundation
 final class MenuBarController: NSObject {
     private let model: AppModel
     private let perform: (String) -> Void
-    private var item: NSStatusItem?
-    private var subscription: AnyCancellable?
+    private let now: () -> Date
+    private(set) var item: NSStatusItem?
+    private var subscriptions = Set<AnyCancellable>()
     private var rotateTimer: Timer?
     private var rotateInterval: UInt16?
     private var rotation = 0
 
-    init(model: AppModel, perform: @escaping (String) -> Void) {
+    init(model: AppModel, now: @escaping () -> Date = Date.init, perform: @escaping (String) -> Void) {
         self.model = model
         self.perform = perform
+        self.now = now
         super.init()
-        subscription = model.$tasks.combineLatest(model.$groups, model.$settings).sink { [weak self] _, _, _ in self?.refresh() }
+        // Published properties emit in willSet; defer until the whole snapshot is applied.
+        model.$tasks.combineLatest(model.$groups, model.$settings)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _, _, _ in self?.refresh() }
+            .store(in: &subscriptions)
+        for name in [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
+            NotificationCenter.default.publisher(for: name).receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in self?.refresh() }.store(in: &subscriptions)
+        }
     }
     deinit { rotateTimer?.invalidate() }
 
@@ -29,15 +39,19 @@ final class MenuBarController: NSObject {
         }
         if item == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-            let image = Bundle.main.url(forResource: "menubar", withExtension: "png").flatMap(NSImage.init(contentsOf:)) ?? NSImage(systemSymbolName: "checkmark.circle", accessibilityDescription: "Dotist")
-            image?.isTemplate = true
-            image?.size = NSSize(width: 18, height: 18)
-            item.button?.image = image
             item.button?.target = self
             item.button?.action = #selector(clicked(_:))
             item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
             self.item = item
         }
+        let countMode = model.settings.trayMode == "count"
+        let group = selectedGroup()
+        let count = countMode ? MenuBarImage.todayCount(tasks: model.tasks, groupID: group == "all" ? nil : group, now: now()) : nil
+        let description = count.map { model.text("今天还有 {n} 件未完成任务").replacingOccurrences(of: "{n}", with: "\($0)") } ?? "Dotist"
+        item?.button?.image = MenuBarImage.make(count: count, accessibilityDescription: description)
+        item?.button?.imagePosition = .imageLeading
+        item?.button?.toolTip = description
+        item?.button?.setAccessibilityLabel(description)
         let titles = statusTitles()
         item?.button?.title = titles.isEmpty ? "" : " " + titles[rotation % titles.count]
         if model.settings.trayMode == "rotate" && (rotateTimer == nil || rotateInterval != model.settings.trayRotateSecs) {
@@ -106,9 +120,15 @@ final class MenuBarController: NSObject {
         default: return "全部"
         }
     }
+    private func selectedGroup() -> String {
+        let group = model.settings.trayGroup
+        return group == "all" || model.groups.contains(where: { $0.id == group }) ? group : "all"
+    }
+
     private func statusTitles() -> [String] {
         let prefs = model.settings
-        let selectedGroup = prefs.trayGroup == "all" || model.groups.contains(where: { $0.id == prefs.trayGroup }) ? prefs.trayGroup : "all"
+        guard ["next", "next_date", "rotate"].contains(prefs.trayMode) else { return [] }
+        let selectedGroup = selectedGroup()
         let today = Date().dotistDay
         let calendar = Calendar.current
         let start = calendar.startOfDay(for: Date())
@@ -142,11 +162,42 @@ final class MenuBarController: NSObject {
             return value.count > 24 ? String(value.prefix(23)) + "…" : value
         }
         switch prefs.trayMode {
-        case "count": return ["\(values.count)"]
         case "next": return [list.first.map { title($0, includeDate: false) } ?? model.text("没有待办")]
         case "next_date": return [list.first.map { title($0, includeDate: true) } ?? model.text("没有待办")]
         case "rotate": return [model.text("还有 {n} 件").replacingOccurrences(of: "{n}", with: "\(values.count)")] + list.prefix(4).map { title($0, includeDate: true) }
         default: return []
         }
+    }
+}
+
+/// A single template image lets the system supply the correct menu-bar tint.
+enum MenuBarImage {
+    static let size = NSSize(width: 26, height: 18)
+
+    static func todayCount(tasks: [DotistTask], groupID: String?, now: Date = Date(), calendar: Calendar = .current) -> Int {
+        let sections = TaskFiltering(tasks, now: now, calendar: calendar).todaySections(groupID: groupID)
+        return sections.overdue.matches.count + sections.today.matches.count
+    }
+
+    static func make(count: Int?, accessibilityDescription: String) -> NSImage {
+        let image = NSImage(size: size, flipped: false) { _ in
+            NSColor.black.set()
+            let circle = NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: 16, height: 16))
+            circle.lineWidth = 1
+            circle.stroke()
+            NSBezierPath(ovalIn: NSRect(x: 20, y: 7.5, width: 3, height: 3)).fill()
+            if let count {
+                let label = count > 99 ? "99+" : "\(count)"
+                let font = NSFont.monospacedDigitSystemFont(ofSize: count > 99 ? 6.5 : (count > 9 ? 8 : 10), weight: .medium)
+                let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
+                let text = NSAttributedString(string: label, attributes: attributes)
+                let textSize = text.size()
+                text.draw(at: NSPoint(x: 9 - textSize.width / 2, y: 9 - textSize.height / 2))
+            }
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = accessibilityDescription
+        return image
     }
 }

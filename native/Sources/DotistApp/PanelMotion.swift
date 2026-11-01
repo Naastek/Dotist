@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import DotistCore
 import SwiftUI
 
@@ -40,6 +41,28 @@ struct BubbleContent {
 /// All task panels share one motion implementation, with independent window state.
 @MainActor
 final class PanelMotion: ObservableObject {
+    /// Production reads AppKit input and uses the main queue. Offscreen fixtures
+    /// supply their own pointer, screen and scheduler instead of sampling the
+    /// user's desktop while a transition is awaiting completion.
+    struct Environment {
+        typealias FrameAnimation = @MainActor (DotistPanel, NSRect, TimeInterval, @escaping @MainActor () -> Void) -> Void
+        var mouseLocation: @MainActor () -> NSPoint = { NSEvent.mouseLocation }
+        var pressedMouseButtons: @MainActor () -> Int = { Int(NSEvent.pressedMouseButtons) }
+        var visibleFrame: @MainActor (DotistPanel) -> NSRect? = { ($0.screen ?? NSScreen.main)?.visibleFrame }
+        var schedule: @MainActor (TimeInterval, DispatchWorkItem) -> Void = { delay, work in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        }
+        var pointerEventsEnabled = true
+        var hoverDidFinish: @MainActor (Bool) -> Void = { _ in }
+        var frameAnimationDuration: @MainActor (Bool) -> TimeInterval = { compact in
+            NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : (compact ? 0.28 : 0.34)
+        }
+        // nil uses production visibility rules and AppKit's animator. Only an
+        // explicit fixture driver can animate hidden windows without display ticks.
+        var animateFrame: FrameAnimation? = nil
+    }
+
+    var environment: Environment
     @Published private(set) var bubble = false
     @Published private(set) var hovering = false
     @Published var bubbleOnRight = true
@@ -61,9 +84,10 @@ final class PanelMotion: ObservableObject {
     private var stopped = false
     private var closeObservation: NSObjectProtocol?
 
-    init(model: AppModel, panel: DotistPanel, size: NSSize, title: @escaping () -> String, bubbleContent: (() -> BubbleContent)? = nil, rememberFrame: @escaping (NSRect) -> Void = { _ in }) {
+    init(model: AppModel, panel: DotistPanel, size: NSSize, title: @escaping () -> String, bubbleContent: (() -> BubbleContent)? = nil, environment: Environment = Environment(), rememberFrame: @escaping (NSRect) -> Void = { _ in }) {
         self.model = model
         self.panel = panel
+        self.environment = environment
         expandedSize = size
         transitionSize = size
         self.title = title
@@ -101,7 +125,7 @@ final class PanelMotion: ObservableObject {
     }
 
     func toggleBubble() {
-        guard let area = (panel.screen ?? NSScreen.main)?.visibleFrame else { return }
+        guard let area = environment.visibleFrame(panel) else { return }
         toggleBubble(in: area)
     }
 
@@ -118,7 +142,6 @@ final class PanelMotion: ObservableObject {
         panel.makeFirstResponder(nil)
         animationInProgress = true
         let old = panel.frame
-        let reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let target: NSRect
         if !bubble {
             hoverRequiresExit = true
@@ -143,23 +166,33 @@ final class PanelMotion: ObservableObject {
             bubble = false
         }
         refreshShadow()
-        // Without a display AppKit may never deliver animation ticks/completion.
-        if !animated || NSScreen.main == nil {
+        // Hidden windows have no visible movement to animate, and AppKit can
+        // withhold their frame updates/completions even inside NSApplication.run.
+        // A controlled test driver explicitly bypasses visibility/display checks.
+        if !animated || (environment.animateFrame == nil && (!panel.isVisible || NSScreen.main == nil)) {
             panel.setFrame(target, display: true)
             finishBubbleTransition()
             return
         }
+        let duration = environment.frameAnimationDuration(bubble)
+        let complete: @MainActor () -> Void = { [weak self] in
+            guard let self, !self.stopped else { return }
+            if self.panel.frame != target { self.panel.setFrame(target, display: false) }
+            self.finishBubbleTransition()
+        }
+        if let animate = environment.animateFrame {
+            animate(panel, target, duration, complete)
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = reduced ? 0 : (bubble ? 0.28 : 0.34)
+            context.duration = duration
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             panel.animator().setFrame(target, display: true)
-        } completionHandler: { [weak self] in
+        } completionHandler: {
             // AppKit owns the animator's target. A late completion must neither
             // keep its motion owner alive nor revive a closed panel's shadow.
-            DispatchQueue.main.async { [weak self] in
-                guard let self, !self.stopped else { return }
-                if self.panel.frame != target { self.panel.setFrame(target, display: false) }
-                self.finishBubbleTransition()
+            DispatchQueue.main.async {
+                complete()
             }
         }
     }
@@ -170,7 +203,7 @@ final class PanelMotion: ObservableObject {
         if bubble {
             // A collapse click often leaves the pointer inside the new circle.
             // Only a fresh pointer entry should reveal the detail capsule.
-            hoverRequiresExit = panel.frame.contains(NSEvent.mouseLocation)
+            hoverRequiresExit = panel.frame.contains(environment.mouseLocation())
             return
         }
         panel.minSize = NSSize(width: 320, height: 440)
@@ -180,27 +213,27 @@ final class PanelMotion: ObservableObject {
 
     func setHover(_ active: Bool) {
         guard !stopped, !bubbleMenuOpen else { return }
-        if !active && !panel.frame.contains(NSEvent.mouseLocation) { hoverRequiresExit = false }
-        guard bubble, !animationInProgress, let screen = panel.screen ?? NSScreen.main else { return }
+        if !active && !panel.frame.contains(environment.mouseLocation()) { hoverRequiresExit = false }
+        guard bubble, !animationInProgress, let area = environment.visibleFrame(panel) else { return }
         if active && hoverRequiresExit { return }
         if active && !model.settings.hoverExpand { return }
-        if active && NSEvent.pressedMouseButtons & 1 != 0 { return }
+        if active && environment.pressedMouseButtons() & 1 != 0 { return }
         if !active {
             guard hovering, hoverClose == nil else { return }
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 self.hoverClose = nil
-                guard self.bubble, !self.bubbleMenuOpen, NSEvent.pressedMouseButtons & 1 == 0, !self.panel.frame.contains(NSEvent.mouseLocation) else { return }
-                self.setHover(false, in: (self.panel.screen ?? screen).visibleFrame)
+                guard self.bubble, !self.bubbleMenuOpen, self.environment.pressedMouseButtons() & 1 == 0, !self.panel.frame.contains(self.environment.mouseLocation()) else { return }
+                self.setHover(false, in: self.environment.visibleFrame(self.panel) ?? area)
             }
             hoverClose = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: work)
+            environment.schedule(0.22, work)
             return
         }
         hoverClose?.cancel(); hoverClose = nil
         pendingHover = nil
         guard !hovering else { return }
-        setHover(true, in: screen.visibleFrame)
+        setHover(true, in: area)
     }
 
     // Immediate geometry handoff, also usable without a WindowServer display.
@@ -211,7 +244,7 @@ final class PanelMotion: ObservableObject {
         hoverAnimating = true
         let frame = panel.frame
         let details = bubbleContent?() ?? BubbleContent(model: model, fallbackTitle: title())
-        let width: CGFloat = active ? min(max(250, ceil(78 + details.textWidth(language: model.language))), min(440, area.width / 2)) : 48
+        let width: CGFloat = active ? min(ceil(78 + details.textWidth(language: model.language)), max(48, min(440, area.width / 2))) : 48
         let coreX = bubbleOnRight ? frame.maxX - 24 : frame.minX + 24
         let target = NSRect(x: bubbleOnRight ? coreX + 24 - width : coreX - 24, y: frame.minY, width: width, height: 48)
         // Resize the coordinate space without animation; only the glass surface morphs.
@@ -225,18 +258,19 @@ final class PanelMotion: ObservableObject {
         // A delayed SwiftUI completion for the previous reveal can arrive after
         // retraction starts. It must not consume the new transition's completion.
         guard !stopped, bubble, hoverAnimating, hovering == active else { return }
-        if !active && (bubbleMenuOpen || NSEvent.pressedMouseButtons & 1 != 0) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.finishHover(active) }
+        if !active && (bubbleMenuOpen || environment.pressedMouseButtons() & 1 != 0) {
+            environment.schedule(0.1, DispatchWorkItem { [weak self] in self?.finishHover(active) })
             return
         }
         if !active {
             let frame = panel.frame
             let coreX = bubbleOnRight ? frame.maxX - 24 : frame.minX + 24
             panel.setFrame(NSRect(x: coreX - 24, y: frame.minY, width: 48, height: 48), display: true)
-            if let screen = panel.screen ?? NSScreen.main { bubbleOnRight = coreX > screen.visibleFrame.midX }
+            if let area = environment.visibleFrame(panel) { bubbleOnRight = coreX > area.midX }
         }
         hoverAnimating = false
         refreshShadow()
+        environment.hoverDidFinish(active)
         if pendingBubbleToggle {
             pendingBubbleToggle = false
             toggleBubble()
@@ -244,7 +278,7 @@ final class PanelMotion: ObservableObject {
         }
         if let next = pendingHover {
             pendingHover = nil
-            if let screen = panel.screen ?? NSScreen.main { setHover(next, in: screen.visibleFrame) }
+            if let area = environment.visibleFrame(panel) { setHover(next, in: area) }
         }
     }
 
@@ -255,7 +289,7 @@ final class PanelMotion: ObservableObject {
     }
 
     @discardableResult func finishBubbleMove() -> NSRect? {
-        guard !stopped, bubble, !animationInProgress, let area = (panel.screen ?? NSScreen.main)?.visibleFrame else { return nil }
+        guard !stopped, bubble, !animationInProgress, let area = environment.visibleFrame(panel) else { return nil }
         let frame = panel.frame
         let x = min(max(frame.minX, area.minX), max(area.minX, area.maxX - frame.width))
         let y = min(max(frame.minY, area.minY), max(area.minY, area.maxY - frame.height))
@@ -279,7 +313,7 @@ final class PanelMotion: ObservableObject {
         bubbleMenuOpen = true
         defer {
             bubbleMenuOpen = false
-            setHover(panel.frame.contains(NSEvent.mouseLocation))
+            setHover(panel.frame.contains(environment.mouseLocation()))
         }
         NSMenu.popUpContextMenu(menu, with: event, for: view)
     }
@@ -287,9 +321,9 @@ final class PanelMotion: ObservableObject {
     func updateIdleState() {
         guard !stopped else { return }
         let prefs = model.settings
-        if bubble && hoverRequiresExit && !panel.frame.contains(NSEvent.mouseLocation) { hoverRequiresExit = false }
-        if bubble && hovering && !panel.frame.contains(NSEvent.mouseLocation) && NSEvent.pressedMouseButtons & 1 == 0 { setHover(false) }
-        let active = bubble || animationInProgress || panel.isKeyWindow || panel.frame.contains(NSEvent.mouseLocation) || NSEvent.pressedMouseButtons & 1 != 0
+        if bubble && hoverRequiresExit && !panel.frame.contains(environment.mouseLocation()) { hoverRequiresExit = false }
+        if bubble && hovering && !panel.frame.contains(environment.mouseLocation()) && environment.pressedMouseButtons() & 1 == 0 { setHover(false) }
+        let active = bubble || animationInProgress || panel.isKeyWindow || panel.frame.contains(environment.mouseLocation()) || environment.pressedMouseButtons() & 1 != 0
         if active || prefs.locked { lastActive = Date() }
         let idle = Date().timeIntervalSince(lastActive)
         if !active && !prefs.locked && prefs.autoCollapse && idle >= Double(prefs.autoCollapseSecs) {
@@ -573,7 +607,58 @@ struct FloatingPanelSurface: View {
     }
 }
 
-private struct FloatingBubble: View {
+/// Informational bubble labels use the bounds of the final, possibly truncated
+/// native glyph runs. Centering SwiftUI line boxes (and calibrating them with
+/// ImageRenderer) leaves a different ink axis in a window-backed NSHostingView.
+private struct BubbleText: NSViewRepresentable {
+    let lines: [NSAttributedString]
+    var centered = false
+    @Environment(\.colorScheme) private var scheme
+
+    func makeNSView(context: Context) -> BubbleTextView { BubbleTextView() }
+    func updateNSView(_ view: BubbleTextView, context: Context) {
+        view.lines = lines
+        view.centered = centered
+        view.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+        view.needsDisplay = true
+    }
+}
+
+private final class BubbleTextView: NSView {
+    var lines: [NSAttributedString] = []
+    var centered = false
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard bounds.width > 0, let context = NSGraphicsContext.current?.cgContext else { return }
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.textMatrix = .identity
+        context.textPosition = .zero
+        let runs = lines.compactMap { text -> (CTLine, CGRect)? in
+            guard text.length > 0 else { return nil }
+            let full = CTLineCreateWithAttributedString(text)
+            let token = CTLineCreateWithAttributedString(NSAttributedString(string: "…", attributes: text.attributes(at: 0, effectiveRange: nil)))
+            let line = CTLineGetTypographicBounds(full, nil, nil, nil) > bounds.width
+                ? CTLineCreateTruncatedLine(full, bounds.width, .end, token) ?? token : full
+            let ink = CTLineGetImageBounds(line, context)
+            return ink.isEmpty || ink.isNull ? nil : (line, ink)
+        }
+        // Space actual ink, rather than font ascender/descender boxes. This also
+        // keeps mixed serif group / sans date metadata on a common visual axis.
+        let gap: CGFloat = 6
+        let height = runs.reduce(CGFloat(0)) { $0 + $1.1.height } + CGFloat(max(0, runs.count - 1)) * gap
+        var top = bounds.midY + height / 2
+        for (line, ink) in runs {
+            context.textPosition = CGPoint(x: centered ? bounds.midX - ink.midX : 0, y: top - ink.maxY)
+            CTLineDraw(line, context)
+            top -= ink.height + gap
+        }
+    }
+}
+
+struct FloatingBubble: View {
+    @ObservedObject private var typography = DotistTypography.shared
     @ObservedObject var model: AppModel
     @ObservedObject var motion: PanelMotion
     let details: BubbleContent
@@ -581,24 +666,29 @@ private struct FloatingBubble: View {
     let contextMenu: (NSEvent, NSView) -> Void
     let width: CGFloat
     let reveal: CGFloat
+
+    private func label(_ text: String, size: CGFloat, weight: NSFont.Weight = .regular, serif: Bool = false, color: Color) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [
+            .font: DotistDesign.nativeFont(size, weight: weight, serif: serif, language: model.language),
+            .foregroundColor: NSColor(color)
+        ])
+    }
+
+    private var textLines: [NSAttributedString] {
+        let title = label(details.title, size: 13, weight: .medium, color: DotistDesign.ink)
+        guard !details.subtitle.isEmpty else { return [title] }
+        let metadata = NSMutableAttributedString(string: "")
+        if let group = details.group { metadata.append(label(group, size: 12, weight: .semibold, serif: true, color: DotistDesign.muted)) }
+        if details.group != nil && details.due != nil { metadata.append(label(" · ", size: 12, color: DotistDesign.muted)) }
+        if let due = details.due { metadata.append(label(due, size: 12, color: DotistDesign.muted)) }
+        return [title, metadata]
+    }
+
     var body: some View {
         Button(action: motion.toggleBubble) {
             ZStack(alignment: motion.bubbleOnRight ? .trailing : .leading) {
-                VStack(alignment: .leading, spacing: 1) {
-                    OpticalText(title: details.title, size: 13, weight: .medium, language: model.language).foregroundColor(DotistDesign.ink).lineLimit(1)
-                    if !details.subtitle.isEmpty {
-                        HStack(alignment: .opticalCenter, spacing: 0) {
-                            if let group = details.group {
-                                OpticalText(title: group, size: 12, weight: .semibold, serif: true, language: model.language)
-                            }
-                            if details.group != nil && details.due != nil { OpticalText(title: " · ", size: 12, language: model.language) }
-                            if let due = details.due { OpticalText(title: due, size: 12, language: model.language) }
-                        }.font(DotistDesign.textFont(12, language: model.language)).foregroundColor(DotistDesign.muted).lineLimit(1)
-                    }
-                }
-                    .frame(width: max(40, width - 78),
-                           alignment: motion.bubbleOnRight ? .trailing : .leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                BubbleText(lines: textLines)
+                    .frame(width: max(0, width - 78), height: 48, alignment: .leading)
                     .padding(motion.bubbleOnRight ? .leading : .trailing, 12)
                     .padding(motion.bubbleOnRight ? .trailing : .leading, 18)
                     .offset(x: (1 - reveal) * max(0, width - 48) * (motion.bubbleOnRight ? 1 : -1))
@@ -608,14 +698,30 @@ private struct FloatingBubble: View {
                     .frame(width: width, height: 48, alignment: motion.bubbleOnRight ? .leading : .trailing)
                     .accessibilityHidden(true)
                 ZStack {
-                    OpticalText(title: "\(details.remaining)", size: 20, weight: .semibold, language: model.language).monospacedDigit().foregroundColor(DotistDesign.ink)
+                    BubbleText(lines: [label("\(details.remaining)", size: 20, weight: .semibold, color: DotistDesign.ink)], centered: true)
                 }.frame(width: 48, height: 48).contentShape(Circle())
             }.frame(width: width, height: 48, alignment: motion.bubbleOnRight ? .trailing : .leading)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .modifier(DotistFocusRing())
-        .overlay(BubblePointer(action: motion.toggleBubble, drag: motion.beginBubbleDrag, hover: motion.setHover, contextMenu: contextMenu, dragEnd: { motion.finishBubbleMove() }).accessibilityHidden(true))
+        .overlay {
+            if motion.environment.pointerEventsEnabled {
+                // Also gate retained callbacks: removing a hosting view can
+                // deliver a tracking exit from its old AppKit pointer overlay.
+                BubblePointer(action: {
+                    if motion.environment.pointerEventsEnabled { motion.toggleBubble() }
+                }, drag: {
+                    if motion.environment.pointerEventsEnabled { motion.beginBubbleDrag() }
+                }, hover: { active in
+                    if motion.environment.pointerEventsEnabled { motion.setHover(active) }
+                }, contextMenu: { event, view in
+                    if motion.environment.pointerEventsEnabled { contextMenu(event, view) }
+                }, dragEnd: {
+                    if motion.environment.pointerEventsEnabled { motion.finishBubbleMove() }
+                }).accessibilityHidden(true)
+            }
+        }
         .accessibilityLabel(Text(groupName.map { model.text("展开分组 {name}").replacingOccurrences(of: "{name}", with: $0) } ?? (details.remaining > 0 ? model.text("还有 {n} 件，点击展开").replacingOccurrences(of: "{n}", with: "\(details.remaining)") : model.text("全部完成，点击展开"))))
     }
 }

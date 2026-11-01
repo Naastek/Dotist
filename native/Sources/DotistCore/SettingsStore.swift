@@ -10,6 +10,7 @@ final class SettingsStore: @unchecked Sendable {
         theme: "system",
         language: "system",
         opacity: 56,
+        sideTabOpacity: 85,
         frost: 35,
         toggleShortcut: "CommandOrControl+Alt+D",
         quickAddShortcut: "CommandOrControl+Alt+N",
@@ -70,6 +71,7 @@ final class SettingsStore: @unchecked Sendable {
         if let value = patch.fontSerifCjk { next.fontSerifCjk = value }
         if let value = patch.fontSansCjk { next.fontSansCjk = value }
         if let value = patch.opacity { next.opacity = value }
+        if let value = patch.sideTabOpacity { next.sideTabOpacity = value }
         if let value = patch.frost { next.frost = value }
         if let value = patch.alwaysOnTop { next.alwaysOnTop = value }
         if let value = patch.hoverExpand { next.hoverExpand = value }
@@ -135,6 +137,7 @@ final class SettingsStore: @unchecked Sendable {
         let shortcuts = [next.toggleShortcut, next.quickAddShortcut, next.settingsShortcut, next.viewsShortcut].filter { !$0.isEmpty }
         guard Set(shortcuts).count == shortcuts.count else { throw TaskStoreError("不同的动作不能使用同一个快捷键") }
         next.opacity = min(max(next.opacity, 4), 95)
+        next.sideTabOpacity = min(max(next.sideTabOpacity, 10), 100)
         next.frost = min(next.frost, 100)
         next.idleOpacity = min(max(next.idleOpacity, 20), 95)
         next.idleDelaySecs = min(max(next.idleDelaySecs, 1), 60)

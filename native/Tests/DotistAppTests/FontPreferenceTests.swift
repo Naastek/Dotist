@@ -188,8 +188,13 @@ import XCTest
                 let content = HStack(spacing: 0) { plain; menu }.foregroundStyle(.black).frame(width: 200, height: 52).background(.white)
                 let host = NSHostingView(rootView: content)
                 host.frame = CGRect(x: 0, y: 0, width: 200, height: 52)
+                let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false, screen: NSScreen.main)
+                window.isReleasedWhenClosed = false
+                defer { window.close() }
+                window.contentView = host
+                XCTAssertTrue(host.window === window, "Independent Menu calibration must use its native window, without a neighboring composer field")
                 host.layoutSubtreeIfNeeded()
-                try await Task.sleep(for: .milliseconds(80))
+                await Task.yield()
                 host.layoutSubtreeIfNeeded()
                 let image = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
                 host.cacheDisplay(in: host.bounds, to: image)
@@ -207,7 +212,12 @@ import XCTest
                     XCTAssertGreaterThanOrEqual(last, first, "\(choice) \(title): each plain/menu label must render ink")
                     centers.append(CGFloat(first + last + 1) / (2 * scale))
                 }
-                print("Native font menu \(choice), \(title), baseline=\(OpticalMetrics.attributedBaseline(font, sample: title)), plain/menu=\(centers), scale=\(scale)")
+                print("Native font menu \(choice), \(title), font=\(font.fontName), plain/menu=\(centers), scale=\(scale), windowBacking=\(window.backingScaleFactor)")
+                if centers.contains(where: { abs($0 - 26) > 0.5 }) || abs(centers[0] - centers[1]) > 0.5 {
+                    let file = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-menu-\(choice)-\(title).png")
+                    try XCTUnwrap(image.representation(using: .png, properties: [:])).write(to: file)
+                    print("Native menu failure capture: \(file.path)")
+                }
                 for center in centers { XCTAssertEqual(center, 26, accuracy: 0.5, "\(choice) \(title)") }
                 XCTAssertEqual(centers[0], centers[1], accuracy: 0.5, "\(choice) \(title): plain/menu ink axes must agree")
             }

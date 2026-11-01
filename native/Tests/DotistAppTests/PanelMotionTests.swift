@@ -1,9 +1,10 @@
 import AppKit
-import Combine
 import DotistCore
 import XCTest
 @testable import DotistApp
 
+/// Controlled frame completions verify per-panel state and geometry; these
+/// unordered fixtures do not validate visible native animation timing.
 @MainActor
 final class PanelMotionTests: XCTestCase {
     override func setUpWithError() throws {
@@ -23,29 +24,21 @@ final class PanelMotionTests: XCTestCase {
         return try AppModel(store: store)
     }
 
-    private func group(_ id: String, model: AppModel, frame: NSRect) -> GroupPanelController {
+    private func group(_ id: String, model: AppModel, frame: NSRect, input: PanelMotionTestEnvironment) -> GroupPanelController {
         let controller = GroupPanelController(model: model, groupID: id, near: frame,
             showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, didClose: { _ in })
+        controller.motion.environment = input.environment
         controller.window?.setFrame(frame, display: false)
         addTeardownBlock { controller.close() }
         return controller
     }
 
-    private func waitForAnimations(_ motions: [PanelMotion]) async {
-        let settled = expectation(description: "Each panel completes its own native transition")
-        settled.expectedFulfillmentCount = motions.count
-        let observations = motions.map { motion in
-            motion.$animationInProgress.filter { !$0 }.first().sink { _ in settled.fulfill() }
-        }
-        await fulfillment(of: [settled], timeout: 3)
-        withExtendedLifetime(observations) {}
-    }
-
-    func testGroupPanelsAnimateIndependentlyAndRestoreTheirOwnSizes() async throws {
+    func testGroupPanelsAnimateIndependentlyAndRestoreTheirOwnSizes() throws {
         let model = try model()
         let area = try XCTUnwrap(NSScreen.main?.visibleFrame)
-        let work = group("work", model: model, frame: NSRect(x: area.minX + 70, y: area.minY + 70, width: 340, height: 480))
-        let life = group("life", model: model, frame: NSRect(x: area.midX + 24, y: area.minY + 90, width: 360, height: 500))
+        let input = PanelMotionTestEnvironment(area: area)
+        let work = group("work", model: model, frame: NSRect(x: area.minX + 70, y: area.minY + 70, width: 340, height: 480), input: input)
+        let life = group("life", model: model, frame: NSRect(x: area.midX + 24, y: area.minY + 90, width: 360, height: 500), input: input)
         let workFrame = try XCTUnwrap(work.window).frame
         let lifeFrame = try XCTUnwrap(life.window).frame
 
@@ -55,7 +48,12 @@ final class PanelMotionTests: XCTestCase {
         XCTAssertFalse(life.motion.animationInProgress)
         XCTAssertFalse(life.compact)
         XCTAssertEqual(life.window?.frame, lifeFrame)
-        await waitForAnimations([work.motion])
+        XCTAssertEqual(input.pendingFrameAnimationCount, 1)
+        try input.sampleFrameAnimation(for: try XCTUnwrap(work.window), progress: 0.5)
+        XCTAssertTrue(work.motion.animationInProgress)
+        XCTAssertEqual(life.window?.frame, lifeFrame)
+        try input.completeFrameAnimation(for: try XCTUnwrap(work.window))
+        XCTAssertFalse(work.motion.animationInProgress)
         XCTAssertEqual(work.window?.frame.size, NSSize(width: 48, height: 48))
         XCTAssertFalse(try XCTUnwrap(work.window).styleMask.contains(.resizable))
 
@@ -63,7 +61,13 @@ final class PanelMotionTests: XCTestCase {
         work.toggleCompact()
         XCTAssertTrue(work.motion.animationInProgress)
         XCTAssertTrue(life.motion.animationInProgress)
-        await waitForAnimations([work.motion, life.motion])
+        XCTAssertEqual(input.pendingFrameAnimationCount, 2)
+        try input.completeFrameAnimation(for: try XCTUnwrap(work.window))
+        XCTAssertFalse(work.motion.animationInProgress)
+        XCTAssertTrue(life.motion.animationInProgress, "Completing work must not consume life's callback")
+        XCTAssertEqual(life.window?.frame, lifeFrame)
+        try input.completeFrameAnimation(for: try XCTUnwrap(life.window))
+        XCTAssertFalse(life.motion.animationInProgress)
         XCTAssertFalse(work.compact)
         XCTAssertTrue(life.compact)
         XCTAssertEqual(work.window?.frame.size, workFrame.size)
@@ -71,25 +75,30 @@ final class PanelMotionTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(work.window).styleMask.contains(.resizable))
 
         life.toggleCompact()
-        await waitForAnimations([life.motion])
+        XCTAssertTrue(life.motion.animationInProgress)
+        try input.completeFrameAnimation(for: try XCTUnwrap(life.window))
+        XCTAssertFalse(life.motion.animationInProgress)
         XCTAssertEqual(life.window?.frame.size, lifeFrame.size)
         XCTAssertTrue(area.contains(try XCTUnwrap(work.window).frame))
         XCTAssertTrue(area.contains(try XCTUnwrap(life.window).frame))
+        XCTAssertEqual(input.pendingFrameAnimationCount, 0)
     }
 
-    func testGroupBubbleMovedAcrossScreenOpensItsHoverTowardTheInterior() async throws {
+    func testGroupBubbleMovedAcrossScreenOpensItsHoverTowardTheInterior() throws {
         let model = try model()
         let area = try XCTUnwrap(NSScreen.main?.visibleFrame)
+        let input = PanelMotionTestEnvironment(area: area)
         let controller = group("work", model: model,
-            frame: NSRect(x: area.maxX - 370, y: area.minY + 70, width: 340, height: 480))
+            frame: NSRect(x: area.maxX - 370, y: area.minY + 70, width: 340, height: 480), input: input)
         let panel = try XCTUnwrap(controller.window)
         controller.toggleCompact()
-        await waitForAnimations([controller.motion])
+        XCTAssertTrue(controller.motion.animationInProgress)
+        try input.completeFrameAnimation(for: panel)
+        XCTAssertFalse(controller.motion.animationInProgress)
         XCTAssertTrue(controller.motion.bubbleOnRight)
 
-        // Keep the real pointer outside this invisible panel; do not move the user's mouse.
-        let y = NSEvent.mouseLocation.y > area.midY ? area.minY + 60 : area.maxY - 108
-        panel.setFrameOrigin(NSPoint(x: area.minX - 24, y: y))
+        // Pointer position/buttons and hover scheduling belong to this fixture.
+        panel.setFrameOrigin(NSPoint(x: area.minX - 24, y: area.minY + 60))
         let restored = try XCTUnwrap(controller.motion.finishBubbleMove())
         XCTAssertTrue(area.contains(panel.frame))
         XCTAssertTrue(area.contains(restored))
@@ -106,10 +115,10 @@ final class PanelMotionTests: XCTestCase {
         // The view reports reveal completion through this public handoff; no desktop is rendered.
         controller.motion.finishHover(true)
         controller.motion.setHover(false)
-        let retracted = expectation(description: "The group schedules its own hover retraction")
-        let observation = controller.motion.$hovering.filter { !$0 }.first().sink { _ in retracted.fulfill() }
-        await fulfillment(of: [retracted], timeout: 3)
-        withExtendedLifetime(observation) {}
+        XCTAssertTrue(controller.motion.hovering, "Retraction is scheduled, not immediate")
+        XCTAssertEqual(input.scheduledCount, 1)
+        input.advance(by: 0.22)
+        XCTAssertFalse(controller.motion.hovering)
         controller.motion.finishHover(false)
         XCTAssertEqual(panel.frame.size, NSSize(width: 48, height: 48))
         XCTAssertEqual(panel.frame.minX, left, accuracy: 0.5)

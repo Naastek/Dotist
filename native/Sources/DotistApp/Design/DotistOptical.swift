@@ -129,6 +129,208 @@ struct OpticalSymbol: View {
     }
 }
 
+/// A group title and its disclosure share one native drawing surface. The
+/// complete title (including fallback glyphs) is rasterized at the window's
+/// backing scale, then both cropped ink boxes are placed on the same axis.
+/// This deliberately bypasses OpticalText's attributed Menu baseline and the
+/// ImageRenderer calibration: neither describes a window-hosted header.
+struct GroupHeaderInkLabel: NSViewRepresentable {
+    @ObservedObject private var typography = DotistTypography.shared
+    let title: String
+    let language: String
+    let collapsed: Bool
+    let showsChevron: Bool
+    let empty: Bool
+
+    func makeNSView(context: Context) -> GroupHeaderInkView { GroupHeaderInkView() }
+    func updateNSView(_ view: GroupHeaderInkView, context: Context) {
+        view.configure(title: title, font: DotistDesign.nativeFont(15, weight: .semibold, serif: true, language: language),
+                       symbol: collapsed ? "chevron.right" : "chevron.down", showsChevron: showsChevron,
+                       titleColor: NSColor(empty ? DotistDesign.faint : DotistDesign.ink))
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: GroupHeaderInkView, context: Context) -> CGSize? {
+        let ideal = nsView.intrinsicContentSize
+        return CGSize(width: min(ideal.width, proposal.width ?? ideal.width), height: ideal.height)
+    }
+}
+
+final class GroupHeaderInkView: NSView {
+    struct InkRaster {
+        let image: CGImage
+        let size: CGSize
+        var alignmentRect: CGRect
+    }
+    private var title = ""
+    private var titleFont = NSFont.systemFont(ofSize: 15)
+    private var symbol = "chevron.right"
+    private var showsChevron = true
+    private var titleColor = NSColor.labelColor
+    private var titleImage: InkRaster?
+    private var symbolImage: InkRaster?
+    private var rasterScale: CGFloat = 0
+    private var rasterColorSpace: NSColorSpace?
+    // These are also useful to isolate the two glyph masks in native captures.
+    private(set) var titleInkFrame = CGRect.zero
+    private(set) var symbolInkFrame = CGRect.zero
+    override var isFlipped: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func configure(title: String, font: NSFont, symbol: String, showsChevron: Bool, titleColor: NSColor) {
+        let changed = self.title != title || titleFont != font || self.symbol != symbol || self.titleColor != titleColor
+        self.title = title; titleFont = font; self.symbol = symbol
+        self.showsChevron = showsChevron; self.titleColor = titleColor
+        if changed { invalidateRasters() }
+        needsDisplay = true
+    }
+    private func invalidateRasters() {
+        rasterScale = 0
+        invalidateIntrinsicContentSize()
+        needsDisplay = true
+    }
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        invalidateRasters()
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        invalidateRasters()
+    }
+    override var intrinsicContentSize: NSSize {
+        prepareRasters()
+        return NSSize(width: (titleImage?.size.width ?? 0) + 6 + (symbolImage?.size.width ?? 0), height: 30)
+    }
+    private func prepareRasters(scale requestedScale: CGFloat? = nil) {
+        let scale = requestedScale ?? window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+        let colorSpace = window?.colorSpace ?? .sRGB
+        guard rasterScale != scale || rasterColorSpace != colorSpace else { return }
+        rasterScale = scale; rasterColorSpace = colorSpace
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            let text = NSAttributedString(string: title, attributes: [.font: titleFont, .foregroundColor: titleColor])
+            titleImage = Self.inkImage(size: text.size(), scale: scale, colorSpace: colorSpace) { text.draw(at: $0) }
+            let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+            symbolImage = image.flatMap { image in
+                Self.inkImage(size: image.size, scale: scale, colorSpace: colorSpace) { point in
+                    // Draw the symbol as a mask, then color the occupied pixels.
+                    image.draw(at: point, from: .zero, operation: .sourceOver, fraction: 1)
+                    NSColor(DotistDesign.faint).setFill()
+                    NSRect(origin: point, size: image.size).fill(using: .sourceIn)
+                }
+            }
+        }
+    }
+    /// Crop the actual native raster, rather than using an advance width,
+    /// ascender, cap height, script sample, or alpha-weighted centroid.
+    static func inkImage(size: CGSize, scale: CGFloat, colorSpace: NSColorSpace = .sRGB, draw: (CGPoint) -> Void) -> InkRaster? {
+        let padding: CGFloat = 4
+        let width = max(1, Int(ceil((size.width + padding * 2) * scale)))
+        let height = max(1, Int(ceil((size.height + padding * 2) * scale)))
+        guard let raw = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                                            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        let bitmap = raw.retagging(with: colorSpace) ?? raw
+        guard let graphics = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphics
+        graphics.cgContext.clear(CGRect(x: 0, y: 0, width: width, height: height))
+        graphics.cgContext.scaleBy(x: scale, y: scale)
+        draw(CGPoint(x: padding, y: padding))
+        graphics.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+        var left = width, right = -1, top = height, bottom = -1
+        let dark = NSAppearance.currentDrawing().bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        for y in 0..<height {
+            for x in 0..<width {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), color.alphaComponent > 24.0 / 255 else { continue }
+                left = min(left, x); right = max(right, x)
+                top = min(top, y); bottom = max(bottom, y)
+            }
+        }
+        guard right >= left,
+              let cropped = bitmap.cgImage?.cropping(to: CGRect(x: left, y: top, width: right - left + 1, height: bottom - top + 1)) else { return nil }
+        let size = CGSize(width: CGFloat(cropped.width) / scale, height: CGFloat(cropped.height) / scale)
+        var image = InkRaster(image: cropped, size: size, alignmentRect: CGRect(origin: .zero, size: size))
+        // Measure the final native image draw over an opaque backdrop. The
+        // transparent source's edges can differ after native color compositing.
+        // Preserve every antialiased pixel; only the alignment rect changes.
+        if let rawOpaque = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: cropped.width, pixelsHigh: cropped.height,
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) {
+            let opaque = rawOpaque.retagging(with: colorSpace) ?? rawOpaque
+            guard let graphics = NSGraphicsContext(bitmapImageRep: opaque) else { return image }
+            NSGraphicsContext.saveGraphicsState()
+            let context = graphics.cgContext
+            context.translateBy(x: 0, y: CGFloat(cropped.height))
+            context.scaleBy(x: 1, y: -1)
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+            let bounds = CGRect(x: 0, y: 0, width: cropped.width, height: cropped.height)
+            (dark ? NSColor.black : NSColor.white).setFill()
+            bounds.fill()
+            drawInkImage(image, in: bounds)
+            NSGraphicsContext.restoreGraphicsState()
+            var x0 = cropped.width, x1 = -1, y0 = cropped.height, y1 = -1
+            for y in 0..<cropped.height {
+                for x in 0..<cropped.width {
+                    guard let c = opaque.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                    let contrast = dark ? min(c.redComponent, c.greenComponent, c.blueComponent) : 1 - max(c.redComponent, c.greenComponent, c.blueComponent)
+                    if contrast > 0.2 { x0 = min(x0, x); x1 = max(x1, x); y0 = min(y0, y); y1 = max(y1, y) }
+                }
+            }
+            if x1 >= x0 {
+                image.alignmentRect = CGRect(x: CGFloat(x0) / scale, y: CGFloat(cropped.height - y1 - 1) / scale,
+                                             width: CGFloat(x1 - x0 + 1) / scale, height: CGFloat(y1 - y0 + 1) / scale)
+            }
+        }
+        return image
+    }
+    static func drawInkImage(_ image: InkRaster, in rect: CGRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        context.saveGState()
+        context.interpolationQuality = .none
+        context.translateBy(x: rect.minX, y: rect.maxY)
+        context.scaleBy(x: 1, y: -1)
+        context.draw(image.image, in: CGRect(origin: .zero, size: rect.size))
+        context.restoreGState()
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        // cacheDisplay/PDF/bitmap contexts may differ from the screen backing.
+        let transform = NSGraphicsContext.current?.cgContext.ctm
+        let scale = transform.map { hypot($0.a, $0.b) } ?? window?.backingScaleFactor ?? 1
+        prepareRasters(scale: max(1, scale))
+        guard let titleImage else { return }
+        let available = max(0, bounds.width - (symbolImage?.size.width ?? 0) - 6)
+        // Preserve the single-line tail truncation of the SwiftUI title.
+        let displayedTitle: InkRaster
+        if titleImage.size.width > available, available > 0 {
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineBreakMode = .byTruncatingTail
+            let text = NSAttributedString(string: title, attributes: [.font: titleFont, .foregroundColor: titleColor, .paragraphStyle: paragraph])
+            let size = CGSize(width: available, height: NSLayoutManager().defaultLineHeight(for: titleFont))
+            displayedTitle = Self.inkImage(size: size, scale: rasterScale, colorSpace: window?.colorSpace ?? .sRGB) { point in
+                text.draw(with: CGRect(origin: point, size: size), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            } ?? titleImage
+        } else { displayedTitle = titleImage }
+        func frames(_ image: InkRaster, x: CGFloat, center: CGFloat, upperTie: Bool = false) -> (drawing: CGRect, ink: CGRect) {
+            let ink = image.alignmentRect
+            let top = image.size.height - ink.maxY
+            let pixels = (center - ink.height / 2 - top) * rasterScale
+            let y = (upperTie ? ceil(pixels - 0.5) : pixels.rounded()) / rasterScale
+            let drawing = CGRect(origin: CGPoint(x: x - ink.minX, y: y), size: image.size)
+            return (drawing, CGRect(x: x, y: y + top, width: ink.width, height: ink.height))
+        }
+        let titleFrames = frames(displayedTitle, x: 0, center: bounds.midY)
+        titleInkFrame = titleFrames.ink
+        Self.drawInkImage(displayedTitle, in: titleFrames.drawing)
+        guard let symbolImage else { return }
+        let symbolFrames = frames(symbolImage, x: titleInkFrame.maxX + 6, center: titleInkFrame.midY, upperTie: true)
+        symbolInkFrame = symbolFrames.ink
+        if showsChevron {
+            Self.drawInkImage(symbolImage, in: symbolFrames.drawing)
+        }
+    }
+}
+
 struct IconTextRow<Content: View>: View {
     var spacing: CGFloat = 8
     @ViewBuilder var content: () -> Content
@@ -226,9 +428,52 @@ struct SearchRow: View {
     var cancel: (() -> Void)?
     var body: some View {
         IconTextRow(spacing: 12) {
-            OpticalSymbol(name: "magnifyingglass", size: iconSize).foregroundStyle(DotistDesign.faint).frame(width: 20, height: 24)
+            NativeSearchIcon(size: iconSize).frame(width: 20, height: 24)
             OpticalInput(text: $text, placeholder: placeholder, font: DotistDesign.nativeFont(size, language: language), focusOnAppear: focusOnAppear, identifier: identifier, commit: commit, navigate: navigate, cancel: cancel).frame(height: max(24, size * 1.5))
         }
+    }
+}
+
+/// Search's native field uses the upper pixel when its ink has odd height.
+/// Rasterize its companion glyph in the same native context and use that same
+/// edge rule, rather than importing an ImageRenderer offset into a window.
+private struct NativeSearchIcon: NSViewRepresentable {
+    let size: CGFloat
+    func makeNSView(context: Context) -> NativeSearchIconView { NativeSearchIconView() }
+    func updateNSView(_ view: NativeSearchIconView, context: Context) { view.pointSize = size }
+}
+
+private final class NativeSearchIconView: NSView {
+    var pointSize: CGFloat = 12 {
+        didSet { if pointSize != oldValue { raster = nil; needsDisplay = true } }
+    }
+    private var raster: GroupHeaderInkView.InkRaster?
+    private var rasterScale: CGFloat = 0
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        raster = nil; needsDisplay = true
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        let transform = NSGraphicsContext.current?.cgContext.ctm
+        let scale = transform.map { hypot($0.a, $0.b) } ?? window?.backingScaleFactor ?? 1
+        if raster == nil || rasterScale != scale {
+            rasterScale = scale
+            if let symbol = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: pointSize, weight: .regular)) {
+                raster = GroupHeaderInkView.inkImage(size: symbol.size, scale: scale) { point in
+                    symbol.draw(at: point, from: .zero, operation: .sourceOver, fraction: 1)
+                    NSColor(DotistDesign.faint).setFill()
+                    NSRect(origin: point, size: symbol.size).fill(using: .sourceIn)
+                }
+            }
+        }
+        guard let raster else { return }
+        let ink = raster.alignmentRect
+        let top = raster.size.height - ink.maxY
+        let y = floor((bounds.midY - ink.height / 2 - top) * scale) / scale
+        GroupHeaderInkView.drawInkImage(raster, in: CGRect(x: bounds.midX - raster.size.width / 2, y: y, width: raster.size.width, height: raster.size.height))
     }
 }
 

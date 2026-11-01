@@ -74,18 +74,16 @@ enum SideTabGeometry {
     }
 }
 
-/// Latch the requested direction independently of the displayed direction. Small
-/// reversals while retracting cannot cancel a switch or flip the shape mid-flight.
+/// Placement is independent of hover animation. The 80pt hysteresis prevents
+/// jitter; only native mouse capture postpones an anchor change until release.
 struct SideTabPlacement {
     private(set) var inward = false
     private(set) var requestedInward = false
     private var initialized = false
-    var needsCollapse: Bool { inward != requestedInward }
-
-    mutating func update(availableSpace: CGFloat, expandedWidth: CGFloat, progress: CGFloat, canSwitch: Bool = true) {
+    mutating func update(availableSpace: CGFloat, expandedWidth: CGFloat, canSwitch: Bool = true) {
         requestedInward = SideTabGeometry.expandsInward(availableSpace: availableSpace,
             expandedWidth: expandedWidth, wasInward: initialized && requestedInward)
-        if !initialized || (progress == 0 && canSwitch) { inward = requestedInward }
+        if !initialized || canSwitch { inward = requestedInward }
         initialized = true
     }
 }
@@ -110,24 +108,10 @@ struct SideTabExpansion {
 }
 
 private struct SideTabShape: Shape {
-    let inward: Bool
     func path(in rect: CGRect) -> Path {
-        let r = min(8, rect.width, rect.height / 2)
-        var p = Path()
-        if inward {
-            p.move(to: .init(x: 0, y: 0)); p.addLine(to: .init(x: rect.maxX - r, y: 0))
-            p.addQuadCurve(to: .init(x: rect.maxX, y: r), control: .init(x: rect.maxX, y: 0))
-            p.addLine(to: .init(x: rect.maxX, y: rect.maxY - r))
-            p.addQuadCurve(to: .init(x: rect.maxX - r, y: rect.maxY), control: .init(x: rect.maxX, y: rect.maxY))
-            p.addLine(to: .init(x: 0, y: rect.maxY))
-        } else {
-            p.move(to: .init(x: rect.maxX, y: 0)); p.addLine(to: .init(x: r, y: 0))
-            p.addQuadCurve(to: .init(x: 0, y: r), control: .zero)
-            p.addLine(to: .init(x: 0, y: rect.maxY - r))
-            p.addQuadCurve(to: .init(x: r, y: rect.maxY), control: .init(x: 0, y: rect.maxY))
-            p.addLine(to: .init(x: rect.maxX, y: rect.maxY))
-        }
-        p.closeSubpath(); return p
+        // Both attachment corners are exposed when the child overlays the panel.
+        RoundedRectangle(cornerRadius: min(8, rect.width / 2, rect.height / 2), style: .continuous)
+            .path(in: rect)
     }
 }
 
@@ -162,27 +146,44 @@ private struct SideTabSurfaceStyleKey: EnvironmentKey {
     static let defaultValue = SideTabSurfaceStyle.paper
 }
 
+/// Explicit rendering context for offscreen snapshots. The live canvas reads
+/// the system accessibility environment instead; those system keys are read-only.
+fileprivate struct SideTabAccessibility: EnvironmentKey {
+    static let defaultValue: SideTabAccessibility? = nil
+    let reduceTransparency: Bool
+    let contrast: ColorSchemeContrast
+}
+
 extension EnvironmentValues {
     var sideTabSurfaceStyle: SideTabSurfaceStyle {
         get { self[SideTabSurfaceStyleKey.self] }
         set { self[SideTabSurfaceStyleKey.self] = newValue }
+    }
+
+    fileprivate var sideTabAccessibility: SideTabAccessibility? {
+        get { self[SideTabAccessibility.self] }
+        set { self[SideTabAccessibility.self] = newValue }
     }
 }
 
 private struct SideTabBackground: View {
     let color: DotistGroupColor
     let selected: Bool
-    let inward: Bool
+    let opacity: UInt8
     @Environment(\.sideTabSurfaceStyle) private var style
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.sideTabAccessibility) private var accessibility
 
     var body: some View {
-        let shape = SideTabShape(inward: inward)
+        let shape = SideTabShape()
+        let reduceTransparency = accessibility?.reduceTransparency ?? self.reduceTransparency
+        let contrast = accessibility?.contrast ?? self.contrast
+        let alpha = reduceTransparency || contrast == .increased ? 1 : Double(min(100, max(10, opacity))) / 100
         ZStack {
             // This underlay also protects contrast if a glass host loses sampling.
-            shape.fill(DotistDesign.paper.opacity(reduceTransparency || contrast == .increased ? 1 : selected ? 0.92 : 0.85))
+            shape.fill(DotistDesign.paper)
             shape.fill(DotistTheme.swatch(color).opacity(selected ? 0.12 : 0.06))
             if style == .glass && !reduceTransparency && contrast != .increased {
                 Color.clear
@@ -190,6 +191,10 @@ private struct SideTabBackground: View {
             }
             shape.stroke(DotistDesign.faint.opacity(selected ? 0.45 : 0.35), lineWidth: 0.75)
         }
+        // Composite first so tint and outline cannot raise the configured alpha.
+        // Foreground text lives outside this background group.
+        .compositingGroup()
+        .opacity(alpha)
         .allowsHitTesting(false)
     }
 }
@@ -207,10 +212,12 @@ struct SideTabLabel: View {
     let width: CGFloat
     let fullWidth: CGFloat
     let textOpacity: Double
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.sideTabAccessibility) private var accessibility
 
     var body: some View {
         OpticalText(title: name, size: 13, weight: selected ? .semibold : .regular, serif: true, language: language)
-            .foregroundStyle(selected || hovered ? DotistDesign.ink : DotistDesign.faint)
+            .foregroundStyle(selected || hovered || (accessibility?.contrast ?? contrast) == .increased ? DotistDesign.ink : DotistDesign.faint)
             .lineLimit(1)
             .fixedSize()
             .padding(.horizontal, 14)
@@ -230,10 +237,11 @@ private struct SideTabContent: View {
     let hovered: Bool
     let inward: Bool
     let textOpacity: Double
+    let opacity: UInt8
 
     var body: some View {
         ZStack(alignment: inward ? .leading : .trailing) {
-            SideTabBackground(color: color, selected: selected, inward: inward)
+            SideTabBackground(color: color, selected: selected, opacity: opacity)
                 .frame(width: row.rect.width, height: SideTabGeometry.height)
             SideTabLabel(name: row.name, language: language, selected: selected,
                          hovered: hovered, right: inward, width: row.rect.width,
@@ -254,6 +262,7 @@ private struct SideTabsCanvas: View {
     let hovered: String?
     let inward: Bool
     let textOpacity: Double
+    let opacity: UInt8
     let color: (String?) -> DotistGroupColor
     var pointer: ((String, NSEvent.EventType, CGPoint) -> Void)?
     var select: ((String?) -> Void)?
@@ -265,7 +274,7 @@ private struct SideTabsCanvas: View {
             ForEach(rows) { row in
                 SideTabContent(row: row, language: language, color: color(row.groupID),
                     selected: selectedGroupID == row.groupID, hovered: hovered == row.id,
-                    inward: inward, textOpacity: textOpacity)
+                    inward: inward, textOpacity: textOpacity, opacity: opacity)
                     .overlay {
                         if let pointer {
                             SideTabPointer { type, location in pointer(row.id, type, location) }
@@ -298,7 +307,8 @@ private struct SideTabsView: View {
     var body: some View {
         SideTabsCanvas(rows: presentation.rows, size: presentation.size, language: model.language,
             selectedGroupID: state.groupID, hovered: presentation.hovered, inward: presentation.inward,
-            textOpacity: presentation.textOpacity, color: { model.themeColor(forGroup: $0) },
+            textOpacity: presentation.textOpacity, opacity: model.settings.sideTabOpacity,
+            color: { model.themeColor(forGroup: $0) },
             pointer: pointer, select: { state.groupID = $0 })
             .environment(\.sideTabSurfaceStyle, .paper)
             .modifier(DotistTheme(theme: model.settings.theme))
@@ -314,7 +324,9 @@ struct SideTabsSnapshot {
     let tabs: [CGRect]
 
     static func render(names: [String], language: String, scheme: ColorScheme,
-                       inward: Bool, expanded: Bool, showLabels: Bool = true) -> SideTabsSnapshot? {
+                       inward: Bool, expanded: Bool, showLabels: Bool = true, opacity: UInt8 = 85,
+                       reduceTransparency: Bool = false, contrast: ColorSchemeContrast = .standard,
+                       color: @escaping (String?) -> DotistGroupColor = { _ in .teal }) -> SideTabsSnapshot? {
         let widths = names.map { SideTabGeometry.expandedWidth(name: $0, language: language) }
         let panel = CGRect(x: widths.max() ?? 48, y: 0, width: 364, height: 620)
         let sample = SideTabGeometry.snapshot(panel: panel, fullWidths: widths, progress: expanded ? 1 : 0, inward: inward)
@@ -325,9 +337,10 @@ struct SideTabsSnapshot {
         }
         let content = SideTabsCanvas(rows: rows, size: sample.window.size, language: language,
             selectedGroupID: "0", hovered: nil, inward: inward, textOpacity: showLabels ? sample.textOpacity : 0,
-            color: { _ in .teal })
+            opacity: opacity, color: color)
             .environment(\.sideTabSurfaceStyle, .paper)
             .environment(\.colorScheme, scheme)
+            .environment(\.sideTabAccessibility, SideTabAccessibility(reduceTransparency: reduceTransparency, contrast: contrast))
             .transaction { $0.disablesAnimations = true }
         let renderer = ImageRenderer(content: content)
         renderer.scale = 1
@@ -538,8 +551,8 @@ final class SideTabsController: NSObject {
         let visibleMinX = (parent.screen ?? NSScreen.main)?.visibleFrame.minX ?? frame.minX
         let now = CACurrentMediaTime()
         placement.update(availableSpace: frame.minX - visibleMinX, expandedWidth: maxWidth,
-            progress: expansion.progress(at: now), canSwitch: press == nil)
-        var inward = placement.inward
+            canSwitch: press == nil)
+        let inward = placement.inward
         let visible = parent.isVisible && parent.isOnActiveSpace && !motion.bubble && !motion.animationInProgress
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let current = SideTabGeometry.snapshot(panel: frame, fullWidths: widths,
@@ -549,8 +562,6 @@ final class SideTabsController: NSObject {
         let overTab = current.tabs.contains { $0.contains(mouse) }
         if !visible {
             expanded = false; collapseWork?.cancel(); collapseWork = nil; cancelDrag()
-        } else if placement.needsCollapse && press == nil {
-            expanded = false; collapseWork?.cancel(); collapseWork = nil
         } else if press != nil || overTab || (expanded && sensor.contains(mouse)) {
             expanded = true; collapseWork?.cancel(); collapseWork = nil
         } else if expanded && collapseWork == nil {
@@ -567,12 +578,6 @@ final class SideTabsController: NSObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + SideTabGeometry.collapseDelay, execute: work)
         }
         expansion.setExpanded(expanded, at: now, reduceMotion: reduceMotion || !visible)
-        if placement.needsCollapse && expansion.progress(at: now) == 0 && press == nil {
-            // Reduced motion can finish retraction in this call. Apply the new
-            // collapsed anchor before compositing, avoiding an offscreen frame.
-            placement.update(availableSpace: frame.minX - visibleMinX, expandedWidth: maxWidth, progress: 0)
-            inward = placement.inward
-        }
         let sample = SideTabGeometry.snapshot(panel: frame, fullWidths: widths,
             progress: expansion.progress(at: now), inward: inward, visibleMinX: visibleMinX)
         let bounds = sample.window

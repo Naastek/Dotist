@@ -189,7 +189,7 @@ final class PanelFeedbackRevisionTests: XCTestCase {
         XCTAssertFalse(state.collapsedGroups.contains(group.id))
         XCTAssertEqual(TaskCollapsedGroupDrop.removingGap(CGRect(x: 16, y: 80, width: 332, height: 40), gap: CGRect(x: 16, y: 60, width: 332, height: 32)), CGRect(x: 16, y: 60, width: 332, height: 28))
     }
-    func testSelectedFilterAndGroupDisclosureKeepOpticalCenterWithinHalfPoint() throws {
+    func testSelectedFilterAndGroupDisclosureKeepOpticalCenterWithinHalfPoint() async throws {
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         DotistDesign.registerFonts(in: repo.appendingPathComponent(".cache/native-migration/fonts"))
         func render<V: View>(_ view: V, width: CGFloat, height: CGFloat = 30) throws -> NSBitmapImageRep {
@@ -215,11 +215,18 @@ final class PanelFeedbackRevisionTests: XCTestCase {
                 let rep = try render(DraggableFilterButton(title: title, selected: selected, language: language, choose: {}), width: 100, height: 34)
                 XCTAssertEqual(try center(rep, xRange: 0..<100), 17, accuracy: 0.5)
             }
-            let textWidth = ceil((title as NSString).size(withAttributes: [.font: DotistDesign.nativeFont(15, weight: .semibold, serif: true, language: language)]).width)
             for collapsed in [true, false] {
-                let rep = try render(GroupCollapseHeader(title: title, language: language, collapsed: collapsed, hovered: true, toggle: {}), width: 200)
-                let textCenter = try center(rep, xRange: 0..<(textWidth + 2))
-                let arrowCenter = try center(rep, xRange: (textWidth + 4)..<200)
+                // ImageRenderer omits NSViewRepresentable content. Capture the
+                // production header in its actual AppKit window instead.
+                let header = GroupCollapseHeader(title: title, language: language, collapsed: collapsed, hovered: true, toggle: {})
+                    .environment(\.colorScheme, .light).background(Color.white)
+                let fixture = NativeRenderingFixture(header, size: CGSize(width: 200, height: 30))
+                defer { fixture.close() }
+                let rep = try await fixture.capture(scale: 2)
+                let label = try XCTUnwrap(fixture.descendants(GroupHeaderInkView.self).first)
+                let frame = fixture.host.convert(label.bounds, from: label)
+                let textCenter = try center(rep, xRange: (frame.minX + label.titleInkFrame.minX)..<(frame.minX + label.titleInkFrame.maxX))
+                let arrowCenter = try center(rep, xRange: (frame.minX + label.symbolInkFrame.minX)..<(frame.minX + label.symbolInkFrame.maxX))
                 XCTAssertEqual(textCenter, 15, accuracy: 0.5)
                 XCTAssertEqual(arrowCenter, 15, accuracy: 0.5)
                 XCTAssertEqual(textCenter, arrowCenter, accuracy: 0.5)

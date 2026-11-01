@@ -165,6 +165,7 @@ struct SettingsWindow: View {
                     numericValue("\(Int(transparency.rounded()))%")
                 }
                 numberRow("磨砂程度", value: Double(model.settings.frost), range: 0...100, unit: "%") { $0.frost = UInt8($1.rounded()) }
+                numberRow("分组便签不透明度", value: Double(model.settings.sideTabOpacity), range: 10...100, unit: "%") { $0.sideTabOpacity = UInt8($1.rounded()) }
             }
             settingsGroup("字体") {
                 ForEach(DotistFontRole.allCases, id: \.rawValue) { role in fontRow(role) }
@@ -177,7 +178,7 @@ struct SettingsWindow: View {
                 }
             }.id(rowID("字体"))
             settingsGroup("颜色主题", footer: "分组未设置颜色时使用「全部」的默认颜色。") {
-                settingRow("全部（默认颜色）") {
+                settingRow("全部") {
                     SettingsColorPalette(model: model, selected: DotistGroupColor(rawValue: model.settings.allColor), identifier: "settings-all-color") { color in
                         update { $0.allColor = color.rawValue }
                     }
@@ -262,10 +263,12 @@ struct SettingsWindow: View {
         VStack(alignment: .leading, spacing: 22) {
             settingsGroup("显示内容") {
                 settingRow("显示内容") {
-                    settingMenu("显示内容", value: model.settings.trayMode, options: [("icon", model.text("仅图标")), ("count", model.text("剩余数字")), ("next", model.text("下一个任务")), ("next_date", model.text("下一个任务与日期")), ("rotate", model.text("轮播：数字与最近的任务"))]) { value in update { $0.trayMode = value } }
+                    settingMenu("显示内容", value: model.settings.trayMode, options: [("icon", model.text("仅图标")), ("count", model.text("今日未完成（含逾期）")), ("next", model.text("下一个任务")), ("next_date", model.text("下一个任务与日期")), ("rotate", model.text("轮播：数字与最近的任务"))]) { value in update { $0.trayMode = value } }
                 }
-                settingRow("日期透视") {
-                    settingMenu("日期透视", value: model.settings.trayFilter, options: ["today", "all", "tomorrow", "week", "nextweek", "next7", "overdue", "undated", "done"].map { ($0, model.text(filterLabel($0))) }) { value in update { $0.trayFilter = value } }
+                if ["next", "next_date", "rotate"].contains(model.settings.trayMode) {
+                    settingRow("日期透视") {
+                        settingMenu("日期透视", value: model.settings.trayFilter, options: ["today", "all", "tomorrow", "week", "nextweek", "next7", "overdue", "undated", "done"].map { ($0, model.text(filterLabel($0))) }) { value in update { $0.trayFilter = value } }
+                    }
                 }
                 settingRow("分组") {
                     settingMenu("分组", value: model.settings.trayGroup == "all" || model.groups.contains(where: { $0.id == model.settings.trayGroup }) ? model.settings.trayGroup : "all", options: [("all", model.text("全部分组"))] + model.groups.map { ($0.id, $0.name) }) { value in update { $0.trayGroup = value } }
@@ -511,7 +514,7 @@ private struct SettingsNavRow: View {
                 .foregroundStyle(selected || hovering ? DotistDesign.ink : DotistDesign.muted)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12).frame(height: 34)
+        .padding(.leading, 24).padding(.trailing, 12).frame(height: 34)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(DotistDesign.rule.opacity(selected ? 0.22 : hovering ? 0.12 : 0)))
         .padding(.horizontal, 14)
         .contentShape(Rectangle())

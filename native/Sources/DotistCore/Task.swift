@@ -100,6 +100,8 @@ public struct DotistSettings: Codable, Equatable, Sendable {
         DotistFontPreferences(serifLatin: fontSerifLatin, sansLatin: fontSansLatin, serifCjk: fontSerifCjk, sansCjk: fontSansCjk)
     }
     public var opacity: UInt8
+    /// Background opacity of side tabs, independent of panel opacity (10...100).
+    public var sideTabOpacity: UInt8 = 85
     public var frost: UInt8
     public var toggleShortcut: String
     public var quickAddShortcut: String
@@ -136,6 +138,67 @@ public struct DotistSettings: Codable, Equatable, Sendable {
     public var mcpEnabled: Bool
 }
 
+// Keep the memberwise initializer used by SettingsStore while decoding newly
+// added preferences safely from older snapshots as well as on-disk settings.
+extension DotistSettings {
+    private enum CodingKeys: String, CodingKey {
+        case theme, language, fontSerifLatin, fontSansLatin, fontSerifCjk, fontSansCjk
+        case opacity, sideTabOpacity, frost, toggleShortcut, quickAddShortcut, settingsShortcut, viewsShortcut
+        case trayMode, trayRotateSecs, trayLeftClick, trayRightClick
+        case alwaysOnTop, hoverExpand, showDock, showMenubar, idleFade, locked
+        case windowWidth, windowHeight, idleOpacity, idleDelaySecs, idleFadeSecs
+        case trayFilter, trayGroup, groupColors, tagOrder, allColor, filters, defaultFilter
+        case autoCollapse, autoCollapseSecs, autoCheckUpdates, autoInstallUpdates
+        case skippedUpdateVersion, lastUpdateError, mcpEnabled
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        theme = try values.decode(String.self, forKey: .theme)
+        language = try values.decode(String.self, forKey: .language)
+        fontSerifLatin = try values.decodeIfPresent(String.self, forKey: .fontSerifLatin)
+        fontSansLatin = try values.decodeIfPresent(String.self, forKey: .fontSansLatin)
+        fontSerifCjk = try values.decodeIfPresent(String.self, forKey: .fontSerifCjk)
+        fontSansCjk = try values.decodeIfPresent(String.self, forKey: .fontSansCjk)
+        opacity = try values.decode(UInt8.self, forKey: .opacity)
+        sideTabOpacity = try values.decodeIfPresent(UInt8.self, forKey: .sideTabOpacity) ?? 85
+        frost = try values.decode(UInt8.self, forKey: .frost)
+        toggleShortcut = try values.decode(String.self, forKey: .toggleShortcut)
+        quickAddShortcut = try values.decode(String.self, forKey: .quickAddShortcut)
+        settingsShortcut = try values.decode(String.self, forKey: .settingsShortcut)
+        viewsShortcut = try values.decode(String.self, forKey: .viewsShortcut)
+        trayMode = try values.decode(String.self, forKey: .trayMode)
+        trayRotateSecs = try values.decode(UInt16.self, forKey: .trayRotateSecs)
+        trayLeftClick = try values.decode(String.self, forKey: .trayLeftClick)
+        trayRightClick = try values.decode(String.self, forKey: .trayRightClick)
+        alwaysOnTop = try values.decode(Bool.self, forKey: .alwaysOnTop)
+        hoverExpand = try values.decode(Bool.self, forKey: .hoverExpand)
+        showDock = try values.decode(Bool.self, forKey: .showDock)
+        showMenubar = try values.decode(Bool.self, forKey: .showMenubar)
+        idleFade = try values.decode(Bool.self, forKey: .idleFade)
+        locked = try values.decode(Bool.self, forKey: .locked)
+        windowWidth = try values.decode(UInt32.self, forKey: .windowWidth)
+        windowHeight = try values.decode(UInt32.self, forKey: .windowHeight)
+        idleOpacity = try values.decode(UInt8.self, forKey: .idleOpacity)
+        idleDelaySecs = try values.decode(UInt8.self, forKey: .idleDelaySecs)
+        idleFadeSecs = try values.decode(UInt8.self, forKey: .idleFadeSecs)
+        trayFilter = try values.decode(String.self, forKey: .trayFilter)
+        trayGroup = try values.decode(String.self, forKey: .trayGroup)
+        groupColors = try values.decode(String.self, forKey: .groupColors)
+        tagOrder = try values.decodeIfPresent([String].self, forKey: .tagOrder) ?? []
+        allColor = try values.decodeIfPresent(String.self, forKey: .allColor) ?? "none"
+        filters = try values.decode([String].self, forKey: .filters)
+        defaultFilter = try values.decode(String.self, forKey: .defaultFilter)
+        autoCollapse = try values.decode(Bool.self, forKey: .autoCollapse)
+        autoCollapseSecs = try values.decode(UInt16.self, forKey: .autoCollapseSecs)
+        autoCheckUpdates = try values.decode(Bool.self, forKey: .autoCheckUpdates)
+        autoInstallUpdates = try values.decode(Bool.self, forKey: .autoInstallUpdates)
+        skippedUpdateVersion = try values.decode(String.self, forKey: .skippedUpdateVersion)
+        lastUpdateError = try values.decode(String.self, forKey: .lastUpdateError)
+        mcpEnabled = try values.decode(Bool.self, forKey: .mcpEnabled)
+    }
+}
+
 public struct DotistSettingsPatch: Encodable, Sendable {
     public var theme: String?
     public var language: String?
@@ -144,6 +207,7 @@ public struct DotistSettingsPatch: Encodable, Sendable {
     public var fontSerifCjk: String?
     public var fontSansCjk: String?
     public var opacity: UInt8?
+    public var sideTabOpacity: UInt8?
     public var frost: UInt8?
     public var alwaysOnTop: Bool?
     public var hoverExpand: Bool?

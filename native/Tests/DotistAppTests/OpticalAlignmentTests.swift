@@ -9,6 +9,11 @@ import XCTest
 /// box midpoint, not the shape's area centroid. Baseline calibration measures
 /// uncorrected views before asserting corrected components, on the real fonts.
 @MainActor final class OpticalAlignmentTests: XCTestCase {
+    private var nativeWindows: [NSWindow] = []
+    override func tearDown() async throws {
+        for window in nativeWindows { window.makeFirstResponder(nil); window.close() }
+        nativeWindows.removeAll()
+    }
     override func setUp() async throws {
         _ = NSApplication.shared
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -40,8 +45,12 @@ import XCTest
     private func native<V: View>(_ view: V, width: CGFloat, height: CGFloat) async throws -> (NSBitmapImageRep, NSHostingView<some View>) {
         let host = NSHostingView(rootView: view.frame(width: width, height: height).foregroundStyle(.black).background(.white).environment(\.colorScheme, .light))
         host.frame = CGRect(x: 0, y: 0, width: width, height: height)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        nativeWindows.append(window)
         host.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(80))
+        await Task.yield()
         host.layoutSubtreeIfNeeded()
         let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: rep)
@@ -188,6 +197,7 @@ import XCTest
                 print("SEARCH size=\(size), bounds=\(field.bounds), drawing=\(field.cell!.drawingRect(forBounds: field.bounds)), baseline=\(NSLayoutManager().defaultBaselineOffset(for: field.font!)), lineHeight=\(NSLayoutManager().defaultLineHeight(for: field.font!)), geometry=\(TextLineGeometry(font: field.font!, in: field.bounds))")
             }
             try search.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/private/tmp/dotist-wK1-search-\(size).png"))
+            print("Search ink size=\(size): icon=\(try inkVerticalCenter(of: search, in: CGRect(x: 12, y: 0, width: 20, height: 44))), text=\(try inkVerticalCenter(of: search, in: CGRect(x: 44, y: 0, width: 176, height: 44)))")
             try aligned(search, ranges: [12..<32, 44..<220], center: 22)
         }
     }
@@ -243,15 +253,12 @@ import XCTest
             let (before, host) = try await native(ComposerInput(text: .constant(title), focused: .constant(false), placeholder: "写下一件小事", label: "新任务", font: DotistDesign.nativeFont(13, language: "zh-CN"), commit: {}, navigate: { _ in false }, complete: { _ in false }), width: 200, height: 24)
             func fields(_ view: NSView) -> [ComposerTextField] { view.subviews.flatMap { ($0 as? ComposerTextField).map { [$0] } ?? fields($0) } }
             let field = try XCTUnwrap(fields(host).first)
-            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            window.contentView = host
-            defer { window.close() }
+            let window = try XCTUnwrap(host.window)
             XCTAssertTrue(window.makeFirstResponder(field))
             let editor = try XCTUnwrap(field.currentEditor() as? ComposerFieldEditor)
             editor.insertionPointColor = .clear
             editor.setSelectedRange(NSRange(location: (title as NSString).length, length: 0))
-            try await Task.sleep(for: .milliseconds(80))
+            await Task.yield()
             host.layoutSubtreeIfNeeded()
             let after = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
             host.cacheDisplay(in: host.bounds, to: after)

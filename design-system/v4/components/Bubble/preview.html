@@ -1,2 +1,41 @@
-<!-- @dsCard group="v4.2" height=240 width=600 subtitle="悬浮球 · 当前示意" -->
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>body{font:13px -apple-system,sans-serif;color:#242427;background:#e9e9eb;padding:24px}.card{box-sizing:border-box;width:364px;min-height:130px;border-radius:20px;padding:16px;background:rgba(255,255,255,.72);box-shadow:0 8px 18px #0002,0 20px 35px #0002;line-height:2.2}.name{font-family:serif;font-weight:600}.ball{display:inline-flex;width:48px;height:48px;align-items:center;justify-content:center;border-radius:50%;background:#eef4ef;font-size:20px;font-weight:600}.ghost,.hoverrow,.edit{display:block;background:#7772;border-radius:6px;padding:0 6px}.tab{display:inline-block;border-radius:0 9px 9px 0;background:#d6e4da;padding:2px 8px}.swatch{border:2px solid #729b80;border-radius:50%;padding:2px}</style><div class="card"><span class="ball">3</span></div><p>Liquid Glass 按当前分组主题色着色，48 pt 球只显示剩余数字，绝无进度环或弧；双层阴影窗口内部镂空。</p></html>
+<!-- @dsCard group="v4.2" height=420 width=600 subtitle="悬浮球与横条 · 结构示意" -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>悬浮球与横条结构示意</title>
+  <style>
+    body { margin: 0; padding: 20px; font: 13px/1.5 -apple-system, sans-serif; color: #242427; background: #e9e9eb; }
+    .card { padding: 16px; border: 1px solid #d3d3d6; border-radius: 16px; background: #f5f5f6; }
+    .examples { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+    /* One CSS shadow illustrates a silhouette; AppKit owns the native shadow. */
+    .bubble { display: inline-flex; align-items: center; height: 48px; border-radius: 24px; background: #eef4ef; box-shadow: 0 6px 16px #0002; }
+    .count { display: flex; flex: 0 0 48px; width: 48px; height: 48px; align-items: center; justify-content: center; font-size: 20px; font-weight: 600; }
+    .copy { flex: 0 1 auto; min-width: 0; text-align: left; line-height: 1.35; }
+    .circle-left .copy { margin-left: 18px; margin-right: 12px; }
+    .circle-right .copy { margin-left: 12px; margin-right: 18px; }
+    .title { display: block; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .metadata { display: block; color: #5b5b61; font-size: 12px; white-space: nowrap; }
+    .group { font-family: serif; font-weight: 600; }
+    p { margin: 12px 0 0; }
+    .note { color: #5b5b61; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="examples" aria-label="收起及两种展开朝向的结构示意">
+      <div class="bubble" aria-label="收起的悬浮球，剩余 3 件"><span class="count">3</span></div>
+      <div class="bubble circle-left" aria-label="圆在左，标题与元数据左对齐">
+        <span class="count">3</span>
+        <span class="copy"><span class="title">准备交接</span><span class="metadata"><span class="group">工作</span> · 11 月 12 日</span></span>
+      </div>
+      <div class="bubble circle-right" aria-label="圆在右，无元数据时标题垂直居中">
+        <span class="copy"><span class="title">准备交接</span></span>
+        <span class="count">3</span>
+      </div>
+    </div>
+    <p>横条按内容定宽，无 250 pt 下限；圆 48 pt、圆与文字间距 18 pt、外边距 12 pt，上限为 440 pt 或屏幕可用宽度一半。两侧文字均左对齐，文字块与数字按墨迹居中。</p>
+    <p class="note">原生悬浮球与横条使用 AppKit 系统 hasShadow，无独立阴影窗口；仅统计顶层未完成任务，无进度环。此处 CSS 字体、尺寸及单层阴影仅为结构示意，不复现原生玻璃或 CoreText 测量，不作为原生运行、实机玻璃或系统阴影验收证据。</p>
+  </div>
+</body>
+</html>

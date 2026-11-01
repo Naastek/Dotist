@@ -21,8 +21,11 @@ final class SettingsSearchTests: XCTestCase {
         for query in ["开机启动", "Launch at login", "ログイン", "開機啟動"] {
             XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.title == "开机启动" }, query)
         }
-        for query in ["默认颜色", "default color", "デフォルトカラー", "預設顏色"] {
-            XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.title.folding(options: .widthInsensitive, locale: nil) == "全部(默认颜色)" }, query)
+        for query in ["全部", "All", "すべて", "default color"] {
+            XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.target == "appearance.全部" && $0.title == "全部" }, query)
+        }
+        for query in ["分组便签不透明度", "Group tab opacity", "グループタブの不透明度", "群組便籤不透明度"] {
+            XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.target == "appearance.分组便签不透明度" }, query)
         }
     }
     func testTokensCanMatchAcrossModuleAndSettingTitle() {

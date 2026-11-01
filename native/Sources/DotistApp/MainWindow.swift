@@ -1529,7 +1529,7 @@ struct DraggableFilterButton: View {
     }
 }
 
-/// The title and disclosure glyph retain the shared measured ink center.
+/// The title and disclosure glyph share the complete title's native ink axis.
 struct GroupCollapseHeader: View {
     let title: String
     let language: String
@@ -1539,14 +1539,12 @@ struct GroupCollapseHeader: View {
     let toggle: () -> Void
     var body: some View {
         Button(action: toggle) {
-            HStack(alignment: .opticalCenter, spacing: 6) {
-                OpticalText(title: title, size: 15, weight: .semibold, serif: true, language: language)
-                    .foregroundStyle(empty ? DotistDesign.faint : DotistDesign.ink).lineLimit(1)
-                OpticalSymbol(name: collapsed ? "chevron.right" : "chevron.down", size: 9, weight: .semibold)
-                    .foregroundStyle(DotistDesign.faint).opacity(collapsed || hovered ? 1 : 0)
+            HStack(spacing: 6) {
+                GroupHeaderInkLabel(title: title, language: language, collapsed: collapsed,
+                                    showsChevron: collapsed || hovered, empty: empty)
                 Spacer(minLength: 26)
             }.frame(height: 30).contentShape(Rectangle())
-        }.buttonStyle(.plain).modifier(DotistFocusRing())
+        }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(title))
     }
 }
 

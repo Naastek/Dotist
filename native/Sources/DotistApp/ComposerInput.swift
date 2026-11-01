@@ -1,5 +1,4 @@
 import AppKit
-import CoreText
 import SwiftUI
 
 enum ComposerMetrics {
@@ -13,12 +12,58 @@ enum ComposerMetrics {
     }
 }
 
+/// Menu extracts text attributes but discards view offsets. Give that bridge a
+/// native template image whose visible ink is centered in the complete row;
+/// neither the primary font's line box nor a neighboring field positions it.
 struct ComposerGroupLabel: View {
+    @ObservedObject private var typography = DotistTypography.shared
+    @Environment(\.displayScale) private var displayScale
     let title: String
     let language: String
+    private static let images: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 128
+        return cache
+    }()
+
+    private func image(font: NSFont) -> NSImage {
+        let scale = max(1, displayScale)
+        let key = "\(DotistDesign.fontCacheKey)|\(font.fontDescriptor)|\(title)|\(scale)" as NSString
+        if let image = Self.images.object(forKey: key) { return image }
+        let text = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: NSColor.black])
+        // A template's coverage is independent of the application's appearance.
+        // Measure black ink on light paper even when the live menu is dark.
+        var measured: GroupHeaderInkView.InkRaster?
+        NSAppearance(named: .aqua)?.performAsCurrentDrawingAppearance {
+            measured = GroupHeaderInkView.inkImage(size: text.size(), scale: scale) { text.draw(at: $0) }
+        }
+        guard let raster = measured else {
+            return NSImage(size: CGSize(width: 1, height: ComposerMetrics.rowHeight))
+        }
+        let size = CGSize(width: raster.size.width, height: ComposerMetrics.rowHeight)
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: max(1, Int(ceil(size.width * scale))),
+            pixelsHigh: Int(size.height * scale), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let graphics = NSGraphicsContext(bitmapImageRep: bitmap) else { return NSImage(size: size) }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphics
+        graphics.cgContext.clear(CGRect(x: 0, y: 0, width: bitmap.pixelsWide, height: bitmap.pixelsHigh))
+        graphics.cgContext.scaleBy(x: scale, y: scale)
+        // The image is padded, rather than relying on NSImage.alignmentRect:
+        // the native popup's image cell does not preserve that optical rect.
+        let y = ((size.height / 2 - raster.alignmentRect.midY) * scale).rounded() / scale
+        NSImage(cgImage: raster.image, size: raster.size).draw(at: CGPoint(x: 0, y: y), from: .zero, operation: .sourceOver, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        let image = bitmap.cgImage.map { NSImage(cgImage: $0, size: size) } ?? NSImage(size: size)
+        image.isTemplate = true
+        Self.images.setObject(image, forKey: key)
+        return image
+    }
     var body: some View {
-        OpticalText(title: title, size: ComposerMetrics.fontSize, weight: .semibold, serif: true, language: language)
-            .lineLimit(1).frame(height: ComposerMetrics.rowHeight)
+        let font = DotistDesign.nativeFont(ComposerMetrics.fontSize, weight: .semibold, serif: true, language: language)
+        Image(nsImage: image(font: font)).renderingMode(.template)
+            .accessibilityLabel(Text(title))
+            .frame(height: ComposerMetrics.rowHeight)
     }
 }
 
@@ -30,48 +75,108 @@ struct ComposerCalendarIcon: View {
     }
 }
 
-/// NSTextField otherwise keeps its cell at the top of a taller SwiftUI frame.
-/// Using the same drawing/editing rect also keeps the field editor's caret on
-/// the resting text baseline when focus changes.
-final class ComposerTextFieldCell: NSTextFieldCell {
+private final class ComposerInkCanvas: NSView {
+    var background = NSColor.white
+    override var isOpaque: Bool { true }
+    override var isFlipped: Bool { true }
+    override func draw(_ dirtyRect: NSRect) { background.setFill(); bounds.fill() }
+}
+
+/// AppKit owns the resting label, placeholder and active field editor. This
+/// cell supplies one font-based line box; it never draws a second text run.
+final class ComposerTextFieldCell: NSTextFieldCell, NSLayoutManagerDelegate {
     private let composerEditor = ComposerFieldEditor()
     var opticalSample = "中文任务"
+    private var measurementKey = ""
+    private var inkOffset: CGFloat = 0
+
+    private func lineGeometry(in rect: CGRect) -> (rect: CGRect, baseline: CGFloat) {
+        guard let font else { return (rect, rect.midY) }
+        let scale = controlView?.window?.backingScaleFactor ?? 1
+        let color = stringValue.isEmpty
+            ? (placeholderAttributedString.flatMap { $0.length > 0 ? $0.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor : nil } ?? NSColor(DotistDesign.faint))
+            : (textColor ?? NSColor(DotistDesign.ink))
+        let appearance = controlView?.effectiveAppearance ?? NSAppearance.currentDrawing()
+        let colorSpace = controlView?.window?.colorSpace ?? .sRGB
+        let key = "\(font.hash)|\(opticalSample)|\(color.hash)|\(appearance.name.rawValue)|\(colorSpace.hash)|\(scale)"
+        if key != measurementKey {
+            measurementKey = key
+            // One stock native label measures the frozen reference run.
+            // The live editor uses this same primary-font line box below;
+            // there is no second editor, paragraph/layout tree or visible painter.
+            appearance.performAsCurrentDrawingAppearance {
+                let width = min(2048, max(8, ceil((opticalSample as NSString).size(withAttributes: [.font: font]).width) + 8))
+                let height = NSLayoutManager().defaultLineHeight(for: font)
+                let canvas = ComposerInkCanvas(frame: CGRect(x: 0, y: 0, width: width, height: height + 16))
+                let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                canvas.background = dark ? .black : .white
+                canvas.appearance = appearance
+                let label = NSTextField(frame: CGRect(x: 0, y: 0, width: width, height: height))
+                label.isBordered = false; label.isBezeled = false; label.drawsBackground = false
+                label.usesSingleLineMode = false; label.cell?.wraps = false; label.cell?.isScrollable = true
+                label.maximumNumberOfLines = 1; label.lineBreakMode = .byClipping; label.font = font; label.textColor = color
+                if stringValue.isEmpty {
+                    label.placeholderAttributedString = NSAttributedString(string: opticalSample, attributes: [.font: font, .foregroundColor: color])
+                } else { label.stringValue = opticalSample }
+                canvas.addSubview(label)
+                canvas.layoutSubtreeIfNeeded()
+                func offset(at rasterScale: CGFloat) -> CGFloat? {
+                    guard let raw = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(ceil(width * rasterScale)), pixelsHigh: Int(ceil(canvas.bounds.height * rasterScale)),
+                        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+                    let bitmap = raw.retagging(with: colorSpace) ?? raw
+                    bitmap.size = canvas.bounds.size
+                    canvas.cacheDisplay(in: canvas.bounds, to: bitmap)
+                    var first = bitmap.pixelsHigh, last = -1
+                    for y in 0..<bitmap.pixelsHigh {
+                        for x in 0..<bitmap.pixelsWide {
+                            guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                            let contrast = dark ? min(c.redComponent, c.greenComponent, c.blueComponent) : 1 - max(c.redComponent, c.greenComponent, c.blueComponent)
+                            if contrast > 0.2 { first = min(first, y); last = max(last, y) }
+                        }
+                    }
+                    guard last >= first else { return nil }
+                    return NSLayoutManager().defaultBaselineOffset(for: font) - CGFloat(first + last + 1) / (2 * rasterScale)
+                }
+                let fallback = TextLineGeometry(font: font, in: .zero, sample: opticalSample).baseline
+                let fine = offset(at: max(2, scale)) ?? fallback
+                let coarse = offset(at: 1) ?? fine
+                inkOffset = (coarse + fine) / 2
+            }
+        }
+        let baseline = ((rect.midY + inkOffset) * scale).rounded() / scale
+        let nativeBaseline = NSLayoutManager().defaultBaselineOffset(for: font)
+        return (CGRect(x: rect.minX, y: baseline - nativeBaseline, width: rect.width,
+                       height: NSLayoutManager().defaultLineHeight(for: font)), baseline)
+    }
+
+    func layoutManager(_ layoutManager: NSLayoutManager, shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<NSRect>, lineFragmentUsedRect: UnsafeMutablePointer<NSRect>, baselineOffset: UnsafeMutablePointer<CGFloat>, in textContainer: NSTextContainer, forGlyphRange glyphRange: NSRange) -> Bool {
+        guard let font else { return false }
+        // Native static labels use the primary font's baseline. TextKit can
+        // otherwise grow the first line for a fallback glyph. Use the same
+        // font line box while retaining native glyph shaping and selection.
+        let height = layoutManager.defaultLineHeight(for: font)
+        lineFragmentRect.pointee.size.height = height
+        lineFragmentUsedRect.pointee.size.height = height
+        baselineOffset.pointee = layoutManager.defaultBaselineOffset(for: font)
+        return true
+    }
 
     override func fieldEditor(for view: NSView) -> NSTextView? {
         composerEditor.composer = view
+        composerEditor.layoutManager?.delegate = self
         return composerEditor
     }
 
     override func drawingRect(forBounds rect: NSRect) -> NSRect {
-        guard let font else { return super.drawingRect(forBounds: rect) }
+        guard font != nil else { return super.drawingRect(forBounds: rect) }
         let native = super.drawingRect(forBounds: rect)
-        var result = TextLineGeometry(font: font, in: rect, sample: opticalSample).lineRect
+        // AppKit may ask again while establishing the editor. Always resolve
+        // the original control box, so drawing/title/edit requests are idempotent.
+        let bounds = controlView.flatMap { $0.bounds.isEmpty ? nil : $0.bounds } ?? rect
+        var result = lineGeometry(in: bounds).rect
         result.origin.x = native.origin.x
         result.size.width = native.width
         return result
-    }
-
-    override func titleRect(forBounds rect: NSRect) -> NSRect {
-        drawingRect(forBounds: rect)
-    }
-
-    override func drawInterior(withFrame rect: NSRect, in view: NSView) {
-        guard let font, let context = NSGraphicsContext.current?.cgContext else { return }
-        let value: NSAttributedString
-        if stringValue.isEmpty {
-            value = placeholderAttributedString ?? NSAttributedString(string: placeholderString ?? "", attributes: [.font: font, .foregroundColor: NSColor(DotistDesign.faint)])
-        } else {
-            value = NSAttributedString(string: stringValue, attributes: [.font: font, .foregroundColor: textColor ?? NSColor(DotistDesign.ink)])
-        }
-        let geometry = TextLineGeometry(font: font, in: rect, sample: opticalSample)
-        context.saveGState()
-        context.clip(to: rect)
-        context.textMatrix = .identity
-        context.translateBy(x: rect.minX, y: geometry.baseline)
-        context.scaleBy(x: 1, y: -1)
-        context.textPosition = .zero
-        CTLineDraw(CTLineCreateWithAttributedString(value), context)
-        context.restoreGState()
     }
 
     override func select(withFrame rect: NSRect, in view: NSView, editor: NSText, delegate: Any?, start: Int, length: Int) {
@@ -124,8 +229,10 @@ final class ComposerFieldEditor: NSTextView {
 final class ComposerTextField: NSTextField {
     var rowHeight: CGFloat = ComposerMetrics.rowHeight
     private var referenceFont: NSFont?
+    private var linePadding: CGFloat { ceil(NSLayoutManager().defaultLineHeight(for: font ?? .systemFont(ofSize: ComposerMetrics.fontSize))) }
     func configure(font: NSFont, reference: String) {
-        if referenceFont != font, let cell = cell as? ComposerTextFieldCell {
+        guard referenceFont != font else { return }
+        if let cell = cell as? ComposerTextFieldCell {
             cell.opticalSample = reference.components(separatedBy: .newlines).first.flatMap { $0.isEmpty ? nil : $0 } ?? "中文任务"
         }
         referenceFont = font
@@ -141,12 +248,38 @@ final class ComposerTextField: NSTextField {
         drawsBackground = false
         focusRingType = .none
         maximumNumberOfLines = 1
-        usesSingleLineMode = true
+        // NSCell's single-line mode fixes its baseline to controlSize and
+        // ignores font size. Use native font-based layout with no wrapping;
+        // the field editor and delegates still own Return/Tab/IME commands.
+        usesSingleLineMode = false
+        cell?.wraps = false
+        cell?.isScrollable = true
         lineBreakMode = .byClipping
         textColor = NSColor(DotistDesign.ink)
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
     required init?(coder: NSCoder) { nil }
+    override var alignmentRectInsets: NSEdgeInsets {
+        let native = super.alignmentRectInsets
+        // AppKit intersects its SimpleLabel with control bounds. Give the font
+        // line box room above/below the visible row so a centered short run can
+        // have a negative line origin without losing that displacement.
+        return NSEdgeInsets(top: linePadding, left: native.left, bottom: linePadding, right: native.right)
+    }
+    override func alignmentRect(forFrame frame: NSRect) -> NSRect {
+        let insets = alignmentRectInsets
+        return NSRect(x: frame.minX + insets.left, y: frame.minY + insets.bottom,
+                      width: frame.width - insets.left - insets.right, height: frame.height - insets.top - insets.bottom)
+    }
+    override func frame(forAlignmentRect rect: NSRect) -> NSRect {
+        let insets = alignmentRectInsets
+        return NSRect(x: rect.minX - insets.left, y: rect.minY - insets.bottom,
+                      width: rect.width + insets.left + insets.right, height: rect.height + insets.top + insets.bottom)
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard alignmentRect(forFrame: bounds).contains(convert(point, from: superview)) else { return nil }
+        return super.hitTest(point)
+    }
     override var intrinsicContentSize: NSSize {
         NSSize(width: super.intrinsicContentSize.width, height: rowHeight)
     }
@@ -169,10 +302,11 @@ struct ComposerInput: NSViewRepresentable {
     }
     func updateNSView(_ field: NSTextField, context: Context) {
         context.coordinator.parent = self
+        field.needsLayout = true
         field.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [.font: font, .foregroundColor: NSColor(DotistDesign.faint)])
         field.setAccessibilityLabel(label)
         (field as? ComposerTextField)?.configure(font: font, reference: text.isEmpty ? placeholder : text)
-        if field.stringValue != text {
+        if field.stringValue != text && (field.currentEditor() as? NSTextView)?.hasMarkedText() != true {
             field.stringValue = text
             if let editor = field.currentEditor() { editor.selectedRange = NSRange(location: (text as NSString).length, length: 0) }
         }
