@@ -1,5 +1,7 @@
 # 2026-10-31 原生交互与控件修整
 
+> **历史记录，部分内容已被取代。** 当前原生架构见 [native-macos.md](native-macos.md)，当前 UI 决定以 [ui-decisions.md](ui-decisions.md) 为准；以下保留当时方案与验收证据。
+
 这是 SwiftUI 迁移后的用户反馈修复，保留 Rust / SQLite / MCP 与任务语义。用户明确授权验证后直接更新本机应用；没有提交、推送或公开发布授权。
 
 ## 本轮确认的设计调整

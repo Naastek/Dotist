@@ -28,6 +28,20 @@ struct DotistApplication {
 final class DotistPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    // NSWindow moves child windows during super's frame update. Synchronizing in
+    // didMove alone can therefore apply the parent's displacement twice.
+    var synchronizePanelShadow: (() -> Void)?
+    // animator() is an Objective-C forwarding proxy, not a DotistPanel. Swift
+    // direct dispatch would read our stored closure from the proxy's memory.
+    dynamic override func setFrame(_ frameRect: NSRect, display flag: Bool) {
+        super.setFrame(frameRect, display: flag)
+        synchronizePanelShadow?()
+    }
+    dynamic override func setFrameOrigin(_ point: NSPoint) {
+        super.setFrameOrigin(point)
+        synchronizePanelShadow?()
+    }
 }
 
 final class QuickPanel: NSPanel {
@@ -95,7 +109,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         panel.minSize = NSSize(width: 320, height: 440)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false // PanelMotion supplies the exterior-only shadow.
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
         panel.level = model.settings.alwaysOnTop ? .floating : .normal
         panel.isMovableByWindowBackground = true

@@ -1,5 +1,7 @@
 # Dotist React + Tauri 实施计划
 
+> **历史记录，部分内容已被取代。** 当前原生架构见 [native-macos.md](native-macos.md)，当前 UI 决定以 [ui-decisions.md](ui-decisions.md) 为准；以下保留当时方案与验收证据。
+
 **目标：** 在 Mac 上实现本地优先的悬浮分类待办与本地 MCP，为未来 Android/iCloud 同步保留数据结构。
 **架构：** React/Vite 调 Tauri 命令；Tauri 与独立 stdio MCP 共享 Rust SQLite 服务。SQLite 任务与 outbox 在单一事务写入。CloudKit 实现、真实账号和远程服务不属于本期。
 **约束：** 不触碰真实用户任务、不安装全局工具链、不配置客户端持久 MCP 权限；Arc 只参考/使用免费 MIT 项目。

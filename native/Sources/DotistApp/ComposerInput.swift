@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import SwiftUI
 
 enum ComposerMetrics {
@@ -6,11 +7,9 @@ enum ComposerMetrics {
     static let barHeight: CGFloat = 52
     static let fontSize: CGFloat = 13
     static let calendarSize: CGFloat = 13
-    // Source Sans has an 18pt native line at this size; AppKit's fallback is
-    // 16pt. Account for the extra descent allowance without shifting fallback.
     static func textOpticalOffset(font: NSFont?) -> CGFloat {
         guard let font else { return 0 }
-        return max(0, (NSLayoutManager().defaultLineHeight(for: font) - 16) / 2)
+        return TextLineGeometry(font: font, in: CGRect(x: 0, y: 0, width: 100, height: rowHeight)).lineRect.midY - rowHeight / 2
     }
 }
 
@@ -18,7 +17,7 @@ struct ComposerGroupLabel: View {
     let title: String
     let language: String
     var body: some View {
-        Text(title).font(DotistDesign.nameFont(ComposerMetrics.fontSize, weight: .semibold, language: language))
+        OpticalText(title: title, size: ComposerMetrics.fontSize, weight: .semibold, serif: true, language: language)
             .lineLimit(1).frame(height: ComposerMetrics.rowHeight)
     }
 }
@@ -26,7 +25,7 @@ struct ComposerGroupLabel: View {
 struct ComposerCalendarIcon: View {
     var language = "en"
     var body: some View {
-        Image(systemName: "calendar").font(DotistDesign.textFont(ComposerMetrics.calendarSize, language: language))
+        OpticalSymbol(name: "calendar", size: ComposerMetrics.calendarSize)
             .frame(width: ComposerMetrics.rowHeight, height: ComposerMetrics.rowHeight)
     }
 }
@@ -36,6 +35,7 @@ struct ComposerCalendarIcon: View {
 /// the resting text baseline when focus changes.
 final class ComposerTextFieldCell: NSTextFieldCell {
     private let composerEditor = ComposerFieldEditor()
+    var opticalSample = "中文任务"
 
     override func fieldEditor(for view: NSView) -> NSTextView? {
         composerEditor.composer = view
@@ -43,15 +43,35 @@ final class ComposerTextFieldCell: NSTextFieldCell {
     }
 
     override func drawingRect(forBounds rect: NSRect) -> NSRect {
-        var result = super.drawingRect(forBounds: rect)
-        let height = min(result.height, cellSize(forBounds: rect).height)
-        result.origin.y += (result.height - height) / 2 + ComposerMetrics.textOpticalOffset(font: font)
-        result.size.height = height
+        guard let font else { return super.drawingRect(forBounds: rect) }
+        let native = super.drawingRect(forBounds: rect)
+        var result = TextLineGeometry(font: font, in: rect, sample: opticalSample).lineRect
+        result.origin.x = native.origin.x
+        result.size.width = native.width
         return result
     }
 
     override func titleRect(forBounds rect: NSRect) -> NSRect {
         drawingRect(forBounds: rect)
+    }
+
+    override func drawInterior(withFrame rect: NSRect, in view: NSView) {
+        guard let font, let context = NSGraphicsContext.current?.cgContext else { return }
+        let value: NSAttributedString
+        if stringValue.isEmpty {
+            value = placeholderAttributedString ?? NSAttributedString(string: placeholderString ?? "", attributes: [.font: font, .foregroundColor: NSColor(DotistDesign.faint)])
+        } else {
+            value = NSAttributedString(string: stringValue, attributes: [.font: font, .foregroundColor: textColor ?? NSColor(DotistDesign.ink)])
+        }
+        let geometry = TextLineGeometry(font: font, in: rect, sample: opticalSample)
+        context.saveGState()
+        context.clip(to: rect)
+        context.textMatrix = .identity
+        context.translateBy(x: rect.minX, y: geometry.baseline)
+        context.scaleBy(x: 1, y: -1)
+        context.textPosition = .zero
+        CTLineDraw(CTLineCreateWithAttributedString(value), context)
+        context.restoreGState()
     }
 
     override func select(withFrame rect: NSRect, in view: NSView, editor: NSText, delegate: Any?, start: Int, length: Int) {
@@ -90,7 +110,10 @@ final class ComposerFieldEditor: NSTextView {
     func centeredCaretRect(_ rect: NSRect) -> NSRect {
         guard let composer else { return rect }
         var result = rect
-        result.origin.y = convert(composer.bounds, from: composer).midY - rect.height / 2
+        let bounds = convert(composer.bounds, from: composer)
+        let sample = (composer as? NSTextField)?.cell as? ComposerTextFieldCell
+        let geometry = TextLineGeometry(font: font ?? NSFont.systemFont(ofSize: ComposerMetrics.fontSize), in: bounds, sample: sample?.opticalSample ?? "中文任务")
+        result.origin.y = geometry.inkBounds.midY - rect.height / 2
         return result
     }
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
@@ -99,6 +122,15 @@ final class ComposerFieldEditor: NSTextView {
 }
 
 final class ComposerTextField: NSTextField {
+    var rowHeight: CGFloat = ComposerMetrics.rowHeight
+    private var referenceFont: NSFont?
+    func configure(font: NSFont, reference: String) {
+        if referenceFont != font, let cell = cell as? ComposerTextFieldCell {
+            cell.opticalSample = reference.components(separatedBy: .newlines).first.flatMap { $0.isEmpty ? nil : $0 } ?? "中文任务"
+        }
+        referenceFont = font
+        self.font = font
+    }
     init() {
         super.init(frame: .zero)
         cell = ComposerTextFieldCell(textCell: "")
@@ -116,7 +148,7 @@ final class ComposerTextField: NSTextField {
     }
     required init?(coder: NSCoder) { nil }
     override var intrinsicContentSize: NSSize {
-        NSSize(width: super.intrinsicContentSize.width, height: ComposerMetrics.rowHeight)
+        NSSize(width: super.intrinsicContentSize.width, height: rowHeight)
     }
 }
 
@@ -139,7 +171,7 @@ struct ComposerInput: NSViewRepresentable {
         context.coordinator.parent = self
         field.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [.font: font, .foregroundColor: NSColor(DotistDesign.faint)])
         field.setAccessibilityLabel(label)
-        field.font = font
+        (field as? ComposerTextField)?.configure(font: font, reference: text.isEmpty ? placeholder : text)
         if field.stringValue != text {
             field.stringValue = text
             if let editor = field.currentEditor() { editor.selectedRange = NSRange(location: (text as NSString).length, length: 0) }

@@ -45,11 +45,11 @@ struct RangeCalendar: View {
                 if let clear, !start.isEmpty { Button(model.text("清除"), action: clear).buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted) }
             }.font(font(12))
             HStack {
-                Button { month = calendar.date(byAdding: .month, value: -1, to: first)! } label: { Image(systemName: "chevron.left") }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("上个月")))
-                Text(format(month, "yyyyMMMM")).font(font(14, .semibold))
+                Button { month = calendar.date(byAdding: .month, value: -1, to: first)! } label: { OpticalSymbol(name: "chevron.left", size: 11).frame(width: 22, height: 28) }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("上个月")))
+                OpticalText(title: format(month, "yyyyMMMM"), size: 14, weight: .semibold, language: model.language)
                 Spacer()
-                Button(model.text("今天")) { month = Date() }.buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12))
-                Button { month = calendar.date(byAdding: .month, value: 1, to: first)! } label: { Image(systemName: "chevron.right") }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("下个月")))
+                Button { month = Date() } label: { OpticalText(title: model.text("今天"), size: 12, language: model.language).frame(height: 28) }.buttonStyle(.plain).modifier(DotistFocusRing())
+                Button { month = calendar.date(byAdding: .month, value: 1, to: first)! } label: { OpticalSymbol(name: "chevron.right", size: 11).frame(width: 22, height: 28) }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("下个月")))
             }.frame(height: 28)
             HStack(spacing: 0) {
                 Text(model.text("周")).frame(width: 24)
@@ -58,7 +58,7 @@ struct RangeCalendar: View {
             ForEach(0..<6, id: \.self) { week in
                 HStack(spacing: 0) {
                     let monday = day(week * 7 + (calendar.firstWeekday == 1 ? 1 : 0))
-                    Text("\(Calendar(identifier: .iso8601).component(.weekOfYear, from: monday))").font(font(10)).foregroundColor(DotistDesign.faint).frame(width: 24)
+                    OpticalText(title: "\(Calendar(identifier: .iso8601).component(.weekOfYear, from: monday))", size: 10, language: model.language).foregroundColor(DotistDesign.faint).frame(width: 24)
                     ForEach(0..<7, id: \.self) { weekday in
                         let date = day(week * 7 + weekday)
                         let iso = date.dotistDay
@@ -74,8 +74,7 @@ struct RangeCalendar: View {
                             if let from { choose(min(from, chosen), max(from, chosen)); anchor = nil; hover = nil }
                             else { anchor = chosen; choose(chosen, chosen) }
                         } label: {
-                            Text("\(calendar.component(.day, from: date))")
-                                .font(font(12, edge || iso == Date().dotistDay ? .semibold : .regular))
+                            OpticalText(title: "\(calendar.component(.day, from: date))", size: 12, weight: edge || iso == Date().dotistDay ? .semibold : .regular, language: model.language)
                                 .foregroundColor(selected ? DotistDesign.accent : !calendar.isDate(date, equalTo: month, toGranularity: .month) ? DotistDesign.faint : iso == Date().dotistDay || marks.contains(iso) ? DotistDesign.ink : DotistDesign.muted)
                                 .frame(maxWidth: .infinity).frame(height: 28).contentShape(Rectangle())
                         }.buttonStyle(.plain)
@@ -102,7 +101,7 @@ struct RangeCalendar: View {
                 }
             }
             if !single {
-                Text(model.text(anchor == nil ? "点一天，再点另一天可选范围；按住 Shift 点击也能延伸" : "再点一天，选出结束日期")).font(font(11)).foregroundColor(DotistDesign.muted)
+                Text(model.text(anchor == nil ? "点一天，再点另一天可选范围；按住 Shift 点击也能延伸。" : "再点一天，选出结束日期。")).font(font(11)).foregroundColor(DotistDesign.muted)
                 HStack { Spacer(); Button(model.text("完成"), action: close).buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.accent) }
             }
         }.padding(12).frame(width: 300).background(DotistDesign.paper)

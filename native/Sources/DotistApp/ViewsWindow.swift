@@ -93,8 +93,8 @@ struct ViewsWindow: View {
         VStack(alignment: .leading, spacing: 12) {
             Button { showUnscheduled.toggle() } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: showUnscheduled ? "chevron.down" : "chevron.right").font(font(10, .medium))
-                    Text("\(model.text("未排期")) \(model.tasks.filter { $0.dueDate == nil }.count)").font(font(13, .medium))
+                    OpticalSymbol(name: showUnscheduled ? "chevron.down" : "chevron.right", size: 9, weight: .semibold)
+                    OpticalText(title: "\(model.text("未排期")) \(model.tasks.filter { $0.dueDate == nil }.count)", size: 13, weight: .medium, language: model.language)
                     Spacer(minLength: 0)
                 }.contentShape(Rectangle()).padding(.vertical, 8)
             }.buttonStyle(.plain).modifier(DotistFocusRing())
@@ -158,8 +158,7 @@ struct ViewsWindow: View {
     }
 
     private var calendarTitle: some View {
-        Text(scale == "month" ? dateText(visibleMonth, format: "yyyyMMMM") : scale == "day" ? dateText(selected, format: "yyyyMMMMEEEEd") : "\(dateText(startOfWeek(selected), format: "MMMd")) – \(dateText(day(startOfWeek(selected), 6), format: "MMMd"))")
-            .font(font(20, .semibold))
+        OpticalText(title: scale == "month" ? dateText(visibleMonth, format: "yyyyMMMM") : scale == "day" ? dateText(selected, format: "yyyyMMMMEEEEd") : "\(dateText(startOfWeek(selected), format: "MMMd")) – \(dateText(day(startOfWeek(selected), 6), format: "MMMd"))", size: 20, weight: .semibold, language: model.language)
     }
     private var calendarNavigation: some View {
         Group {
@@ -168,7 +167,7 @@ struct ViewsWindow: View {
                 scale = value
             }))
             navigationButton("chevron.left", label: "上一段") { movePeriod(-1) }
-            Button(model.text("今天")) { choose(Date()) }.buttonStyle(DotistActionStyle()).modifier(DotistFocusRing())
+            Button { choose(Date()) } label: { OpticalText(title: model.text("今天"), size: 13, language: model.language) }.buttonStyle(DotistActionStyle()).modifier(DotistFocusRing())
             navigationButton("chevron.right", label: "下一段") { movePeriod(1) }
         }
     }
@@ -197,7 +196,7 @@ struct ViewsWindow: View {
         }
     }
     private func navigationButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol) }.buttonStyle(DotistActionStyle(icon: true)).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text(label)))
+        Button(action: action) { OpticalSymbol(name: symbol, size: 11) }.buttonStyle(DotistActionStyle(icon: true)).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text(label)))
     }
     private func calendarCell(_ date: Date, height: CGFloat) -> some View {
         let items = model.ordered(model.tasks.filter { $0.dueDate == date.dotistDay })
@@ -211,7 +210,11 @@ struct ViewsWindow: View {
                 .modifier(CalendarFocusModifier(date: date.dotistDay, keyboardDate: $keyboardDate))
                 .onMoveCommand { direction in moveDate(date, direction: direction) }
             ForEach(Array(items.prefix(2))) { task in
-                Text("\(task.completed ? "✓ " : task.dueDate.map { $0 < Date().dotistDay } == true ? "△ " : "")\(task.title)").font(font(11)).foregroundColor(task.completed ? DotistDesign.faint : DotistDesign.ink).lineLimit(1)
+                IconTextRow(spacing: 3) {
+                    if task.completed { OpticalSymbol(name: "checkmark", size: 9) }
+                    else if task.dueDate.map({ $0 < Date().dotistDay }) == true { OpticalSymbol(name: "exclamationmark.triangle", size: 9) }
+                    OpticalText(title: task.title, size: 11, language: model.language)
+                }.foregroundColor(task.completed ? DotistDesign.faint : DotistDesign.ink).lineLimit(1)
                     .foregroundColor(date.dotistDay == selected.dotistDay ? DotistDesign.accent : DotistDesign.ink)
                     .overlay(TaskDragSource(model: model, task: task, scope: "calendar", font: DotistDesign.nativeFont(11, language: model.language), click: { choose(date); keyboardDate = date.dotistDay }).accessibilityHidden(true))
             }
@@ -268,10 +271,10 @@ struct ViewsWindow: View {
         let values = model.ordered(model.tasks.filter { $0.parentId == nil && $0.status == status })
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Image(systemName: symbol).font(font(11))
-                Text(model.text(label)).font(font(16, .medium))
+                OpticalSymbol(name: symbol, size: 11)
+                OpticalText(title: model.text(label), size: 16, weight: .medium, language: model.language)
                 Spacer()
-                Text("\(values.count)").font(font(12)).foregroundColor(DotistDesign.muted)
+                OpticalText(title: "\(values.count)", size: 12, language: model.language).foregroundColor(DotistDesign.muted)
             }.padding(.bottom, 12).overlay(Rectangle().fill(DotistDesign.rule).frame(height: 1), alignment: .bottom)
             if values.isEmpty { Text(model.text("暂无任务")).font(font(12)).foregroundColor(DotistDesign.muted).padding(.top, 8) }
             ForEach(Array(values.enumerated()), id: \.element.id) { index, task in
@@ -288,13 +291,13 @@ struct ViewsWindow: View {
         return calendar.range(of: .day, in: .month, for: ganttStart)!.count
     }
     private var ganttTitle: some View {
-        Text("\(ganttStart.dotistDay) – \(day(ganttStart, ganttCount - 1).dotistDay)").font(font(20, .semibold))
+        OpticalText(title:"\(ganttStart.dotistDay) – \(day(ganttStart, ganttCount - 1).dotistDay)", size: 20, weight: .semibold, language: model.language)
     }
     private var ganttNavigation: some View {
         HStack(spacing: 8) {
             tabs([("week", "周"), ("month", "月")], selection: $ganttScale)
             navigationButton("chevron.left", label: "上一段") { ganttAnchor = ganttScale == "week" ? day(ganttAnchor, -7) : calendar.date(byAdding: .month, value: -1, to: ganttAnchor)! }
-            Button(model.text("今天")) { ganttAnchor = Date() }.buttonStyle(DotistActionStyle()).modifier(DotistFocusRing())
+            Button { ganttAnchor = Date() } label: { OpticalText(title: model.text("今天"), size: 13, language: model.language) }.buttonStyle(DotistActionStyle()).modifier(DotistFocusRing())
             navigationButton("chevron.right", label: "下一段") { ganttAnchor = ganttScale == "week" ? day(ganttAnchor, 7) : calendar.date(byAdding: .month, value: 1, to: ganttAnchor)! }
         }
     }
@@ -311,7 +314,7 @@ struct ViewsWindow: View {
                 }
             }.padding(.bottom, 8)
             HStack(spacing: 12) {
-                Text(model.text("排序方式")).font(font(12)).foregroundColor(DotistDesign.muted)
+                OpticalText(title: model.text("排序方式"), size: 12, language: model.language).foregroundColor(DotistDesign.muted)
                 tabs([("manual", "手动排序"), ("grouped", "按分组")], selection: Binding(get: { grouped ? "grouped" : "manual" }, set: { grouped = $0 == "grouped" }))
             }
             Text(model.text("拖动横条或边缘调整日期；也可在「调整任务」中输入日期。") + " " + model.text("拖动排序；按住 Option 并使用上下方向键调整。"))
@@ -329,10 +332,10 @@ struct ViewsWindow: View {
                                 if collapsed.contains(group.id) { collapsed.remove(group.id) } else { collapsed.insert(group.id) }
                             } label: {
                                 HStack {
-                                    Image(systemName: collapsed.contains(group.id) ? "chevron.right" : "chevron.down").font(font(10))
-                                    Text(model.groupDisplayName(group.id)).font(font(13, .semibold, serif: true)).foregroundColor(DotistDesign.ink)
+                                    OpticalSymbol(name: collapsed.contains(group.id) ? "chevron.right" : "chevron.down", size: 9, weight: .semibold)
+                                    OpticalText(title: model.groupDisplayName(group.id), size: 13, weight: .semibold, serif: true, language: model.language).foregroundColor(DotistDesign.ink)
                                     Spacer()
-                                    Text("\(values.count)").font(font(12))
+                                    OpticalText(title: "\(values.count)", size: 12, language: model.language)
                                 }.padding(.horizontal, 10).frame(width: 220, height: 38).contentShape(Rectangle())
                             }.buttonStyle(.plain).modifier(DotistFocusRing())
                             GanttGroupTrack(group: group, tasks: values, start: ganttStart, count: ganttCount)
@@ -357,16 +360,16 @@ struct ViewsWindow: View {
     }
     private func ganttRows(_ values: [DotistTask]) -> some View {
         ForEach(Array(values.enumerated()), id: \.element.id) { index, task in
-            HStack(alignment: .top, spacing: 0) {
+            GanttRowLayout {
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .top, spacing: 4) {
-                        Text(task.title).font(font(14, .semibold)).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(alignment: .center, spacing: 4) {
+                        OpticalText(title: task.title, size: 14, weight: .semibold, language: model.language).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
                             .overlay(TaskDragSource(model: model, task: task, scope: "scheduled", font: DotistDesign.nativeFont(14, weight: .semibold, language: model.language)).accessibilityHidden(true))
                         ViewTaskCard(model: model, task: task, previous: index > 0 ? values[index - 1].id : nil, next: index + 1 < values.count ? values[index + 1].id : nil, scope: "scheduled", compact: true, grouped: grouped, dropTarget: $dropTarget, dropAfter: $dropAfter).frame(width: 22)
                     }
                     let children = model.children(of: task)
                     if !children.isEmpty { Text(model.text("子任务 {done}/{total}").replacingOccurrences(of: "{done}", with: "\(children.filter(\.completed).count)").replacingOccurrences(of: "{total}", with: "\(children.count)")).font(font(12)) }
-                    if task.dueDate.map({ $0 < Date().dotistDay }) == true && !task.completed { Text("△ " + model.text("已逾期")).font(font(12)).foregroundColor(DotistDesign.danger) }
+                    if task.dueDate.map({ $0 < Date().dotistDay }) == true && !task.completed { IconTextRow(spacing: 3) { OpticalSymbol(name: "exclamationmark.triangle", size: 10); OpticalText(title: model.text("已逾期"), size: 12, language: model.language) }.foregroundColor(DotistDesign.danger) }
                 }.padding(8).frame(width: 220, alignment: .leading)
                     .background(GeometryReader { geometry in
                         Color.clear.onAppear { ganttLabelHeights[task.id] = geometry.size.height }.onChange(of: geometry.size.height) { ganttLabelHeights[task.id] = $0 }
@@ -417,7 +420,7 @@ private struct ViewTaskCard: View {
         Button { model.complete(task) } label: {
             ZStack {
                 Circle().stroke(task.completed ? DotistDesign.accent : DotistDesign.faint, lineWidth: 1.5)
-                if task.completed { Circle().fill(DotistDesign.accent); Image(systemName: "checkmark").font(font(calendarColumn ? 8 : 10)).foregroundColor(.white) }
+                if task.completed { Circle().fill(DotistDesign.accent); OpticalSymbol(name: "checkmark", size: calendarColumn ? 8 : 10, weight: .bold).foregroundColor(.white) }
             }.frame(width: calendarColumn ? 14 : 18, height: calendarColumn ? 14 : 18).contentShape(Rectangle())
         }.buttonStyle(.plain).modifier(DotistFocusRing())
             .accessibilityLabel(Text(model.text(task.completed ? "恢复 {title}" : "完成 {title}").replacingOccurrences(of: "{title}", with: task.title)))
@@ -425,7 +428,7 @@ private struct ViewTaskCard: View {
 
     private var adjustmentButton: some View {
         Button { open = true } label: {
-            Image(systemName: "ellipsis").font(font(12, .medium)).frame(width: 18, height: 18).contentShape(Rectangle())
+            OpticalSymbol(name: "ellipsis", size: 12, weight: .medium).frame(width: 18, height: 18).contentShape(Rectangle())
         }.buttonStyle(.plain).modifier(DotistFocusRing())
             .foregroundColor(hovered || open ? DotistDesign.ink : DotistDesign.faint)
             .accessibilityLabel(Text(model.text("调整任务") + " " + task.title))
@@ -444,7 +447,7 @@ private struct ViewTaskCard: View {
                 HStack(alignment: .center, spacing: 4) {
                     completionButton
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(model.group(for: task)?.name ?? "").font(DotistDesign.nameFont(10, language: model.language)).foregroundColor(groupColor).lineLimit(1)
+                        OpticalText(title: model.group(for: task)?.name ?? "", size: 10, serif: true, language: model.language).foregroundColor(groupColor).lineLimit(1)
                         if task.parentId != nil { Text(model.text("子任务")).lineLimit(1) }
                     }.font(font(10)).foregroundColor(DotistDesign.muted).frame(maxWidth: .infinity, alignment: .leading)
                     adjustmentButton
@@ -453,17 +456,17 @@ private struct ViewTaskCard: View {
                     Text(model.text("已逾期")).font(font(10)).foregroundColor(DotistDesign.danger)
                 }
             } else {
-                HStack(alignment: .top, spacing: 7) {
+                HStack(alignment: .center, spacing: 7) {
                     if !compact {
                         completionButton
-                        Text(task.title).font(font(14)).foregroundColor(task.completed ? DotistDesign.faint : DotistDesign.ink).frame(maxWidth: .infinity, alignment: .leading)
+                        OpticalText(title: task.title, size: 14, language: model.language).foregroundColor(task.completed ? DotistDesign.faint : DotistDesign.ink).frame(maxWidth: .infinity, alignment: .leading)
                             .overlay(TaskDragSource(model: model, task: task, scope: scope, font: DotistDesign.nativeFont(14, language: model.language)).accessibilityHidden(true))
                     } else { Spacer(minLength: 0) }
                     adjustmentButton
                 }
                 if !compact {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(model.group(for: task)?.name ?? "").font(DotistDesign.nameFont(11, language: model.language)).foregroundColor(groupColor)
+                        OpticalText(title: model.group(for: task)?.name ?? "", size: 11, serif: true, language: model.language).foregroundColor(groupColor)
                         if task.parentId != nil { Text(model.text("子任务")) }
                         if let due = task.dueDate { Text(due) }
                         if task.dueDate.map({ $0 < Date().dotistDay }) == true && !task.completed {
@@ -676,7 +679,7 @@ private struct GanttTrack: View {
             let end = distance(last) + (edge == "start" ? 0 : preview)
             let left = dragging ? min(count - 1, max(0, begin)) : max(0, begin)
             let right = dragging ? max(left + 1, min(count, end + 1)) : min(count, end + 1)
-            ZStack(alignment: .topLeading) {
+            ZStack(alignment: .leading) {
                 HStack(spacing: 0) { ForEach(0..<count, id: \.self) { _ in Rectangle().fill(Color.clear).frame(width: width).overlay(Rectangle().fill(DotistDesign.rule).frame(width: 1), alignment: .trailing) } }
                 let today = distance(Date())
                 if today >= 0 && today < count {
@@ -704,7 +707,7 @@ private struct GanttTrack: View {
                             saving = true
                             model.change(completed: finish, failed: finish) { _ = try $0.setDateRange(task.id, start: start, due: due) }
                         }).accessibilityHidden(true))
-                        .offset(x: CGFloat(left) * width, y: 18)
+                        .offset(x: CGFloat(left) * width)
                 }
             }
         }.frame(minHeight: 56).focusable(true).modifier(DotistFocusRing())

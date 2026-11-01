@@ -20,25 +20,24 @@ struct GroupManager: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Button(action: close) { Image(systemName: "chevron.left").frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("返回任务列表")))
-                Text(model.text("分组")).font(font(14, .semibold))
-                Button(model.text("标签"), action: tags).buttonStyle(.plain).modifier(DotistFocusRing()).font(font(14, .semibold)).foregroundColor(DotistDesign.faint)
+            HStack(alignment: .opticalCenter, spacing: 8) {
+                Button(action: close) { OpticalSymbol(name: "chevron.left", size: 11).frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("返回任务列表")))
+                OpticalText(title: model.text("分组"), size: 14, weight: .semibold, language: model.language)
+                Button(action: tags) { OpticalText(title: model.text("标签"), size: 14, weight: .semibold, language: model.language) }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.faint)
                 Spacer()
-                Text(model.text("{n} 个").replacingOccurrences(of: "{n}", with: "\(model.visibleGroups.count)")).font(font(12)).foregroundColor(DotistDesign.muted)
+                OpticalText(title: model.text("{n} 个").replacingOccurrences(of: "{n}", with: "\(model.visibleGroups.count)"), size: 12, language: model.language).foregroundColor(DotistDesign.muted)
             }.padding(.horizontal, 16).frame(height: 44)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(model.visibleGroups.enumerated()), id: \.element.id) { index, group in
-                        HStack(spacing: 8) {
-                            Image(systemName: "line.3.horizontal")
+                        HStack(alignment: .opticalCenter, spacing: 8) {
+                            OpticalSymbol(name: "line.3.horizontal", size: 11)
                                 .foregroundColor(hovered == group.id ? DotistDesign.muted : DotistDesign.faint)
                                 .frame(width: 18)
                             if renaming == group.id {
-                                TextField(model.text("分组名称"), text: $name, onEditingChanged: { active in if !active { save(group) } }, onCommit: { save(group) })
-                                    .textFieldStyle(.plain).modifier(DotistFocusRing()).font(font(14, .semibold, serif: true))
+                                OpticalInput(text: $name, placeholder: model.text("分组名称"), font: DotistDesign.nativeFont(14, weight: .semibold, serif: true, language: model.language), focusOnAppear: true, commit: { save(group) }, blur: { save(group) }).frame(height: 24)
                             } else {
-                                Button { begin(group) } label: { Text(group.name).font(font(14, .semibold, serif: true)).frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain).modifier(DotistFocusRing()).disabled(group.id == DotistGroup.inboxID)
+                                Button { begin(group) } label: { OpticalText(title: group.name, size: 14, weight: .semibold, serif: true, language: model.language).frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain).modifier(DotistFocusRing()).disabled(group.id == DotistGroup.inboxID)
                             }
                             Button { colorGroup = group.id } label: {
                                 ManagerColorSwatch(color: DotistGroupColor(rawValue: group.color), selected: false)
@@ -49,7 +48,7 @@ struct GroupManager: View {
                                         model.setGroupColor(group.id, color); colorGroup = nil
                                     }.padding(12)
                                 }
-                            Button { model.deleteGroup(group) } label: { Image(systemName: "xmark").font(font(11)).frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing())
+                            Button { model.deleteGroup(group) } label: { OpticalSymbol(name: "xmark", size: 11).frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing())
                         }.frame(height: 40).contentShape(Rectangle())
                             .onHover { hovered = $0 ? group.id : nil }
                             .modifier(ManagerReorderRow(id: group.id, index: index, count: model.visibleGroups.count, drag: $drag) { model.moveGroup(group.id, toIndex: $0) })
@@ -60,7 +59,7 @@ struct GroupManager: View {
                         addingGroup = true
                         model.change(completed: { addingGroup = false; if adding.trimmingCharacters(in: .whitespacesAndNewlines) == value { adding = "" } }, failed: { addingGroup = false }) { _ = try $0.addGroup(name: value) }
                     }).textFieldStyle(.plain).modifier(DotistFocusRing()).font(font(13)).padding(.leading, 26).frame(height: 32).padding(.top, 12)
-                    Text(model.text("该分组的任务会移到‘无分组’(全部)里,不会被删除"))
+                    Text(model.text("该分组的任务会移到「无分组」（全部）里，不会被删除。"))
                         .font(font(12)).foregroundColor(DotistDesign.muted).padding(.top, 10)
                 }.padding(.horizontal, 16)
             }
@@ -134,7 +133,7 @@ struct ManagerColorSwatch: View {
     var body: some View {
         Circle().fill(DotistTheme.swatch(color)).frame(width: 16, height: 16)
             .overlay(Circle().stroke(DotistDesign.muted, lineWidth: color == .none || selected ? 1 : 0))
-            .overlay { if selected { Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundColor(color == .none ? DotistDesign.ink : .white) } }
+            .overlay { if selected { OpticalSymbol(name: "checkmark", size: 9, weight: .bold).foregroundColor(color == .none ? DotistDesign.ink : .white) } }
             .frame(width: 24, height: 24).contentShape(Rectangle())
     }
 }

@@ -1,12 +1,44 @@
 import AppKit
+import Combine
 import DotistCore
 import SwiftUI
+
+/// One shared store keeps independent panels in sync without touching task data.
+@MainActor
+final class TaskGroupCollapseStore: ObservableObject {
+    static let shared = TaskGroupCollapseStore()
+    static let key = "dotist.collapsedGroups"
+    @Published private(set) var ids: Set<String>
+    private let defaults: UserDefaults
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        ids = Set(defaults.stringArray(forKey: Self.key) ?? []).subtracting([DotistGroup.inboxID])
+    }
+    func setCollapsed(_ collapsed: Bool, groupID: String) {
+        guard groupID != DotistGroup.inboxID else { return }
+        var next = ids
+        if collapsed { next.insert(groupID) } else { next.remove(groupID) }
+        guard next != ids else { return }
+        defaults.set(next.sorted(), forKey: Self.key)
+        ids = next
+    }
+    static func showsContents(groupID: String, hasHeader: Bool, collapsed: Set<String>) -> Bool {
+        !hasHeader || groupID == DotistGroup.inboxID || !collapsed.contains(groupID)
+    }
+}
 
 @MainActor
 final class TaskPanelState: ObservableObject {
     @Published var groupID: String?
     @Published var scope: String
     @Published var activeTag: String?
+    @Published private(set) var collapsedGroups: Set<String> = []
+    private let collapseStore: TaskGroupCollapseStore
+    private var collapseObservation: AnyCancellable?
+    func setGroupCollapsed(_ collapsed: Bool, id: String) { collapseStore.setCollapsed(collapsed, groupID: id) }
+    func showsGroupContents(_ id: String, hasHeader: Bool = true) -> Bool {
+        TaskGroupCollapseStore.showsContents(groupID: id, hasHeader: hasHeader, collapsed: collapsedGroups)
+    }
     // Legacy navigation bookkeeping only; descendants always render expanded.
     @Published var expanded: Set<String> = []
     @Published var folded: Set<String> = []
@@ -27,9 +59,12 @@ final class TaskPanelState: ObservableObject {
         }
     }
 
-    init(groupID: String? = nil, scope: String = "all") {
+    init(groupID: String? = nil, scope: String = "all", collapseStore: TaskGroupCollapseStore? = nil) {
         self.groupID = groupID
         self.scope = scope
+        let store = collapseStore ?? .shared
+        self.collapseStore = store
+        collapseObservation = store.$ids.sink { [weak self] in self?.collapsedGroups = $0 }
     }
 }
 
@@ -61,7 +96,7 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
         panel.minSize = NSSize(width: 320, height: 440)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false // PanelMotion supplies the exterior-only shadow.
         panel.isReleasedWhenClosed = false
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .fullScreenDisallowsTiling]

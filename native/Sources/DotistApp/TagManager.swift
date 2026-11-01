@@ -17,32 +17,32 @@ struct TagManager: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Button(action: close) { Image(systemName: "chevron.left").frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("返回任务列表")))
-                Button(model.text("分组"), action: groups).buttonStyle(.plain).modifier(DotistFocusRing()).font(font(14, .medium)).foregroundColor(DotistDesign.faint)
-                Text(model.text("标签")).font(font(14, .medium))
+            HStack(alignment: .opticalCenter, spacing: 8) {
+                Button(action: close) { OpticalSymbol(name: "chevron.left", size: 11).frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("返回任务列表")))
+                Button(action: groups) { OpticalText(title: model.text("分组"), size: 14, weight: .medium, language: model.language) }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.faint)
+                OpticalText(title: model.text("标签"), size: 14, weight: .medium, language: model.language)
                 Spacer()
-                Text(model.text("{n} 个").replacingOccurrences(of: "{n}", with: "\(model.orderedTagCounts.count)")).font(font(12)).foregroundColor(DotistDesign.muted)
+                OpticalText(title: model.text("{n} 个").replacingOccurrences(of: "{n}", with: "\(model.orderedTagCounts.count)"), size: 12, language: model.language).foregroundColor(DotistDesign.muted)
             }.padding(.horizontal, 16).frame(height: 44)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    if model.orderedTagCounts.isEmpty { Text(model.text("在任务里写 #词 就会有标签，比如：写周报 #sideproject")).font(font(12)).foregroundColor(DotistDesign.muted) }
+                    if model.orderedTagCounts.isEmpty { Text(model.text("在任务里写 #词 就会有标签，比如：写周报 #sideproject。")).font(font(12)).foregroundColor(DotistDesign.muted) }
                     ForEach(Array(model.orderedTagCounts.enumerated()), id: \.element.tag) { index, tag in
-                        HStack(spacing: 8) {
-                            Image(systemName: "line.3.horizontal").foregroundColor(hovered == tag.tag ? DotistDesign.muted : DotistDesign.faint).frame(width: 18)
+                        HStack(alignment: .opticalCenter, spacing: 8) {
+                            OpticalSymbol(name: "line.3.horizontal", size: 11).foregroundColor(hovered == tag.tag ? DotistDesign.muted : DotistDesign.faint).frame(width: 18)
                             if renaming == tag.tag {
-                                TextField(model.text("标签名称"), text: $name, onEditingChanged: { active in if !active { save(tag.tag) } }, onCommit: { save(tag.tag) }).textFieldStyle(.plain).modifier(DotistFocusRing()).font(font(14, .medium))
+                                OpticalInput(text: $name, placeholder: model.text("标签名称"), font: DotistDesign.nativeFont(14, weight: .medium, language: model.language), focusOnAppear: true, commit: { save(tag.tag) }, blur: { save(tag.tag) }).frame(height: 24)
                             } else {
-                                Button("#" + tag.tag) { select(tag.tag); close() }.buttonStyle(.plain).modifier(DotistFocusRing()).font(font(14, .medium)).frame(maxWidth: .infinity, alignment: .leading)
+                                Button { select(tag.tag); close() } label: { OpticalText(title: "#" + tag.tag, size: 14, weight: .medium, language: model.language) }.buttonStyle(.plain).modifier(DotistFocusRing()).frame(maxWidth: .infinity, alignment: .leading)
                             }
-                            Text("\(tag.open)").font(font(12)).foregroundColor(DotistDesign.faint)
-                            Button(model.text("重命名")) { renaming = tag.tag; name = tag.tag }.buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12)).foregroundColor(DotistDesign.faint)
-                            Button { model.deleteTag(tag.tag) } label: { Image(systemName: "trash").frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("移除标签 {tag}").replacingOccurrences(of: "{tag}", with: tag.tag)))
+                            OpticalText(title: "\(tag.open)", size: 12, language: model.language).foregroundColor(DotistDesign.faint)
+                            Button { renaming = tag.tag; name = tag.tag } label: { OpticalText(title: model.text("重命名"), size: 12, language: model.language) }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.faint)
+                            Button { model.deleteTag(tag.tag) } label: { OpticalSymbol(name: "trash", size: 11).frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("移除标签 {tag}").replacingOccurrences(of: "{tag}", with: tag.tag)))
                         }.frame(height: 40).contentShape(Rectangle())
                             .onHover { hovered = $0 ? tag.tag : nil }
                             .modifier(ManagerReorderRow(id: tag.tag, index: index, count: model.orderedTagCounts.count, drag: $drag) { model.moveTag(tag.tag, toIndex: $0) })
                     }
-                    Text(model.text("只移除标题里的 #标签,任务会保留")).font(font(12)).foregroundColor(DotistDesign.muted).padding(.top, 10)
+                    Text(model.text("只移除标题里的 #标签，任务会保留。")).font(font(12)).foregroundColor(DotistDesign.muted).padding(.top, 10)
                 }.padding(.horizontal, 16)
             }
         }.foregroundColor(DotistDesign.ink)

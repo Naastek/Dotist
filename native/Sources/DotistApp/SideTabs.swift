@@ -183,8 +183,7 @@ struct SideTabLabel: View {
     let textOpacity: Double
 
     var body: some View {
-        Text(name)
-            .font(DotistDesign.font(13, weight: selected ? .semibold : .regular, serif: true, language: language))
+        OpticalText(title: name, size: 13, weight: selected ? .semibold : .regular, serif: true, language: language)
             .foregroundStyle(selected || hovered ? DotistDesign.ink : DotistDesign.faint)
             .lineLimit(1)
             .fixedSize()

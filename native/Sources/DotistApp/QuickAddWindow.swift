@@ -28,15 +28,16 @@ struct QuickAddWindow: View {
             HStack(spacing: 14) {
                 if let group {
                     Button { cycle(1) } label: {
-                        Text(model.groupDisplayName(group.id)).font(font(12, .semibold, serif: true))
+                        OpticalText(title: model.groupDisplayName(group.id), size: 12, weight: .semibold, serif: true, language: model.language)
                             .foregroundColor(DotistDesign.ink)
                             .lineLimit(1).frame(minHeight: 24).contentShape(Rectangle())
                     }.buttonStyle(.plain).modifier(DotistFocusRing())
                 }
-                Button(dueIndex < 0 ? model.text("到期日") : model.text(choices[dueIndex].0)) { dueIndex = dueIndex + 1 >= choices.count ? -1 : dueIndex + 1 }
-                    .buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12)).foregroundColor(dueIndex < 0 ? DotistDesign.muted : DotistDesign.accent)
+                Button { dueIndex = dueIndex + 1 >= choices.count ? -1 : dueIndex + 1 } label: {
+                    OpticalText(title: dueIndex < 0 ? model.text("到期日") : model.text(choices[dueIndex].0), size: 12, language: model.language).frame(height: 24)
+                }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(dueIndex < 0 ? DotistDesign.muted : DotistDesign.accent)
                 Spacer()
-                Text(model.error.map { model.text($0) } ?? model.text("回车添加 · Esc 关闭 · Tab 换分组")).font(font(12)).foregroundColor(model.error == nil ? DotistDesign.faint : DotistDesign.danger).lineLimit(1)
+                OpticalText(title: model.error.map { model.text($0) } ?? model.text("回车添加 · Esc 关闭 · Tab 换分组"), size: 12, language: model.language).foregroundColor(model.error == nil ? DotistDesign.faint : DotistDesign.danger).lineLimit(1)
             }.frame(height: 24)
         }.padding(.horizontal, 22).padding(.vertical, 16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .foregroundColor(DotistDesign.ink).background(WindowMaterial(opacity: model.settings.opacity, frost: model.settings.frost)).cornerRadius(18).modifier(DotistTheme(theme: model.settings.theme))
@@ -65,7 +66,8 @@ struct QuickInput: NSViewRepresentable {
     let cycle: (Int) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSTextField {
-        let field = NSTextField()
+        let field = ComposerTextField()
+        field.rowHeight = 30
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
@@ -76,8 +78,8 @@ struct QuickInput: NSViewRepresentable {
     }
     func updateNSView(_ field: NSTextField, context: Context) {
         context.coordinator.parent = self
-        field.placeholderString = placeholder
-        field.font = font
+        field.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [.font: font, .foregroundColor: NSColor(DotistDesign.faint)])
+        (field as? ComposerTextField)?.configure(font: font, reference: text.isEmpty ? placeholder : text)
         if field.stringValue != text { field.stringValue = text }
     }
     final class Coordinator: NSObject, NSTextFieldDelegate {

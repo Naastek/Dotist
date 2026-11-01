@@ -1,5 +1,7 @@
 # Dotist：Mac 第一版设计
 
+> **历史记录，部分内容已被取代。** 当前原生架构见 [native-macos.md](native-macos.md)，当前 UI 决定以 [ui-decisions.md](ui-decisions.md) 为准；以下保留当时方案与验收证据。
+
 ## 范围
 React + TypeScript + Vite 界面由 Tauri 2 承载。Mac 首次启动在主屏幕右上方显示可移动、置顶的轻量清单，并提供菜单栏显示、隐藏及退出。工作、生活、学习三组，支持任务新增、编辑、完成、恢复、删除和组内排序；长列表可滚动。输入法组合输入期间不提交。
 

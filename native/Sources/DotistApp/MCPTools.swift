@@ -108,7 +108,7 @@ struct DotistMCPTools: Sendable {
             case "set_start_date": return try result(store.setStartDate(arguments.taskID(), date: arguments.startDate))
             case "set_task_parent": return try result(store.reparent(arguments.taskID(), parentId: arguments.parentId))
             case "move_task":
-                guard let direction = arguments.direction else { throw TaskStoreError("需要 direction: up 或 down") }
+                guard let direction = arguments.direction else { throw TaskStoreError("需要 direction：up 或 down") }
                 try store.move(arguments.taskID(), direction: direction == .up ? -1 : 1)
             case "list_groups": return try result(store.listGroups())
             case "add_group":

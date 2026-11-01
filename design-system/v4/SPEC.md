@@ -1,166 +1,33 @@
-# Dotist v4 · 定稿规范（方案 A）
+# Dotist v4.2 设计规范
 
-> 对应 `native/Sources/DotistApp`（SwiftUI + AppKit，macOS 26）。v3.x 及更早的 web 组件已废弃，仅作历史参考。
-> 图：`spec.png`（对齐与图标）· `main-light/dark.png` · `menu.png` · `edit.png` · `drag.png` · `undo.png` · `bubble.png`
+> 最终依据：[已锁定的 UI 决定与防回退清单](../../docs/ui-decisions.md)。修改决定前须先与用户确认，并同步该文件、本规范及测试。旧 PNG 是历史示意，不能作为当前实现依据。
 
-## 0. 永久禁用（任何新设计都不得出现）
+## 布局与结构
 
-| 禁用 | 当前代码中的位置 | 替换为 |
-|---|---|---|
-| 按钮 / 标签下方的下划线指示 | 旧 mockup；`RangeCalendar` 第 82 行 6×2 小横条 | 颜色 + 字重 |
-| 条目前的小圆点 | 拖放指示 `Circle().frame(5,5)` | 一条细线 |
-| 选中项左侧竖线 | 旧 mockup 菜单 | 原生 Menu ✓ |
-| 圆角矩形底板表示选中 | `FolderGroupTab`、`DotistGlassTabs`、撤销提示 `surface+cornerRadius(8)` | 颜色 + 字重；提示改为玻璃胶囊 |
-| 编辑时放大字号并加下划线 | 旧 InlineEdit | 原位、同字号，输入区浅色底与光标 |
-| 悬浮球上的任何进度环 / 弧 | `FloatingBubble` track + trim | 删除，只显示剩余数字；任务勾选圆的子任务分段进度保留 |
-| 组色点、面板内的玻璃按钮 / 玻璃标签 | `DotistActionStyle` / `DotistControlGlass` 在面板内 | 纯文字 / 纯图标 |
+- 顶部第一行仅右侧工具栏，无分组标题、下拉菜单及箭头。分组切换为面板左缘外的独立子窗口便签：Liquid Glass 加分组主题色；静止仅露约 10 pt 窄边、不显示文字，鼠标移到耳朵才整体滑出，宽度适配完整组名、不省略；相邻间距 6 pt，「全部」固定第一；上下拖动排序与管理分组共享顺序；靠屏幕左缘翻到右侧并跟随面板移动。守护：`SideTabGeometryTests.swift`；顶部无标题专项暂无测试。
+- 工具栏只有「收起为悬浮球」常驻且始终最右；颜色、任务视图、置顶窗口、固定窗口默认悬停显示，设置可配置常驻／悬停／隐藏及顺序。按住 ⌘ 拖动排序，相邻图标实时挤开。无搜索按钮；⌘K 打开或再次关闭命令面板，面板只有输入框与结果，无标题、快捷键提示和关闭按钮。颜色按钮是填充当前色的圆，色板为圆形色块，选中用外圈、不用对勾。守护：`ToolbarConfigTests.swift`、`PanelInteractionRevisionTests.swift`；命令面板外观和色板选中专项暂无测试。
+- 所有悬停提示使用系统 tooltip（`.help`，约 1 秒），无底部提示行。输入栏组名与日历图标无下箭头；日历仅悬停或聚焦显示，日期文字仅显式设置日期后显示。守护：`ComposerAlignmentTests.swift`（对齐）；其余专项暂无测试。
+- 不再有可见的 Inbox 分组：内部 ID `inbox` 是隐式「无分组」桶，不出现在分组列表、便签或管理中。「全部」视图的无分组任务在最上方且无组头。删除分组将任务移到无分组、不删除任务；删除标签只移除标题中的 `#标签`，任务保留。分组和标签均可按住拖动排序，管理窗口与便签共享分组顺序。守护：`GroupTagThemeTests.swift`、`GroupPanelTypographyTests.swift`、`SideTabGeometryTests.swift`；标签拖动手势专项暂无测试。
+- 分组可设 none 加 8 色，「全部」有默认颜色。面板、悬浮球和便签的 Liquid Glass 按当前分组着色：浅色 16%、深色 18% wash，加同色 tint；提高对比度或降低透明度时使用极淡着色的纸色实底。设置「颜色主题」动态列出所有分组；面板可用颜色按钮或组头右键改色。守护：`PanelColorTests.swift`、`GroupTagThemeTests.swift`、`SettingsLayoutTests.swift`；便签着色专项暂无测试。
 
-**选中表达：颜色 + 字重；任务选中时勾选圆描边为 accent、正文为 Medium。**
+## 任务与交互
 
-- 选中：ink，Sans Medium，或 Serif Semibold。
-- 未选中：faint，Regular。
-- 悬停：muted。
+- 最多 5 层（0..4）。正文左缘 `textX(d)=42+22d`；圆左缘 `circleX(0)=16`、`circleX(d≥1)=textX(d-1)`；顶层圆直径 16 pt、子层 13 pt。正文左对齐，圆心与整块文字垂直居中，右缘对齐 348 pt。守护：`TaskHierarchyTests.swift`、`TaskInteractionTests.swift`、`OpticalAlignmentTests.swift`。
+- 有直接子任务的任务圆按直接子任务数分段，间隙约 8°；N=1 为整圆，超过 12 段封顶并按比例表示；完成段为 accent、未完成段为 checkStroke。行尾 `1/3` 只是文字、不可点击。悬浮球绝不能出现进度环或弧，只显示剩余数字。父任务不可折叠，子任务始终显示；仅分组可点击组头折叠，折叠时组名旁显示小箭头且状态持久化；「已完成」区也可折叠。守护：`TaskInteractionTests.swift`；球无进度环及分组折叠持久化专项暂无测试。
+- Return 新建同级并继续录入，空任务丢弃；Tab 缩进到前一个未选中同级任务，⇧Tab 提升，Esc 取消；空格或 ⌘Return 完成。Shift+点击选范围、⌘+点击增减、Shift+↑/↓ 扩展选择；选中态为圆描边 accent、正文 Medium。多选 Tab 整体归入选中集合之前最近的未选中同级任务。⌘Z／⇧⌘Z 会话内通用撤销／重做，上限 100 步；文本框内由文本框处理撤销。撤销提示 7 秒自动消失，悬停暂停。守护：`TaskInteractionTests.swift`、`TaskHierarchyTests.swift`、`AppModelUndoTests.swift`、`ComposerAlignmentTests.swift`、`PanelInteractionRevisionTests.swift`；各快捷键完整端到端专项暂无测试。
+- 手势拖动参考 Tic：原位的被拖行及子树淡至 35%，目标位置显示同高灰色 ghost，不画跟随光标的浮起副本。水平移动超过 22 pt 缩进步长的 70% 才改变层级；层级大于 0 时画从父任务圆下方至 ghost 圆的圆角 L 形连接线，目标父圆描边 accent。松手一次提交，Esc 取消，多选整组拖；上下边缘 24 pt 自动滚动，开始瞬间页面零位移。单分组视图拖动时输入栏位置变为分组架，包含「无分组」落点。守护：`TaskDragDropTests.swift`、`TaskGestureGeometryTests.swift`、`TaskReorderEngineTests.swift`、`GroupPanelTypographyTests.swift`；连接线视觉专项暂无测试。
+- 任务行是无底色悬停规则的唯一例外：整行 rule 10% 背景、圆角 6 pt、左右各外扩 6 pt；多选 16%，编辑 18%。悬停操作 ＋、日历、× 使用固定列，其右缘在行右缘左侧 88 pt，浮在标题尾部上方；标题尾部 mask 渐隐，不画色块，行尾元信息始终可见可点。整行除圆、元信息及按钮外均可点击编辑。守护：`TaskRowMetadataTests.swift`；背景、mask 及整行点击专项暂无测试。
+- 日期筛选选中 15 pt Medium ink，未选中 13 pt Regular faint，槽宽按选中尺寸预留；「今天」视图不重复显示「今天」分区标题。今天筛选为逾期加今天到期；今天面板分区为「已逾期」「接下来 7 天」「已完成」。全部包括所有未完成任务（含无分组及深层）；明天为明天；本周遵循系统周起始日；未来 7 天为 T..T+6；另有已逾期、无日期；已完成无数量上限、按更新时间倒序；自定义范围包含两端。子任务命中时保留灰显的祖先上下文。守护：`TaskFilteringTests.swift`、`DateFilterModelTests.swift`；字号与灰显视觉专项暂无测试。精确定义见 `native/Sources/DotistCore/TaskFiltering.swift`：面板通过 `todaySections` 组合逾期与今日结果；底层 `filter(scope: "today")` 单独返回今日范围。
 
-选中不加底板；编辑输入区使用下述浅色底。
+## 视觉规范
 
-## 1. 网格与尺寸
+- 衬线体仅用于名字：组头、今天视图分区标题、便签、输入栏组名、拖动分组架、跨组行尾组名、管理窗口分组名、快速添加组名、甘特组名。日期大标题、设置标题、管理窗口切换标题、日历年月、悬浮球数字、任务正文等均用无衬线。统一经 `DotistDesign.nameFont`／`textFont`，禁止绕过封装使用系统字体；MCP 配置等宽文本除外。守护：`GroupPanelTypographyTests.swift`；所有调用点专项暂无测试。
+- 同行图标与文字以墨迹中心对齐，差不超过 0.5 pt；统一使用 `Design/DotistOptical.swift` 封装与实测偏移表，禁止零散 `offset` 补偿。离屏渲染守护：`OpticalAlignmentTests.swift`、`ComposerAlignmentTests.swift`。
+- 中文使用全角标点（，。：；！？（）「」…——）；中文与英文单词、数字单位间留一个半角空格；说明句加句号，按钮、标题、菜单不加句末标点。en／ja／zh-TW 按各自规范；locales 键与源码中文一致。守护：`LocalizationPunctuationTests.swift`。
+- 设置为系统设置式布局：左侧栏纯文字无图标、顶部 Liquid Glass 搜索气泡；右侧分组容器、44 pt 行、垂直居中、小开关，容器间有清晰区域；颜色主题动态列出分组。守护：`SettingsLayoutTests.swift`、`SettingsSearchTests.swift`、`OpticalAlignmentTests.swift`。
+- 面板和悬浮球使用清晰双层阴影；阴影窗口内部必须镂空，不得留残影。守护：`PanelShadowTests.swift`。
+- 相对 v4 原禁用项，允许便签耳朵形状及玻璃、任务行悬停背景、编辑态底、分段进度圆。仍禁止悬浮球进度环／弧、按钮或标签下划线指示、条目前小圆点、选中项左侧竖线、编辑时放大字号加下划线、面板内再嵌玻璃按钮、分组色点。守护：上述相关测试；其余视觉禁项暂无专项测试。
 
-面板 364 × 620，圆角 20（`DotistDesign.windowCornerRadius`）。
+## 尺寸与组件
 
-| 竖线 | x | 用途 |
-|---|---|---|
-| 左缘 | 16 | 日期行、组名、顶层勾选圆左缘、输入栏组名 |
-| 正文层级 0–4 | 42 / 64 / 86 / 108 / 130 | 各层正文左缘；下一层勾选圆左缘对齐上一层正文 |
-| 右缘 | 348 | 元信息和最右图标字形右缘 |
-
-最多 5 层（d=0..4）。`textX(d)=42+22d`；`circleX(0)=16`，`circleX(d≥1)=textX(d-1)`。换行续行仍对齐本层 textX；勾选圆圆心与整个文字块垂直居中。
-
-| 行 | 高 | 备注 |
-|---|---|---|
-| 第一行：工具 | 44 | padding 左 16 / 右 10 |
-| 第二行：日期范围 | 30 | 底部 4 |
-| 组头 | 30 | 第一个组距顶 6，组间距 20 |
-| 任务 | ≥ 32 | 上下 6，正文行高 20 |
-| 子任务 | ≥ 28 | 上下 4 |
-| 已完成折叠行 | 28 | |
-| 输入栏 | 52 | 顶部 0.5pt rule |
-
-空组只占一行组头（组名为 faint，不显示数量），不再显示“还没有任务”。
-
-## 2. 字体
-
-| 角色 | 字体 | 字号 / 行高 | 字重 | 颜色 |
-|---|---|---|---|---|
-| 组名 / 今天视图分区名 | Serif | 15 / 22 | Semibold | ink；空组 faint；“已逾期” danger |
-| 任务 / 子任务正文 | Sans | 13 / 20 | Regular | ink；已完成 faint（不加删除线） |
-| 日期范围 | Sans | 13 / 20 | 选中 Medium | 选中 ink，其他 faint |
-| 到期日 | Sans | 12 / 20 | Regular | muted；今天 accent；逾期 danger |
-| 子任务计数 `1/3 ⌄` | Sans | 12 / 20 | Regular | faint |
-| 跨组视图中的组名 | Serif | 12 / 20 | Semibold | faint |
-| 输入栏组名 | Serif | 13 / 20 | Semibold | muted |
-| 输入栏正文 | Sans | 13 / 20 | Regular | ink；占位 faint；光标 accent（`.tint(DotistDesign.accent)`） |
-
-日期范围行的字号统一为 13，取消 17 / 13 / 12 的跳变。每个槽位的宽度按 Medium 字重预先量好，切换选中时不会抖动。
-
-## 3. 图标（统一为 SF Symbols，`.regular`，不再混用自绘路径）
-
-Logo 只出现在菜单栏和 App 图标里，不再兼任面板里的搜索按钮。
-
-| 位置 | Symbol | 字号 | 点击区 | 颜色 |
-|---|---|---|---|---|
-| 顶栏：搜索 | `magnifyingglass` | 14pt（视觉约 16） | 28 × 28 | muted，悬停 ink |
-| 顶栏：视图 | `rectangle.split.2x1`（或现有 views 字形） | 14pt | 28 × 28 | 同上 |
-| 顶栏：更多 | `ellipsis` | 14pt | 28 × 28 | 同上；“固定”“锁定”收进这里 |
-| 顶栏：收起 | `arrow.down.right.and.arrow.up.left` | 14pt | 28 × 28 | 同上 |
-| 日期行 / 输入栏：日历 | `calendar` | 13pt | 24 × 24 | muted |
-| 行操作（悬停或键盘焦点时） | `plus`、`calendar`、`xmark` | 11pt | 22 × 22 | muted；**替换**右侧元信息，不叠加、不加底色 |
-| 组头操作（悬停时） | `arrow.up.right.square`、`plus` | 11pt | 22 × 22 | faint |
-| 展开箭头 | `chevron.down` / `chevron.right` | 8–9pt，semibold | 随文字 | faint，与文字基线对齐 |
-| 菜单勾选 | 系统 ✓ | — | — | 原生 `Menu` / `Picker`，不自绘 |
-
-对齐规则：
-
-- 图标按**字形**对齐，而不是按 frame 对齐。顶栏 frame 右缘在 354，字形右缘在 348。
-- 竖向用 `.frame(height:)` 居中到所在行的文本行盒，即 20pt 行高的中心。
-
-## 4. 勾选圆
-
-- 尺寸：任务 16pt，放在 18 × 20 的框里；子任务 13pt，放在 14 × 20 的框里。
-- 描边：1.25pt，颜色为 rule 的加深灰：浅色 `#9a9aa0`，深色 `#77777f`。
-- 完成：accent 实心，内含 9pt 勾（`checkmark`，heavy，白色；深色模式用 paper 色）。
-- 键盘焦点：描边变为 accent。不加底板，不用系统的 focus ring。
-- 有直接子任务时，勾选圆分为 N 段（N 为直接子任务数），段间约 8°；N=1 为整圆。已完成子任务的段用 accent 描边或填色，未完成的段用 checkStroke。自身完成时仍用实心 accent 圆加对勾。行尾保留 `1/3 ⌄`，点击展开 / 收起。
-
-## 5. 各组件
-
-**分组切换与工具栏**
-
-- 顶部不显示分组标题或下拉箭头。分组切换使用面板左缘外的便签标签：静止时露出窄边，指针靠近时整体滑出显示全称。
-- 右上工具栏仅“收起”常驻，其余工具悬停显示；设置中可配置顺序和可见性，按住 ⌘ 可左右拖动排序。
-- 悬停提示使用系统 tooltip（`.help`），不显示底部提示行。
-
-**日期范围行**：今天 · 全部 · 明天 · 本周 · 已逾期，右侧放日历按钮。选中项只做颜色 + 字重的变化。
-
-**任务行**
-
-- 结构：按层级的 circleX 和 textX 布局，勾选圆与整个文字块垂直居中；正文换行保持左缘。
-- 悬停：元信息隐藏，行操作出现在同一位置，行背景不变。
-
-**原位编辑**
-
-- 同一个位置、同样 13 / 20、同样颜色，光标为 accent。
-- 输入区用 `rule` 18% 不透明度的浅色底，圆角 6，左右各外扩 6；文字不位移，不加下划线、不放大。
-- 其他行不再变暗，也不再显示提示行（快捷键放在“⋯ → 键盘快捷键”）。
-
-**多选与缩进**：Shift+点击选择范围，⌘+点击增减，Shift+↑/↓ 扩展选择；选中态为勾选圆描边 accent、正文 Medium，不加底。Tab 将选中任务全部归为选中集合之前最近一个未选中的同级任务的子任务；⇧Tab 提升一级；Esc 清除选择；Return 在行上新建同级任务。层级限制为 0..4。
-
-**已完成折叠**：`›` 放在 18 宽的勾选列里居中，文字“已完成 3”为 faint、12pt。
-
-**拖放**
-
-- 参考 Tic：被拖行块浮起，仅沿垂直方向跟随光标；其余行约 0.18s 快速平移让开。
-- 目标处显示同高 ghost 占位行，勾选圆描边和文字均为 35% 透明度。水平拖动超过一个缩进步长（22pt）的 70% 才改变层级；ghost 缩进同步变化，目标父任务的勾选圆描边变 accent 提示。
-- 松手一次性提交，Esc 取消；多选时整组一起拖。靠近列表上下边缘 24pt 自动滚动。层级限制为 0..4。
-- 拖动时输入栏可变形为分组架：玻璃胶囊，高 48，组名为 Serif 14。悬停目标 ink，其余 faint。
-
-**撤销提示**
-
-- 玻璃胶囊（`.glassEffect(.regular, in: .capsule)`），高 36，浮在输入栏上方 12。
-- 文字为 muted、13pt；“撤销”为 accent Medium。4 秒后淡出。
-
-**输入栏**：`Inbox`（Serif 13，muted，无下箭头）→ 正文 → 日历图标，左右 padding 16 / 11。日历图标仅悬停显示，日期文字仅显式设置日期时显示。标签建议使用浮起的玻璃，不用 surface 底板。
-
-**日历弹层（RangeCalendar）**
-
-- 今天：ink Semibold。
-- 选中的端点：accent Semibold。
-- 区间内的日期：ink。
-- 其他日期：muted；不在本月的日期：faint。
-- 删除实心圆和底部小横条。
-
-**视图窗口（ViewsWindow）**：`DotistGlassTabs` 改为与日期行相同的文字切换；`DotistActionStyle` 的玻璃按钮改为纯文字按钮（accent）。设置窗口保留系统 `Picker(.segmented)`，因为那是系统控件。
-
-**悬浮球 / 横条**
-
-- 直径 48（与代码一致），`.glassEffect(.regular.interactive(), in: .circle)`。
-- 中间只显示剩余数量，Sans Semibold 20；全部完成显示 0。
-- 悬停时，同一块玻璃（共用 `glassEffectID`）横向拉伸成 250 × 48 的横条：左侧是下一件任务（13 Medium）加上“组 · 到期”（12 muted），数字保持在右侧原位。
-- **无任何进度环或弧，只显示剩余数字。**
-
-## 6. Liquid Glass 分层
-
-1. 面板是唯一常驻的玻璃：`.glassEffect(.regular, in: .rect(cornerRadius: 20))`。用户的透明度设置只调节叠在上面的 paper 色浓度。面板本身不加 `.interactive()`。
-2. 内容直接印在玻璃上；编辑输入区使用 rule 18% 浅色底。
-3. 临时浮层各自是独立的玻璃：菜单、日历、分组架、撤销提示、搜索、悬浮球。它们放在 `GlassEffectContainer` 里，以便融合和变形。
-4. 任何一点最多叠两层玻璃。开启“减少透明度”时，改用 paper 实色。
-
-## 7. 代码改动清单（供实现）
-
-| 文件 | 改动 |
-|---|---|
-| MainWindow.swift | 左缘便签切换分组；工具栏配置与悬停；五层对齐、子任务分段进度、多选与拖放；编辑浅色底；输入栏和组头更新 |
-| DotistDesign.swift | 删除 `DotistGlassTabs` 的胶囊选中，改为文字切换；面板内不再使用 `DotistActionStyle`；`DotistFocusRing` 改为只变色 |
-| DotistIcon.swift | 顶栏改用 SF Symbols；仅保留 Logo 字形 |
-| PanelMotion.swift | `FloatingBubble` 删除 track 和 trim 两个圆 |
-| RangeCalendar.swift | 删除端点实心圆和小横条，改为颜色 + 字重 |
-| ViewsWindow.swift | `DotistGlassTabs` / `DotistActionStyle` 按上表替换 |
+面板基准 364 × 620 pt、圆角 20 pt；首行工具栏 44 pt，日期行 30 pt，组头 30 pt，顶层任务至少 32 pt，子任务至少 28 pt，输入栏 52 pt。详见 `components/` 与 `tokens.json`；这些示意不取代上面的锁定决定。

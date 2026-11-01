@@ -6,10 +6,12 @@ struct ShortcutRecorder: NSViewRepresentable {
     let label: String
     let empty: String
     let recordingText: String
+    var language = "en"
     let begin: () -> Void
     let finish: (String?) -> Void
     func makeNSView(context: Context) -> ShortcutButton {
         let button = ShortcutButton()
+        button.cell = OpticalShortcutCell(textCell: "")
         button.isBordered = false
         button.focusRingType = .none
         button.setButtonType(.momentaryChange)
@@ -22,6 +24,7 @@ struct ShortcutRecorder: NSViewRepresentable {
         return button
     }
     func updateNSView(_ button: ShortcutButton, context: Context) {
+        button.font = DotistDesign.nativeFont(13, language: language)
         button.begin = begin
         button.finish = finish
         button.recordingText = recordingText
@@ -44,10 +47,7 @@ final class ShortcutButton: NSButton {
         return accepted
     }
     override func draw(_ dirtyRect: NSRect) {
-        if window?.firstResponder === self {
-            NSColor.labelColor.withAlphaComponent(0.06).setFill()
-            NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
-        }
+        contentTintColor = window?.firstResponder === self ? NSColor(DotistDesign.accent) : NSColor(DotistDesign.ink)
         super.draw(dirtyRect)
     }
     override func viewDidMoveToWindow() {
@@ -86,5 +86,12 @@ final class ShortcutButton: NSButton {
         recording = false
         title = normalTitle
         finish(value)
+    }
+}
+
+private final class OpticalShortcutCell: NSButtonCell {
+    override func titleRect(forBounds rect: NSRect) -> NSRect {
+        guard let font else { return super.titleRect(forBounds: rect) }
+        return TextLineGeometry(font: font, in: super.titleRect(forBounds: rect), sample: title).lineRect
     }
 }

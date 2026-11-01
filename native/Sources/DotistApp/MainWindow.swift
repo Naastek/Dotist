@@ -102,7 +102,20 @@ struct MainWindow: View {
             }
         }
         .coordinateSpace(name: Self.listSpace)
-        .overlay(alignment: .topLeading) { ghostConnector }
+        .overlay(alignment: .topLeading) {
+            ghostConnector
+            if let drag {
+                TaskLiftedBlock(drag: drag, motion: dragMotion) { row in
+                    rowContent(row.task, children: model.children(of: row.task), sub: row.sub, allTasks: row.allTasks, previous: nil,
+                               hideDue: row.hideDue, titleParts: model.tags(for: row.task), actionsVisible: false)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .allowsHitTesting(false)
+                .mask(alignment: .topLeading) {
+                    Rectangle().frame(width: listViewport.width, height: listViewport.height).offset(x: listViewport.minX, y: listViewport.minY)
+                }
+            }
+        }
         .background(TaskReorderInteractionGuard(rowFrames: rowFrames.map(\.frame) + Array(toolbarFrames.values), dragging: drag != nil, cancel: cancelReorder, undoRedo: handleUndoShortcut))
         .onPreferenceChange(TaskListRowFrame.Key.self) { if rowFrames != $0 { rowFrames = $0 } }
         .onPreferenceChange(TaskListGroupFrame.Key.self) { if groupFrames != $0 { groupFrames = $0 } }
@@ -229,10 +242,10 @@ struct MainWindow: View {
 
     @ViewBuilder private var undoToast: some View {
         if undoToastVisible, let undo = model.undo {
-            HStack(spacing: 8) {
-                Text(model.text(undo.group ? "已删除分组「{title}」，任务已移至无分组" : "已删除「{title}」").replacingOccurrences(of: "{title}", with: undo.title)).lineLimit(1)
-                Button(model.text("撤销")) { model.restore() }.font(font(13, .medium)).foregroundColor(DotistDesign.accent)
-                Button { undoToastVisible = false } label: { Image(systemName: "xmark").font(font(11)).frame(width: 22, height: 22) }
+            HStack(alignment: .opticalCenter, spacing: 8) {
+                OpticalText(title: model.text(undo.group ? "已删除分组「{title}」，任务已移至无分组" : "已删除「{title}」").replacingOccurrences(of: "{title}", with: undo.title), size: 13, language: model.language).lineLimit(1)
+                Button { model.restore() } label: { OpticalText(title: model.text("撤销"), size: 13, weight: .medium, language: model.language) }.foregroundColor(DotistDesign.accent)
+                Button { undoToastVisible = false } label: { OpticalSymbol(name: "xmark", size: 11).frame(width: 22, height: 22) }
                     .accessibilityLabel(Text(model.text("关闭")))
             }.buttonStyle(.plain).font(font(13)).foregroundColor(DotistDesign.muted)
                 .padding(.leading, 16).padding(.trailing, 6).frame(height: 36)
@@ -369,9 +382,53 @@ struct MainWindow: View {
         let shelf = shelfFrames.first(where: { $0.value.contains(location) })?.key
         if shelfTarget != shelf { shelfTarget = shelf }
         if let shelf {
-            let target = TaskReorderEngine.Target(groupID: shelf, slot: Int.max, level: 0, parentID: nil, beforeID: nil)
-            if next.target != target { next.target = target; drag = next }
+            let wasCollapsed = state.collapsedGroups.contains(shelf)
+            if wasCollapsed {
+                withAnimation(groupCollapseAnimation) { state.setGroupCollapsed(false, id: shelf) }
+                next.expandedDropGroup = shelf
+            }
+            let target = TaskCollapsedGroupDrop.target(groupID: shelf)
+            if next.target != target || wasCollapsed { next.target = target; drag = next }
             return
+        }
+        // A collapsed header is a whole-group destination. Keep its append
+        // target while its newly revealed rows animate under the pointer.
+        let hoveredRegion = groupFrames.first { $0.frame.contains(location) }
+        if let region = hoveredRegion, state.collapsedGroups.contains(region.id) {
+            withAnimation(groupCollapseAnimation) { state.setGroupCollapsed(false, id: region.id) }
+            next.expandedDropGroup = region.id
+            next.target = TaskCollapsedGroupDrop.target(groupID: region.id)
+            next.region = region.region
+            next.ghostBeforeID = nil
+            next.ghostAfterID = nil
+            next.targetIsEmpty = true
+            drag = next
+            return
+        }
+        if let expanded = next.expandedDropGroup {
+            if let region = hoveredRegion, region.id == expanded {
+                next.target = TaskCollapsedGroupDrop.target(groupID: expanded)
+                next.region = region.region
+                next.ghostBeforeID = nil
+                // The group's end placeholder follows all open task trees.
+                next.ghostAfterID = nil
+                next.targetIsEmpty = true
+                if drag?.target != next.target || drag?.region != next.region { drag = next }
+                return
+            }
+            // Rebase once after leaving the expanded group. Strip the live
+            // placeholder so that it cannot feed back into pointer projection.
+            let gap = showsInsertionGhost ? ghostFrame : .zero
+            next.baselineRows = rowFrames.map { row in
+                var row = row
+                row.frame = TaskCollapsedGroupDrop.removingGap(row.frame, gap: gap)
+                return row
+            }
+            next.baselineGroups = groupFrames.map { group in
+                TaskListGroupFrame(id: group.id, region: group.region, frame: TaskCollapsedGroupDrop.removingGap(group.frame, gap: gap))
+            }
+            next.scrollOriginY = reorderRuntime.scrollOriginY
+            next.expandedDropGroup = nil
         }
         let logicalY = showsInsertionGhost ? TaskDragGeometry.pointerY(location.y, excludingGhost: ghostFrame) : location.y
         let scrollDelta = reorderRuntime.scrollOriginY - next.scrollOriginY
@@ -385,7 +442,7 @@ struct MainWindow: View {
             ?? groups.filter { $0.id == target?.groupID }.min { abs($0.frame.midY - scrollDelta - logicalY) < abs($1.frame.midY - scrollDelta - logicalY) }
         // Frozen pre-drag geometry prevents a newly inserted gap from
         // feeding back into target selection or shifting the scroll origin.
-        guard target != next.target || region?.region != next.region else { return }
+        guard target != next.target || region?.region != next.region || drag?.expandedDropGroup != next.expandedDropGroup else { return }
         let rest = rows.filter { $0.groupID == target?.groupID && !next.blockIDs.contains($0.id) }
         let slot = target?.slot ?? 0
         next.target = target
@@ -525,7 +582,7 @@ struct MainWindow: View {
                     Circle().fill(color == .none ? Color.clear : DotistTheme.swatch(color))
                         .overlay { if color == .none { Circle().strokeBorder(DotistDesign.faint, lineWidth: 1) } }
                         .frame(width: 14, height: 14)
-                } else { Image(systemName: symbol).font(font(14)) }
+                } else { OpticalSymbol(name: symbol, size: 14) }
             }.frame(width: 28, height: 28).contentShape(Rectangle())
         }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted)
             .help(label).accessibilityLabel(Text(label)).accessibilityIdentifier("toolbar:\(item.rawValue)")
@@ -595,11 +652,11 @@ struct MainWindow: View {
                     ForEach(model.settings.filters, id: \.self) { id in
                         DraggableFilterButton(title: model.text(filterLabel(id)), selected: customStart == nil && state.scope == id, language: model.language) {
                             state.scope = id; customStart = nil; customEnd = nil
-                        }
+                        }.accessibilityIdentifier("date-filter:\(id)")
                     }
                 }
             }
-            Button { showCalendar.toggle() } label: { Image(systemName: "calendar").font(font(13)).frame(width: 24, height: 24).contentShape(Rectangle()).foregroundColor(customStart == nil ? DotistDesign.muted : DotistDesign.accent) }
+            Button { showCalendar.toggle() } label: { OpticalSymbol(name: "calendar", size: 13).frame(width: 24, height: 24).contentShape(Rectangle()).foregroundColor(customStart == nil ? DotistDesign.muted : DotistDesign.accent) }
                 .buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("日历")))
                 .popover(isPresented: $showCalendar) {
                     RangeCalendar(model: model, start: customStart ?? Date().dotistDay, end: customEnd ?? Date().dotistDay, choose: { start, end in
@@ -608,22 +665,23 @@ struct MainWindow: View {
                         customEnd = end
                     }, close: { showCalendar = false })
                 }
-        }.padding(.leading, 16).padding(.trailing, 11).padding(.bottom, 4).frame(height: 30).background(WindowDragArea())
+        }.padding(.leading, 16).padding(.trailing, 11).frame(height: 30).background(WindowDragArea())
     }
 
     private func toolbarButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).font(font(14)).frame(width: 28, height: 28).contentShape(Rectangle()) }
+        Button(action: action) { OpticalSymbol(name: symbol, size: 14).frame(width: 28, height: 28).contentShape(Rectangle()) }
             .buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted).help(label).accessibilityLabel(Text(label))
     }
 
     private var tagBar: some View {
         HStack(spacing: 14) {
             ForEach(model.tagCounts.filter { $0.open > 0 }) { tag in
-                Button("#" + tag.tag) { state.activeTag = state.activeTag == tag.tag ? nil : tag.tag }
-                    .buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12, state.activeTag == tag.tag ? .medium : .regular)).foregroundColor(state.activeTag == tag.tag ? DotistDesign.ink : DotistDesign.faint)
+                Button { state.activeTag = state.activeTag == tag.tag ? nil : tag.tag } label: {
+                    OpticalText(title: "#" + tag.tag, size: 12, weight: state.activeTag == tag.tag ? .medium : .regular, language: model.language).frame(height: 24)
+                }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(state.activeTag == tag.tag ? DotistDesign.ink : DotistDesign.faint)
             }
             Spacer()
-            Button(model.text("管理…")) { manageTags = true }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.faint)
+            Button { manageTags = true } label: { OpticalText(title: model.text("管理…"), size: 12, language: model.language).frame(height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.faint)
         }.font(font(12)).padding(.horizontal, 16).frame(height: 24)
     }
 
@@ -659,60 +717,79 @@ struct MainWindow: View {
     }
 
     private func taskGroup(_ group: DotistGroup, showsHeader: Bool = true) -> some View {
-            let roots = showsHeader ? model.ordered(panelTasks.filter { $0.category == group.id && $0.parentId == nil })
-                : model.ungroupedTasks.filter { root in panelTasks.contains { $0.id == root.id } }
-            let openResult = model.filteredTasks(scope: "all", groupID: group.id, tag: state.activeTag)
-            let completedResult = model.filteredTasks(scope: "done", groupID: group.id, tag: state.activeTag)
-            let open = openResult.roots
-            // A completed descendant belongs to its visible parent's full tree.
-            // Only roots absent from the open trees belong in the folded section.
-            let openRootIDs = Set(open.map(\.id))
-            let completed = completedResult.roots.filter { !openRootIDs.contains($0.id) }
-            let firstGroup = model.visibleGroups.first { state.groupID == nil || $0.id == state.groupID }?.id
-            let firstSection = !showsHeader || (group.id == firstGroup && (state.groupID != nil || model.ungroupedTasks.isEmpty))
-            return VStack(alignment: .leading, spacing: 0) {
-                if showsHeader {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(group.name).font(font(15, .semibold, serif: true)).foregroundColor(roots.isEmpty ? DotistDesign.faint : DotistDesign.ink)
-                    }.frame(maxWidth: .infinity, alignment: .leading).frame(height: 30).padding(.top, 4)
-                        .overlay(alignment: .trailing) {
-                            HStack(spacing: 2) {
-                                Button { beginGroupDraft(group, after: open.last) } label: { Image(systemName: "plus").frame(width: 22, height: 22) }
-                                    .accessibilityLabel(Text(model.text("添加任务（{name}）").replacingOccurrences(of: "{name}", with: group.name)))
-                            }.buttonStyle(.plain).font(font(11)).foregroundColor(DotistDesign.faint)
-                                .opacity(hoveredGroup == group.id || addingToGroup == group.id ? 1 : 0)
+        let roots = showsHeader ? model.ordered(panelTasks.filter { $0.category == group.id && $0.parentId == nil })
+            : model.ungroupedTasks.filter { root in panelTasks.contains { $0.id == root.id } }
+        let openResult = model.filteredTasks(scope: "all", groupID: group.id, tag: state.activeTag)
+        let completedResult = model.filteredTasks(scope: "done", groupID: group.id, tag: state.activeTag)
+        let open = openResult.roots
+        // A completed descendant belongs to its visible parent's full tree.
+        // Only roots absent from the open trees belong in the folded section.
+        let openRootIDs = Set(open.map(\.id))
+        let completed = completedResult.roots.filter { !openRootIDs.contains($0.id) }
+        let firstGroup = model.visibleGroups.first { state.groupID == nil || $0.id == state.groupID }?.id
+        let firstSection = !showsHeader || (group.id == firstGroup && (state.groupID != nil || model.ungroupedTasks.isEmpty))
+        return VStack(alignment: .leading, spacing: 0) {
+            if showsHeader {
+                groupHeader(group, empty: roots.isEmpty, after: open.last)
+            }
+            if state.showsGroupContents(group.id, hasHeader: showsHeader) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(open.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? open[index - 1].id : nil, next: index + 1 < open.count ? open[index + 1].id : nil, result: openResult) }
+                    emptyGroupGhost(group.id, region: group.id)
+                    if addingToGroup == group.id {
+                        TaskRowLayout(depth: 0) {
+                            TaskCheckmark(depth: 0, completed: false, children: [], emphasized: false)
+                            TaskEditor(text: Binding(get: { groupTitles[group.id] ?? "" }, set: { groupTitles[group.id] = $0 }), height: $draftHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("新任务（{name}）").replacingOccurrences(of: "{name}", with: group.name), commit: { saveGroupDraft(group, continuing: true) }, cancel: { clearInputs() }, indent: { _ in }, blur: { saveGroupDraft(group, continuing: false) })
+                                .id("group:\(group.id)").frame(height: draftHeight)
+                            Color.clear.frame(width: 0, height: 0)
                         }
-                        .contextMenu {
-                            Button(model.text("添加任务")) { beginGroupDraft(group, after: open.last) }
-                            Button(model.text("在独立面板中打开")) { showGroupPanel(group.id) }
-                            Menu(model.text("颜色")) { groupColorMenu(group.id) }
-                        }
-                }
-                ForEach(Array(open.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? open[index - 1].id : nil, next: index + 1 < open.count ? open[index + 1].id : nil, result: openResult) }
-                emptyGroupGhost(group.id, region: group.id)
-                if addingToGroup == group.id {
-                    TaskRowLayout(depth: 0) {
-                        TaskCheckmark(depth: 0, completed: false, children: [], emphasized: false)
-                        TaskEditor(text: Binding(get: { groupTitles[group.id] ?? "" }, set: { groupTitles[group.id] = $0 }), height: $draftHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("新任务（{name}）").replacingOccurrences(of: "{name}", with: group.name), commit: { saveGroupDraft(group, continuing: true) }, cancel: { clearInputs() }, indent: { _ in }, blur: { saveGroupDraft(group, continuing: false) })
-                            .id("group:\(group.id)").frame(height: draftHeight)
-                        Color.clear.frame(width: 0, height: 0)
-                    }
 
-                }
-                if !completed.isEmpty {
-                    Button {
-                        if state.folded.contains(group.id) { state.folded.remove(group.id) } else { state.folded.insert(group.id) }
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: state.folded.contains(group.id) ? "chevron.down" : "chevron.right").offset(x: -1).frame(width: 18)
-                            Text(model.text("已完成"))
-                        }.font(font(12)).foregroundColor(DotistDesign.faint).frame(height: 28)
-                    }.buttonStyle(.plain).modifier(DotistFocusRing())
-                    if state.folded.contains(group.id) { ForEach(Array(completed.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? completed[index - 1].id : nil, next: index + 1 < completed.count ? completed[index + 1].id : nil, result: completedResult) } }
-                }
-            }.padding(.top, firstSection ? 6 : 20).id(group.id).contentShape(Rectangle())
-                .onHover { over in if over { hoveredGroup = group.id } else if hoveredGroup == group.id { hoveredGroup = nil } }
-                .background(groupGeometry(group.id, region: group.id))
+                    }
+                    if !completed.isEmpty {
+                        Button {
+                            if state.folded.contains(group.id) { state.folded.remove(group.id) } else { state.folded.insert(group.id) }
+                        } label: {
+                            DisclosureRow(title: model.text("已完成"), expanded: state.folded.contains(group.id), language: model.language)
+                        }.buttonStyle(.plain).modifier(DotistFocusRing())
+                        if state.folded.contains(group.id) { ForEach(Array(completed.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? completed[index - 1].id : nil, next: index + 1 < completed.count ? completed[index + 1].id : nil, result: completedResult) } }
+                    }
+                }.transition(.opacity)
+            }
+        }.animation(groupCollapseAnimation, value: state.collapsedGroups.contains(group.id))
+            .padding(.top, firstSection ? 6 : 20).id(group.id).contentShape(Rectangle())
+            .background(groupGeometry(group.id, region: group.id))
+    }
+
+    private var groupCollapseAnimation: Animation? {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration: 0.16)
+    }
+
+    private func toggleGroup(_ id: String) {
+        leaveInputs()
+        withAnimation(groupCollapseAnimation) { state.setGroupCollapsed(!state.collapsedGroups.contains(id), id: id) }
+    }
+
+    private func groupHeader(_ group: DotistGroup, empty: Bool, after task: DotistTask?, region: String? = nil) -> some View {
+        let hoverID = region ?? group.id
+        return GroupCollapseHeader(title: group.name, language: model.language, collapsed: state.collapsedGroups.contains(group.id),
+                            hovered: hoveredGroup == hoverID, empty: empty, toggle: { toggleGroup(group.id) })
+            .accessibilityLabel(Text(model.text(state.collapsedGroups.contains(group.id) ? "展开 {name}" : "折叠 {name}").replacingOccurrences(of: "{name}", with: group.name)))
+            .accessibilityIdentifier("group-header:\(group.id)")
+            .overlay(alignment: .trailing) {
+                Button { beginGroupDraft(group, after: task) } label: { OpticalSymbol(name: "plus", size: 11).frame(width: 22, height: 22) }
+                    .buttonStyle(.plain).modifier(DotistFocusRing()).foregroundStyle(DotistDesign.faint)
+                    .accessibilityLabel(Text(model.text("添加任务（{name}）").replacingOccurrences(of: "{name}", with: group.name)))
+                    .accessibilityIdentifier("group-add:\(group.id)")
+                    .opacity(hoveredGroup == hoverID || addingToGroup == group.id ? 1 : 0)
+                    .allowsHitTesting(hoveredGroup == hoverID || addingToGroup == group.id)
+            }
+            .padding(.top, 4)
+            .onHover { over in if over { hoveredGroup = hoverID } else if hoveredGroup == hoverID { hoveredGroup = nil } }
+            .contextMenu {
+                Button(model.text("添加任务")) { beginGroupDraft(group, after: task) }
+                Button(model.text("在独立面板中打开")) { showGroupPanel(group.id) }
+                Menu(model.text("颜色")) { groupColorMenu(group.id) }
+            }
     }
 
     private func taskTree(_ task: DotistTask, previous: String?, next: String?, result: TaskFilterResult) -> AnyView {
@@ -761,7 +838,7 @@ struct MainWindow: View {
                 if dates.isEmpty { Text(model.text("所选日期范围内没有未完成任务。")).font(font(12)).foregroundColor(DotistDesign.muted) }
                 if !done.matches.isEmpty {
                     Button { todayDoneOpen.toggle() } label: {
-                        HStack { Image(systemName: todayDoneOpen ? "chevron.down" : "chevron.right").offset(x: -1).frame(width: 18); Text(model.text("已完成")) }.font(font(12)).foregroundColor(DotistDesign.faint)
+                        DisclosureRow(title: model.text("已完成"), expanded: todayDoneOpen, language: model.language)
                     }.buttonStyle(.plain).modifier(DotistFocusRing())
                     if todayDoneOpen { flatRows(done.tasks, contextIDs: done.contextIDs) }
                 }
@@ -778,21 +855,19 @@ struct MainWindow: View {
         let sections = model.todayTaskSections(groupID: state.groupID, tag: state.activeTag)
         return VStack(alignment: .leading, spacing: 20) {
             if !sections.overdue.matches.isEmpty { todaySection("已逾期", result: sections.overdue) }
-            if !sections.today.matches.isEmpty { todaySection("今天", result: sections.today, hideDue: true) }
+            if !sections.today.matches.isEmpty { flatRows(sections.today.tasks, hideDue: true, contextIDs: sections.today.contextIDs) }
             if sections.overdue.matches.isEmpty && sections.today.matches.isEmpty {
                 Text(model.text("今天没有要做的事。")).font(font(12)).foregroundColor(DotistDesign.muted)
             }
             if !sections.upcoming.matches.isEmpty {
                 Button { upcomingOpen.toggle() } label: {
-                    HStack { Image(systemName: upcomingOpen ? "chevron.down" : "chevron.right").frame(width: 18); Text(model.text("接下来 {n} 天").replacingOccurrences(of: "{n}", with: "7")) }
-                        .font(font(12)).foregroundColor(DotistDesign.faint).frame(height: 28)
+                    DisclosureRow(title: model.text("接下来 {n} 天").replacingOccurrences(of: "{n}", with: "7"), expanded: upcomingOpen, language: model.language)
                 }.buttonStyle(.plain).modifier(DotistFocusRing())
                 if upcomingOpen { flatRows(sections.upcoming.tasks, contextIDs: sections.upcoming.contextIDs) }
             }
             if !sections.completed.matches.isEmpty {
                 Button { todayDoneOpen.toggle() } label: {
-                    HStack { Image(systemName: todayDoneOpen ? "chevron.down" : "chevron.right").offset(x: -1).frame(width: 18); Text(model.text("已完成")) }
-                        .font(font(12)).foregroundColor(DotistDesign.faint).frame(height: 28)
+                    DisclosureRow(title: model.text("已完成"), expanded: todayDoneOpen, language: model.language)
                 }.buttonStyle(.plain).modifier(DotistFocusRing())
                 if todayDoneOpen { flatRows(sections.completed.tasks, contextIDs: sections.completed.contextIDs) }
             }
@@ -800,7 +875,7 @@ struct MainWindow: View {
     }
     private func todaySection(_ title: String, result: TaskFilterResult, hideDue: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) { Text(model.text(title)).font(font(15, .semibold)).foregroundColor(title == "已逾期" ? DotistDesign.danger : DotistDesign.ink) }.frame(height: 30).padding(.top, 4)
+            HStack(alignment: .opticalCenter, spacing: 6) { OpticalText(title: model.text(title), size: 15, weight: .semibold, language: model.language).foregroundColor(title == "已逾期" ? DotistDesign.danger : DotistDesign.ink) }.frame(height: 30).padding(.top, 4).accessibilityIdentifier("section-heading:\(title)").preference(key: TaskSectionHeadingKey.self, value: [title])
             flatRows(result.tasks, hideDue: hideDue, contextIDs: result.contextIDs)
         }
     }
@@ -821,23 +896,28 @@ struct MainWindow: View {
         }
         let outlined = heads.flatMap(outline)
         return VStack(alignment: .leading, spacing: 0) {
-            if state.groupID == nil && groupID != DotistGroup.inboxID {
-                Text(model.groupDisplayName(groupID)).font(font(12, .semibold, serif: true)).foregroundColor(DotistDesign.faint).frame(height: 26)
+            if groupID != DotistGroup.inboxID, let group = model.groups.first(where: { $0.id == groupID }) {
+                groupHeader(group, empty: false, after: heads.last, region: region)
             }
-            ForEach(Array(outlined.enumerated()), id: \.element.id) { index, task in
-                taskRow(task, children: model.children(of: task), sub: task.parentId != nil, allTasks: true, previous: index > 0 ? outlined[index - 1].id : nil, next: index + 1 < outlined.count ? outlined[index + 1].id : nil, hideDue: hideDue)
-                    .opacity(contextIDs.contains(task.id) ? 0.5 : 1)
+            if state.showsGroupContents(groupID, hasHeader: groupID != DotistGroup.inboxID) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(outlined.enumerated()), id: \.element.id) { index, task in
+                        taskRow(task, children: model.children(of: task), sub: task.parentId != nil, allTasks: true, previous: index > 0 ? outlined[index - 1].id : nil, next: index + 1 < outlined.count ? outlined[index + 1].id : nil, hideDue: hideDue)
+                            .opacity(contextIDs.contains(task.id) ? 0.5 : 1)
 
-                draftRow(after: task, sub: task.parentId != nil)
+                        draftRow(after: task, sub: task.parentId != nil)
 
+                    }
+                    emptyGroupGhost(groupID, region: region)
+                }.transition(.opacity)
             }
-            emptyGroupGhost(groupID, region: region)
-        }.background(groupGeometry(groupID, region: region))
+        }.animation(groupCollapseAnimation, value: state.collapsedGroups.contains(groupID))
+            .background(groupGeometry(groupID, region: region))
     }
 
     private func taskRow(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, next: String?, hideDue: Bool = false) -> some View {
         let titleParts = model.tags(for: task)
-        let actionsVisible = hoveredTask == task.id || pickingTask == task.id
+        let actionsVisible = drag == nil && model.dragId == nil && (hoveredTask == task.id || pickingTask == task.id)
         return VStack(alignment: .leading, spacing: 0) {
             if ghostBeforeID == task.id { taskGhost(compensatingIndent: 0) }
             interactiveTaskRow(task, children: children, sub: sub, allTasks: allTasks, previous: previous, next: next, hideDue: hideDue, titleParts: titleParts, actionsVisible: actionsVisible)
@@ -848,10 +928,15 @@ struct MainWindow: View {
     private func interactiveTaskRow(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, next: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool) -> some View {
         let carried = drag?.blockIDs.contains(task.id) == true
         return TaskSelectableContent(selection: selection.row(task.id)) { selected, focused in
-            rowContent(task, children: children, sub: sub, allTasks: allTasks, previous: previous, hideDue: hideDue, titleParts: titleParts, actionsVisible: actionsVisible || focused, selected: selected, focused: focused)
+            rowContent(task, children: children, sub: sub, allTasks: allTasks, previous: previous, hideDue: hideDue, titleParts: titleParts, actionsVisible: (actionsVisible || focused) && drag == nil && model.dragId == nil, selected: selected, focused: focused)
+                .background {
+                    let background = TaskRowBackgroundState(hovered: hoveredTask == task.id, selected: selected, editing: editing == task.id, dragging: drag != nil || model.dragId != nil, carried: carried)
+                    RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(background.opacity)).padding(.horizontal, -6)
+                        .allowsHitTesting(false)
+                        .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || drag != nil || model.dragId != nil ? nil : .easeInOut(duration: 0.1), value: background)
+                }
         }
         .frame(minHeight: sub ? 28 : 32)
-        .background { if editing == task.id { RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(0.18)).padding(.horizontal, -6) } }
         .contentShape(Rectangle())
         .onKeyPress(keys: [.return, .space, .tab, .escape, .upArrow, .downArrow], phases: .down) { press in
             handleRowKey(press, task: task, previous: previous, allTasks: allTasks)
@@ -903,8 +988,8 @@ struct MainWindow: View {
 
     private func rowContent(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool, selected: Bool = false, focused: Bool = false) -> some View {
         let depth = model.depth(of: task)
-        let actionCount = (depth < 4 && !allTasks ? 1 : 0) + (task.dueDate == nil ? 1 : 0) + 1
-        let fadeWidth: CGFloat = actionsVisible ? CGFloat(actionCount * 22 + max(0, actionCount - 1)) + 8 : 0
+        let actionCount = (depth < 4 ? 1 : 0) + (task.dueDate == nil ? 1 : 0) + 1
+        let fadeWidth = actionsVisible ? TaskRowActionMetrics.width(count: actionCount) : 0
         return TaskRowLayout(depth: depth) {
             Button { selection.update { $0.clear() }; model.complete(task) } label: {
                 TaskCheckmark(depth: depth, completed: task.completed, children: children.map(\.completed), emphasized: selected || focused || drag?.target?.parentID == task.id)
@@ -917,21 +1002,21 @@ struct MainWindow: View {
                     saveEditing(task) { changeIndent(ids: [task.id], reverse: reverse); selection.row(task.id).focusRequest.send() }
                 }, blur: { saveEditing(task) }).id("edit:\(task.id)").frame(height: editHeight)
             } else {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(titleParts?.tags.isEmpty == false ? (titleParts?.text ?? task.title) : task.title)
-                        .font(font(13, selected ? .medium : .regular)).lineLimit(1).truncationMode(.tail)
+                HStack(alignment: .opticalCenter, spacing: 4) {
+                    OpticalText(title: titleParts?.tags.isEmpty == false ? (titleParts?.text ?? task.title) : task.title, size: 13, weight: selected ? .medium : .regular, language: model.language).lineLimit(1).truncationMode(.tail)
                         .foregroundColor(task.completed ? DotistDesign.faint : focused ? DotistDesign.accent : DotistDesign.ink)
                         .fixedSize(horizontal: false, vertical: true)
                     ForEach(titleParts?.tags ?? [], id: \.self) { tag in
-                        Button("#" + tag) {
+                        Button {
                             if NSEvent.modifierFlags.intersection([.shift, .command]).isEmpty { state.activeTag = state.activeTag == tag ? nil : tag }
                             else { clickRow(task, edit: false) }
-                        }.buttonStyle(.plain).modifier(DotistFocusRing())
-                            .font(font(12, state.activeTag == tag ? .medium : .regular)).foregroundColor(state.activeTag == tag ? DotistDesign.ink : DotistDesign.faint).lineLimit(1)
+                        } label: {
+                            OpticalText(title: "#" + tag, size: 12, weight: state.activeTag == tag ? .medium : .regular, language: model.language)
+                        }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(state.activeTag == tag ? DotistDesign.ink : DotistDesign.faint).lineLimit(1)
                     }
                     Spacer(minLength: 0)
                 }.frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
-                    .mask { if fadeWidth > 0 { TaskTitleFade(trailing: fadeWidth) } else { Rectangle() } }
+                    .mask { if fadeWidth > 0 { TaskTitleFade(trailing: fadeWidth, rowRight: listViewport.maxX - 16) } else { Rectangle() } }
                     .contentShape(Rectangle())
                     .onTapGesture { clickRow(task) }
 
@@ -939,26 +1024,22 @@ struct MainWindow: View {
             rowMetadata(task, children: children, allTasks: allTasks)
                 .opacity(editing == task.id ? 0 : 1)
                 .allowsHitTesting(editing != task.id)
-                .overlay(alignment: .leading) {
-                    rowActions(task, allTasks: allTasks, visible: actionsVisible)
-                        .alignmentGuide(.leading) { $0[.trailing] + 8 }
-                }
+            rowActions(task, allTasks: allTasks, visible: actionsVisible)
         }
     }
 
     private func rowMetadata(_ task: DotistTask, children: [DotistTask], allTasks: Bool) -> some View {
-            HStack(spacing: 8) {
+            HStack(alignment: .opticalCenter, spacing: 8) {
             if let due = task.dueDate {
-                Button(model.dueLabel(due)) { pickingTask = task.id }.buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12))
+                Button { pickingTask = task.id } label: { OpticalText(title: model.dueLabel(due), size: 12, language: model.language) }.buttonStyle(.plain).modifier(DotistFocusRing())
                     .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                     .foregroundColor(due < Date().dotistDay && !task.completed ? DotistDesign.danger : due == Date().dotistDay ? DotistDesign.accent : DotistDesign.muted)
                     .accessibilityLabel(Text(model.text("到期日 {date}，点击修改").replacingOccurrences(of: "{date}", with: model.dueLabel(due))))
                     .accessibilityIdentifier("task-due:\(task.id)")
             }
-            if allTasks, state.groupID == nil, let group = model.group(for: task) { Text(group.name).font(font(12, .semibold, serif: true)).foregroundColor(DotistDesign.faint).lineLimit(1).fixedSize(horizontal: true, vertical: false) }
+            if allTasks, state.groupID == nil, let group = model.group(for: task) { OpticalText(title: group.name, size: 12, weight: .semibold, serif: true, language: model.language).foregroundColor(DotistDesign.faint).lineLimit(1).fixedSize(horizontal: true, vertical: false) }
             if !children.isEmpty {
-                Text("\(children.filter(\.completed).count)/\(children.count)")
-                    .font(font(12)).foregroundColor(DotistDesign.faint)
+                OpticalText(title: "\(children.filter(\.completed).count)/\(children.count)", size: 12, language: model.language).foregroundColor(DotistDesign.faint)
                     .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                     .accessibilityIdentifier("task-progress:\(task.id)")
                     .accessibilityLabel(Text(model.text("子任务 {done}/{total}").replacingOccurrences(of: "{done}", with: "\(children.filter(\.completed).count)").replacingOccurrences(of: "{total}", with: "\(children.count)")))
@@ -970,17 +1051,17 @@ struct MainWindow: View {
     @ViewBuilder private func rowActions(_ task: DotistTask, allTasks: Bool, visible: Bool) -> some View {
             if editing != task.id {
                 HStack(spacing: 1) {
-                    if model.depth(of: task) < 4 && !allTasks {
-                        Button { startDraft(after: task, asChild: true) } label: { Image(systemName: "plus").frame(width: 22, height: 22) }
+                    if model.depth(of: task) < 4 {
+                        Button { startDraft(after: task, asChild: true) } label: { OpticalSymbol(name: "plus", size: 11).frame(width: 22, height: 22) }
                             .help(model.text("添加子任务"))
                             .accessibilityLabel(Text(model.text("添加子任务 {title}").replacingOccurrences(of: "{title}", with: task.title)))
                     }
                     if task.dueDate == nil {
-                        Button { pickingTask = task.id } label: { Image(systemName: "calendar").frame(width: 22, height: 22) }
+                        Button { pickingTask = task.id } label: { OpticalSymbol(name: "calendar", size: 11).frame(width: 22, height: 22) }
                             .help(model.text("设置到期日"))
                             .accessibilityLabel(Text(model.text("设置到期日 {title}").replacingOccurrences(of: "{title}", with: task.title)))
                     }
-                    Button { model.delete(task) } label: { Image(systemName: "xmark").frame(width: 22, height: 22) }
+                    Button { model.delete(task) } label: { OpticalSymbol(name: "xmark", size: 11).frame(width: 22, height: 22) }
                         .help(model.text("删除"))
                         .accessibilityLabel(Text(model.text("删除 {title}").replacingOccurrences(of: "{title}", with: task.title)))
                 }.buttonStyle(.plain).font(font(11, .regular)).foregroundColor(DotistDesign.muted)
@@ -1068,6 +1149,7 @@ struct MainWindow: View {
     }
 
     private func beginGroupDraft(_ group: DotistGroup, after task: DotistTask?) {
+        withAnimation(groupCollapseAnimation) { state.setGroupCollapsed(false, id: group.id) }
         if let task { startDraft(after: task) }
         else { clearInputs(); addingToGroup = group.id; groupTitles[group.id] = "" }
     }
@@ -1204,8 +1286,8 @@ struct MainWindow: View {
                 }
             }.frame(maxWidth: .infinity).frame(height: ComposerMetrics.rowHeight).onChange(of: composer) { _ in selectedSuggestion = -1 }
             Button { showDuePicker.toggle() } label: {
-                HStack(spacing: 4) {
-                    if let shownDue { Text(model.dueLabel(shownDue)).font(font(12)).lineLimit(1) }
+                IconTextRow(spacing: 4) {
+                    if let shownDue { OpticalText(title: model.dueLabel(shownDue), size: 12, language: model.language).lineLimit(1) }
                     ComposerCalendarIcon(language: model.language).opacity(composerHovered || composerFocused ? 1 : 0)
                 }.foregroundColor(shownDue == nil ? DotistDesign.muted : DotistDesign.accent)
             }
@@ -1223,15 +1305,19 @@ struct MainWindow: View {
         ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 18) {
             ForEach(dropGroupIDs, id: \.self) { id in
-                Text(model.groupDisplayName(id)).font(font(14, shelfTarget == id ? .semibold : .regular, serif: true))
+                OpticalText(title: model.groupDisplayName(id), size: 14, weight: shelfTarget == id ? .semibold : .regular, serif: true, language: model.language)
                     .foregroundColor(shelfTarget == id ? DotistDesign.ink : DotistDesign.faint)
                     .frame(height: 48).contentShape(Rectangle())
                     .background(GeometryReader { geometry in
                         Color.clear.preference(key: TaskShelfFrameKey.self, value: [id: geometry.frame(in: .named(Self.listSpace))])
                     })
             }
-            Button("＋ " + model.text("新分组")) { manageGroups = true }
-                .buttonStyle(.plain).font(font(14)).foregroundColor(DotistDesign.faint)
+            Button { manageGroups = true } label: {
+                IconTextRow(spacing: 4) {
+                    OpticalSymbol(name: "plus", size: 11)
+                    OpticalText(title: model.text("新分组"), size: 14, language: model.language)
+                }.frame(height: 48)
+            }.buttonStyle(.plain).foregroundColor(DotistDesign.faint)
         }.padding(.horizontal, 16).frame(height: 48)
         }.frame(height: ComposerMetrics.barHeight)
     }
@@ -1268,7 +1354,7 @@ struct MainWindow: View {
     }
 }
 
-private struct DraggableFilterButton: View {
+struct DraggableFilterButton: View {
     let title: String
     let selected: Bool
     let language: String
@@ -1278,11 +1364,10 @@ private struct DraggableFilterButton: View {
 
     var body: some View {
         Button { if origin == nil { choose() } } label: {
-            Text(title)
-                .font(DotistDesign.textFont(13, weight: selected ? .medium : .regular, language: language))
+            OpticalText(title: title, size: TaskDateFilterMetrics.size(selected: selected), weight: TaskDateFilterMetrics.weight(selected: selected), language: language)
                 .foregroundColor(selected ? DotistDesign.ink : hovering ? DotistDesign.muted : DotistDesign.faint)
                 .lineLimit(1)
-                .frame(width: ceil((title as NSString).size(withAttributes: [.font: DotistDesign.nativeFont(13, weight: .medium, language: language)]).width) + 2, height: 30)
+                .frame(width: TaskDateFilterMetrics.slotWidth(title: title, language: language), height: 30)
         }.buttonStyle(.plain).modifier(DotistFocusRing()).onHover { hovering = $0 }
             .accessibilityAddTraits(selected ? .isSelected : [])
             .highPriorityGesture(DragGesture(minimumDistance: 4)
@@ -1293,6 +1378,27 @@ private struct DraggableFilterButton: View {
                     guard let origin else { return }
                     window.setFrameOrigin(NSPoint(x: origin.window.x + mouse.x - origin.mouse.x, y: origin.window.y + mouse.y - origin.mouse.y))
                 }.onEnded { _ in DispatchQueue.main.async { origin = nil } })
+    }
+}
+
+/// The title and disclosure glyph retain the shared measured ink center.
+struct GroupCollapseHeader: View {
+    let title: String
+    let language: String
+    let collapsed: Bool
+    let hovered: Bool
+    var empty = false
+    let toggle: () -> Void
+    var body: some View {
+        Button(action: toggle) {
+            HStack(alignment: .opticalCenter, spacing: 6) {
+                OpticalText(title: title, size: 15, weight: .semibold, serif: true, language: language)
+                    .foregroundStyle(empty ? DotistDesign.faint : DotistDesign.ink).lineLimit(1)
+                OpticalSymbol(name: collapsed ? "chevron.right" : "chevron.down", size: 9, weight: .semibold)
+                    .foregroundStyle(DotistDesign.faint).opacity(collapsed || hovered ? 1 : 0)
+                Spacer(minLength: 26)
+            }.frame(height: 30).contentShape(Rectangle())
+        }.buttonStyle(.plain).modifier(DotistFocusRing())
     }
 }
 

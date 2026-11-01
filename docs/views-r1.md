@@ -1,5 +1,7 @@
 # 视图窗口第一轮
 
+> **历史记录，部分内容已被取代。** 当前原生架构见 [native-macos.md](native-macos.md)，当前 UI 决定以 [ui-decisions.md](ui-decisions.md) 为准；以下保留当时方案与验收证据。
+
 ## 实现范围与入口
 
 新增独立 `views` Webview，正常尺寸 1000×720，最小尺寸 680×480。由托盘菜单「任务视图」或应用菜单 `CmdOrCtrl+Shift+V` 打开，已存在时取消最小化、显示并聚焦。这个组合键仅是应用菜单 accelerator，没有注册成全局快捷键。主清单没有新增入口按钮。
@@ -85,3 +87,8 @@ cargo check: Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.30s
 Vite 本地预览实际启动失败，错误为 `listen EPERM: operation not permitted 127.0.0.1:1420`。另尝试 Vite 内存构建后由浏览器请求拦截直接提供产物，构建成功（1785 modules transformed），但 Chrome 在本环境启动即退出（SIGABRT），没有获得截图。没有提权、安装依赖、替换应用或重启现有 Dotist。
 
 因此尚未验证真实窗口的尺寸、聚焦/复用、托盘菜单、应用快捷键、原生 WebKit 的 HTML5 拖放、主题外观，以及最小尺寸的实际绘制。悬浮清单的毛玻璃、闲置淡出和悬浮球原生行为也未在本环境重新验证；测试通过不等同于这些原生行为已验证。
+
+
+## v4.2 用户实机反馈更新（2026-11-01）
+
+顶部改为工具栏和独立侧边便签，无可见 Inbox；删组迁移任务，父任务不折叠，悬浮球无进度环。五层任务、颜色主题、日期筛选、拖动、设置与字体对齐的完整锁定决定及对应测试见 [ui-decisions.md](ui-decisions.md)。本条取代本文中与其冲突的旧 UI 描述，历史验收结果仍仅代表当时版本。

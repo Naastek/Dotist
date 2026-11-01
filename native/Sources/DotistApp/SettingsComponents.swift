@@ -36,7 +36,7 @@ struct SettingsSearchEntry: Identifiable, Equatable {
 enum SettingsSearchIndex {
     static let entries: [SettingsSearchEntry] = {
         let rows: [(SettingsModule, [String])] = [
-            (.appearance, ["主题", "玻璃预设", "透明程度", "磨砂程度", "失焦淡出", "淡出前等待", "淡出用时", "淡出后的不透明度", "全部(默认颜色)"]),
+            (.appearance, ["主题", "玻璃预设", "透明程度", "磨砂程度", "失焦淡出", "淡出前等待", "淡出用时", "淡出后的不透明度", "全部（默认颜色）"]),
             (.general, ["语言", "显示在 Dock", "显示在菜单栏", "开机启动", "悬停显示详情", "窗口大小", "固定窗口", "自动收起", "收起等待时间", "窗口置顶", "分组", "标签"]),
             (.filters, ["启动时打开", "筛选器"]),
             (.menubar, ["显示内容", "日期透视", "分组", "轮播间隔", "左键点击", "右键点击"]),
@@ -91,7 +91,7 @@ enum SettingsSearchIndex {
     }
     private static func aliases(_ title: String) -> [String] {
         switch title {
-        case "全部(默认颜色)": return ["默认颜色 預設顏色 デフォルトカラー All default color colour 全部 颜色主题 顏色主題 カラーテーマ"]
+        case "全部（默认颜色）": return ["默认颜色 預設顏色 デフォルトカラー All default color colour 全部 颜色主题 顏色主題 カラーテーマ"]
         case "颜色": return ["Color Colour カラー 顏色"]
         case "语言": return ["language locale 言語 語言 English 日本語 简体中文 繁體中文 跟随系统 跟隨系統"]
         case "主题": return ["system light dark 浅色 深色 ライト ダーク 淺色 跟随系统"]
@@ -135,12 +135,12 @@ struct SettingsFormRow<Control: View>: View {
     var serif = false
     @ViewBuilder let control: () -> Control
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Text(title).font(DotistDesign.font(13, weight: emphasized ? .semibold : .regular, serif: serif, language: language))
+        HStack(alignment: .opticalCenter, spacing: 12) {
+            OpticalText(title: title, size: 13, weight: emphasized ? .semibold : .regular, serif: serif, language: language)
                 .foregroundStyle(emphasized ? DotistDesign.accent : DotistDesign.ink)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
-            HStack(spacing: 8, content: control)
+            HStack(alignment: .opticalCenter, spacing: 8, content: control)
         }.padding(.horizontal, 14).padding(.vertical, 6).frame(minHeight: 44)
             .overlay(alignment: .bottom) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5).padding(.leading, 14) }
     }
@@ -160,7 +160,7 @@ struct SettingsColorPalette: View {
                         .overlay(RoundedRectangle(cornerRadius: 4).stroke(color == selected ? DotistDesign.ink : DotistDesign.rule, lineWidth: color == selected ? 1.5 : 0.5))
                         .overlay {
                             if selected == color {
-                                Image(systemName: "checkmark").font(DotistDesign.font(10, weight: .bold, language: model.language))
+                                OpticalSymbol(name: "checkmark", size: 10, weight: .bold)
                                     .foregroundStyle(color == .none ? DotistDesign.ink : .white)
                             }
                         }.frame(width: 23, height: 26).contentShape(Rectangle())
@@ -192,7 +192,7 @@ struct SettingsSegmentedPicker: NSViewRepresentable {
         return control
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: FocusSegmentedControl, context: Context) -> CGSize? {
-        CGSize(width: proposal.width ?? nsView.intrinsicContentSize.width, height: proposal.height ?? 24)
+        CGSize(width: proposal.width ?? nsView.intrinsicContentSize.width, height: nsView.intrinsicContentSize.height)
     }
     func updateNSView(_ control: FocusSegmentedControl, context: Context) {
         context.coordinator.parent = self

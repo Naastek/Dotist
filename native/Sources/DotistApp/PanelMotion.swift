@@ -59,6 +59,8 @@ final class PanelMotion: ObservableObject {
     private var pendingBubbleToggle = false
     private var hoverRequiresExit = false
     private var bubbleMenuOpen = false
+    private var stopped = false
+    private var closeObservation: NSObjectProtocol?
 
     init(model: AppModel, panel: DotistPanel, size: NSSize, title: @escaping () -> String, bubbleContent: (() -> BubbleContent)? = nil, rememberFrame: @escaping (NSRect) -> Void = { _ in }) {
         self.model = model
@@ -68,23 +70,52 @@ final class PanelMotion: ObservableObject {
         self.title = title
         self.bubbleContent = bubbleContent
         self.rememberFrame = rememberFrame
-        panel.hasShadow = true
+        panel.hasShadow = false
         shadow = PanelShadowController(panel: panel)
+        closeObservation = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stop() }
+        }
     }
-    deinit { hoverClose?.cancel() }
-    func stop() { hoverClose?.cancel(); hoverClose = nil; shadow.stop() }
+    isolated deinit {
+        hoverClose?.cancel()
+        if let closeObservation { NotificationCenter.default.removeObserver(closeObservation) }
+        shadow.stop()
+    }
+    func stop() {
+        guard !stopped else { return }
+        stopped = true
+        hoverClose?.cancel(); hoverClose = nil
+        pendingHover = nil
+        pendingBubbleToggle = false
+        hoverAnimating = false
+        animationInProgress = false
+        if let closeObservation { NotificationCenter.default.removeObserver(closeObservation) }
+        closeObservation = nil
+        shadow.stop()
+    }
 
     func refreshShadow() {
+        guard !stopped else { return }
         shadow.update(compact: bubble, transitioning: animationInProgress, onRight: bubbleOnRight)
         panel.invalidateShadow()
         // SwiftUI may not have committed its glass/tint change until the next turn.
-        DispatchQueue.main.async { [weak self] in self?.panel.invalidateShadow() }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.stopped else { return }
+            self.panel.invalidateShadow()
+        }
     }
 
     func setShadowReveal(_ reveal: CGFloat) { shadow.state.reveal = reveal }
 
     func toggleBubble() {
-        guard !animationInProgress, let screen = panel.screen ?? NSScreen.main else { return }
+        guard let area = (panel.screen ?? NSScreen.main)?.visibleFrame else { return }
+        toggleBubble(in: area)
+    }
+
+    // A synchronous transition also supports callers without a live display and
+    // lets geometry tests exercise the real collapse/expand state changes.
+    func toggleBubble(in area: NSRect, animated: Bool = true) {
+        guard !stopped, !animationInProgress else { return }
         if hoverAnimating {
             hoverClose?.cancel(); hoverClose = nil
             pendingHover = nil; pendingBubbleToggle = true
@@ -93,7 +124,6 @@ final class PanelMotion: ObservableObject {
         hoverClose?.cancel(); hoverClose = nil
         panel.makeFirstResponder(nil)
         animationInProgress = true
-        let area = screen.visibleFrame
         let old = panel.frame
         let reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let target: NSRect
@@ -120,30 +150,43 @@ final class PanelMotion: ObservableObject {
             bubble = false
         }
         refreshShadow()
+        // Without a display AppKit may never deliver animation ticks/completion.
+        if !animated || NSScreen.main == nil {
+            panel.setFrame(target, display: true)
+            finishBubbleTransition()
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = reduced ? 0 : (bubble ? 0.28 : 0.34)
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             panel.animator().setFrame(target, display: true)
         } completionHandler: { [weak self] in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.animationInProgress = false
-                self.refreshShadow()
-                if self.bubble {
-                    // A collapse click often leaves the pointer inside the new circle.
-                    // Only a fresh pointer entry should reveal the detail capsule.
-                    self.hoverRequiresExit = self.panel.frame.contains(NSEvent.mouseLocation)
-                    return
-                }
-                self.panel.minSize = NSSize(width: 320, height: 440)
-                self.panel.styleMask.insert(.resizable)
-                self.rememberFrame(self.panel.frame)
+            // AppKit owns the animator's target. A late completion must neither
+            // keep its motion owner alive nor revive a closed panel's shadow.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.stopped else { return }
+                if self.panel.frame != target { self.panel.setFrame(target, display: false) }
+                self.finishBubbleTransition()
             }
         }
     }
 
+    private func finishBubbleTransition() {
+        animationInProgress = false
+        refreshShadow()
+        if bubble {
+            // A collapse click often leaves the pointer inside the new circle.
+            // Only a fresh pointer entry should reveal the detail capsule.
+            hoverRequiresExit = panel.frame.contains(NSEvent.mouseLocation)
+            return
+        }
+        panel.minSize = NSSize(width: 320, height: 440)
+        panel.styleMask.insert(.resizable)
+        rememberFrame(panel.frame)
+    }
+
     func setHover(_ active: Bool) {
-        guard !bubbleMenuOpen else { return }
+        guard !stopped, !bubbleMenuOpen else { return }
         if !active && !panel.frame.contains(NSEvent.mouseLocation) { hoverRequiresExit = false }
         guard bubble, !animationInProgress, let screen = panel.screen ?? NSScreen.main else { return }
         if active && hoverRequiresExit { return }
@@ -155,7 +198,7 @@ final class PanelMotion: ObservableObject {
                 guard let self else { return }
                 self.hoverClose = nil
                 guard self.bubble, !self.bubbleMenuOpen, NSEvent.pressedMouseButtons & 1 == 0, !self.panel.frame.contains(NSEvent.mouseLocation) else { return }
-                self.setHoverNow(false, screen: self.panel.screen ?? screen)
+                self.setHover(false, in: (self.panel.screen ?? screen).visibleFrame)
             }
             hoverClose = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: work)
@@ -164,17 +207,18 @@ final class PanelMotion: ObservableObject {
         hoverClose?.cancel(); hoverClose = nil
         pendingHover = nil
         guard !hovering else { return }
-        setHoverNow(true, screen: screen)
+        setHover(true, in: screen.visibleFrame)
     }
 
-    private func setHoverNow(_ active: Bool, screen: NSScreen) {
-        guard bubble, !animationInProgress else { return }
+    // Immediate geometry handoff, also usable without a WindowServer display.
+    func setHover(_ active: Bool, in area: NSRect) {
+        guard !stopped, bubble, !animationInProgress else { return }
         if hoverAnimating { pendingHover = active; return }
         guard hovering != active else { return }
         hoverAnimating = true
         let frame = panel.frame
         let details = bubbleContent?() ?? BubbleContent(model: model, fallbackTitle: title())
-        let width: CGFloat = active ? min(max(250, ceil(78 + details.textWidth(language: model.language))), min(440, screen.visibleFrame.width / 2)) : 48
+        let width: CGFloat = active ? min(max(250, ceil(78 + details.textWidth(language: model.language))), min(440, area.width / 2)) : 48
         let coreX = bubbleOnRight ? frame.maxX - 24 : frame.minX + 24
         let target = NSRect(x: bubbleOnRight ? coreX + 24 - width : coreX - 24, y: frame.minY, width: width, height: 48)
         // Resize the coordinate space without animation; only the glass surface morphs.
@@ -185,7 +229,9 @@ final class PanelMotion: ObservableObject {
     }
 
     func finishHover(_ active: Bool) {
-        guard bubble, hoverAnimating else { return }
+        // A delayed SwiftUI completion for the previous reveal can arrive after
+        // retraction starts. It must not consume the new transition's completion.
+        guard !stopped, bubble, hoverAnimating, hovering == active else { return }
         if !active && (bubbleMenuOpen || NSEvent.pressedMouseButtons & 1 != 0) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.finishHover(active) }
             return
@@ -205,18 +251,18 @@ final class PanelMotion: ObservableObject {
         }
         if let next = pendingHover {
             pendingHover = nil
-            if let screen = panel.screen ?? NSScreen.main { setHoverNow(next, screen: screen) }
+            if let screen = panel.screen ?? NSScreen.main { setHover(next, in: screen.visibleFrame) }
         }
     }
 
     func beginBubbleDrag() {
-        guard bubble, !animationInProgress else { return }
+        guard !stopped, bubble, !animationInProgress else { return }
         hoverClose?.cancel(); hoverClose = nil
         pendingHover = nil
     }
 
     @discardableResult func finishBubbleMove() -> NSRect? {
-        guard bubble, !animationInProgress, let area = (panel.screen ?? NSScreen.main)?.visibleFrame else { return nil }
+        guard !stopped, bubble, !animationInProgress, let area = (panel.screen ?? NSScreen.main)?.visibleFrame else { return nil }
         let frame = panel.frame
         let x = min(max(frame.minX, area.minX), max(area.minX, area.maxX - frame.width))
         let y = min(max(frame.minY, area.minY), max(area.minY, area.maxY - frame.height))
@@ -234,7 +280,7 @@ final class PanelMotion: ObservableObject {
     }
 
     func showMenu(_ menu: NSMenu, event: NSEvent, in view: NSView) {
-        guard bubble, !animationInProgress else { return }
+        guard !stopped, bubble, !animationInProgress else { return }
         hoverClose?.cancel(); hoverClose = nil
         pendingHover = nil
         bubbleMenuOpen = true
@@ -246,6 +292,7 @@ final class PanelMotion: ObservableObject {
     }
 
     func updateIdleState() {
+        guard !stopped else { return }
         let prefs = model.settings
         if bubble && hoverRequiresExit && !panel.frame.contains(NSEvent.mouseLocation) { hoverRequiresExit = false }
         if bubble && hovering && !panel.frame.contains(NSEvent.mouseLocation) && NSEvent.pressedMouseButtons & 1 == 0 { setHover(false) }
@@ -272,12 +319,14 @@ final class PanelMotion: ObservableObject {
 /// breathing room without changing any panel frames, drag coordinates or hit areas.
 @MainActor
 private final class PanelShadowController {
-    static let margin: CGFloat = 48
+    static let margin = PanelShadowRenderer.margin
     let state = PanelShadowState()
     private weak var panel: NSWindow?
     private let window: PanelShadowWindow
     private var observations: [NSObjectProtocol] = []
     private var stopped = false
+    private var synchronizing = false
+    private var frameSync: DispatchWorkItem?
 
     init(panel: NSWindow) {
         self.panel = panel
@@ -290,27 +339,51 @@ private final class PanelShadowController {
         window.ignoresMouseEvents = true
         window.isMovable = false
         window.isExcludedFromWindowsMenu = true
+        window.hidesOnDeactivate = false
+        window.setAccessibilityElement(false)
         window.animationBehavior = .none
         window.level = panel.level
-        window.collectionBehavior = panel.collectionBehavior
+        window.collectionBehavior = Self.collectionBehavior(for: panel)
         let host = NSHostingView(rootView: PanelShadowView(state: state))
         host.sizingOptions = []
+        host.frame = NSRect(origin: .zero, size: window.frame.size)
+        host.autoresizingMask = [.width, .height]
         window.contentView = host
+        (panel as? DotistPanel)?.synchronizePanelShadow = { [weak self] in self?.synchronizeFrame() }
         for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
             observations.append(NotificationCenter.default.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.synchronizeFrame() }
+                MainActor.assumeIsolated { self?.scheduleFrameSync() }
             })
         }
     }
 
-    deinit { observations.forEach { NotificationCenter.default.removeObserver($0) } }
+    isolated deinit { stop() }
+
+    private func scheduleFrameSync() {
+        guard !stopped, frameSync == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.frameSync = nil
+            self.synchronizeFrame()
+        }
+        frameSync = work
+        DispatchQueue.main.async(execute: work)
+    }
 
     func synchronizeFrame() {
-        guard !stopped, let panel else { return }
+        guard !stopped, !synchronizing, let panel else { return }
+        synchronizing = true
+        defer { synchronizing = false }
         let frame = panel.frame.insetBy(dx: -Self.margin, dy: -Self.margin)
-        if window.frame != frame { window.setFrame(frame, display: true) }
-        window.contentView?.layoutSubtreeIfNeeded()
-        panel.invalidateShadow()
+        if window.frame != frame { window.setFrame(frame, display: false) }
+        window.contentView?.frame = NSRect(origin: .zero, size: frame.size)
+    }
+
+    private static func collectionBehavior(for panel: NSWindow) -> NSWindow.CollectionBehavior {
+        var behavior = panel.collectionBehavior
+        behavior.subtract([.managed, .stationary, .participatesInCycle])
+        behavior.formUnion([.transient, .ignoresCycle])
+        return behavior
     }
 
     func update(compact: Bool, transitioning: Bool, onRight: Bool) {
@@ -322,7 +395,10 @@ private final class PanelShadowController {
         if state.compact != compact { state.compact = compact }
         if state.transitioning != transitioning { state.transitioning = transitioning }
         if state.onRight != onRight { state.onRight = onRight }
-        if let panel { window.level = panel.level }
+        if let panel {
+            window.level = panel.level
+            window.collectionBehavior = Self.collectionBehavior(for: panel)
+        }
         synchronizeFrame()
     }
 
@@ -331,8 +407,11 @@ private final class PanelShadowController {
     func stop() {
         guard !stopped else { return }
         stopped = true
+        frameSync?.cancel()
+        frameSync = nil
         observations.forEach { NotificationCenter.default.removeObserver($0) }
         observations.removeAll()
+        (panel as? DotistPanel)?.synchronizePanelShadow = nil
         panel?.removeChildWindow(window)
         window.orderOut(nil)
         window.close()
@@ -355,23 +434,77 @@ final class PanelShadowState: ObservableObject {
 struct PanelShadowView: View {
     @ObservedObject var state: PanelShadowState
     var body: some View {
-        GeometryReader { geometry in
-            let width = max(0, geometry.size.width - 96)
-            let height = max(0, geometry.size.height - 96)
-            let surfaceWidth = state.compact && !state.transitioning ? 48 + (width - 48) * state.reveal : width
-            let shape = RoundedRectangle(cornerRadius: state.compact ? 24 : DotistDesign.windowCornerRadius, style: .continuous)
-            shape.fill(.black)
-                .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
-                .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
-                // Draw only outside the surface, preserving the original glass tint.
-                .overlay(shape.fill(.black).blendMode(.destinationOut))
-                .compositingGroup()
-                .frame(width: surfaceWidth, height: height)
-                .frame(width: width, height: height, alignment: state.onRight ? .trailing : .leading)
-                .padding(48)
-        }
+        PanelShadowImage(compact: state.compact, transitioning: state.transitioning,
+                         onRight: state.onRight, reveal: state.reveal)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// Animate the silhouette with the glass reveal, but punch out its interior in
+/// the bitmap itself. A destinationOut SwiftUI overlay is not a reliable hole
+/// when NSHostingView splits the drawing into window-backed compositing layers.
+private struct PanelShadowImage: View, Animatable {
+    let compact: Bool
+    let transitioning: Bool
+    let onRight: Bool
+    var reveal: CGFloat
+    @Environment(\.displayScale) private var scale
+
+    var animatableData: CGFloat {
+        get { reveal }
+        set { reveal = newValue }
+    }
+
+    var body: some View {
+        Canvas { context, size in
+            if let image = PanelShadowRenderer.image(size: size, scale: scale, compact: compact,
+                                                    transitioning: transitioning, onRight: onRight, reveal: reveal) {
+                context.draw(Image(decorative: image, scale: scale), in: CGRect(origin: .zero, size: size))
+            }
+        }
+    }
+}
+
+enum PanelShadowRenderer {
+    static let margin: CGFloat = 48
+
+    static func surfaceRect(size: CGSize, compact: Bool, transitioning: Bool, onRight: Bool, reveal: CGFloat) -> CGRect {
+        let width = max(0, size.width - margin * 2)
+        let height = max(0, size.height - margin * 2)
+        let surfaceWidth = compact && !transitioning ? 48 + (width - 48) * min(1, max(0, reveal)) : width
+        return CGRect(x: margin + (onRight ? width - surfaceWidth : 0), y: margin, width: surfaceWidth, height: height)
+    }
+
+    static func surfacePath(size: CGSize, compact: Bool, transitioning: Bool, onRight: Bool, reveal: CGFloat) -> CGPath {
+        RoundedRectangle(cornerRadius: compact ? 24 : DotistDesign.windowCornerRadius, style: .continuous)
+            .path(in: surfaceRect(size: size, compact: compact, transitioning: transitioning, onRight: onRight, reveal: reveal)).cgPath
+    }
+
+    static func image(size: CGSize, scale: CGFloat, compact: Bool, transitioning: Bool,
+                      onRight: Bool, reveal: CGFloat) -> CGImage? {
+        guard size.width > 0, size.height > 0, scale > 0,
+              let context = CGContext(data: nil, width: Int(ceil(size.width * scale)), height: Int(ceil(size.height * scale)),
+                                      bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.scaleBy(x: scale, y: scale)
+        let path = surfacePath(size: size, compact: compact, transitioning: transitioning, onRight: onRight, reveal: reveal)
+        for (opacity, blur, offset) in [(0.22, 18.0, 8.0), (0.12, 3.0, 1.0)] {
+            context.saveGState()
+            context.setShadow(offset: CGSize(width: 0, height: -offset), blur: blur,
+                              color: CGColor(gray: 0, alpha: opacity))
+            context.setFillColor(CGColor(gray: 0, alpha: 1))
+            context.addPath(path)
+            context.fillPath()
+            context.restoreGState()
+        }
+        // Clear after BOTH shadows: no source fill, stroke, or inward blur is
+        // allowed in the glass surface, even when windows briefly repaint apart.
+        context.setBlendMode(.clear)
+        context.setShouldAntialias(false)
+        context.addPath(path)
+        context.fillPath()
+        return context.makeImage()
     }
 }
 
@@ -521,14 +654,14 @@ private struct FloatingBubble: View {
         Button(action: motion.toggleBubble) {
             ZStack(alignment: motion.bubbleOnRight ? .trailing : .leading) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(details.title).font(DotistDesign.textFont(13, weight: .medium, language: model.language)).foregroundColor(DotistDesign.ink).lineLimit(1)
+                    OpticalText(title: details.title, size: 13, weight: .medium, language: model.language).foregroundColor(DotistDesign.ink).lineLimit(1)
                     if !details.subtitle.isEmpty {
-                        HStack(spacing: 0) {
+                        HStack(alignment: .opticalCenter, spacing: 0) {
                             if let group = details.group {
-                                Text(group).font(DotistDesign.font(12, weight: .semibold, serif: true, language: model.language))
+                                OpticalText(title: group, size: 12, weight: .semibold, serif: true, language: model.language)
                             }
-                            if details.group != nil && details.due != nil { Text(" · ") }
-                            if let due = details.due { Text(due) }
+                            if details.group != nil && details.due != nil { OpticalText(title: " · ", size: 12, language: model.language) }
+                            if let due = details.due { OpticalText(title: due, size: 12, language: model.language) }
                         }.font(DotistDesign.textFont(12, language: model.language)).foregroundColor(DotistDesign.muted).lineLimit(1)
                     }
                 }
@@ -544,7 +677,7 @@ private struct FloatingBubble: View {
                     .frame(width: width, height: 48, alignment: motion.bubbleOnRight ? .leading : .trailing)
                     .accessibilityHidden(true)
                 ZStack {
-                    Text("\(details.remaining)").font(DotistDesign.textFont(20, weight: .semibold, language: model.language)).monospacedDigit().foregroundColor(DotistDesign.ink)
+                    OpticalText(title: "\(details.remaining)", size: 20, weight: .semibold, language: model.language).monospacedDigit().foregroundColor(DotistDesign.ink)
                 }.frame(width: 48, height: 48).contentShape(Circle())
             }.frame(width: width, height: 48, alignment: motion.bubbleOnRight ? .trailing : .leading)
                 .contentShape(Rectangle())

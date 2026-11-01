@@ -40,11 +40,9 @@ struct CommandPalette: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Image(systemName: "magnifyingglass").font(DotistDesign.font(14, language: model.language)).foregroundColor(DotistDesign.faint)
-                TextField(model.text("搜索任务、分组或视图"), text: $query)
-                    .textFieldStyle(.plain).font(DotistDesign.font(16, language: model.language)).accessibilityLabel(model.text("搜索任务、分组或视图")).focused($focused).onSubmit(openSelected)
-            }.padding(.horizontal, 12).frame(height: 44)
+            SearchRow(text: $query, placeholder: model.text("搜索任务、分组或视图"), language: model.language, size: 16, iconSize: 14, focusOnAppear: true, commit: openSelected, navigate: { direction in move(direction); return true }, cancel: close)
+                .accessibilityIdentifier("command-search")
+                .padding(.horizontal, 12).frame(height: 44)
                 .overlay(alignment: .bottom) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5) }
                 .padding(.horizontal, 12).padding(.bottom, 8)
             ScrollViewReader { proxy in

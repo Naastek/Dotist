@@ -19,6 +19,7 @@ struct TaskEditor: NSViewRepresentable {
         scroll.hasVerticalScroller = false
         let editor = TaskTextView(frame: NSRect(x: 0, y: 0, width: 120, height: 20))
         editor.delegate = context.coordinator
+        editor.layoutManager?.delegate = context.coordinator
         editor.drawsBackground = false
         editor.isRichText = false
         editor.importsGraphics = false
@@ -28,6 +29,7 @@ struct TaskEditor: NSViewRepresentable {
         editor.textContainer?.lineFragmentPadding = 0
         editor.textContainer?.widthTracksTextView = true
         editor.font = font
+        editor.opticalSample = text.components(separatedBy: .newlines).first.flatMap { $0.isEmpty ? nil : $0 } ?? "中文任务"
         let paragraph = NSMutableParagraphStyle()
         paragraph.minimumLineHeight = 20
         paragraph.maximumLineHeight = 20
@@ -59,7 +61,18 @@ struct TaskEditor: NSViewRepresentable {
         editor.blur = {}; editor.commit = {}; editor.cancel = {}; editor.indent = { _ in }
         editor.delegate = nil
     }
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    final class Coordinator: NSObject, NSTextViewDelegate, NSLayoutManagerDelegate {
+        func layoutManager(_ layoutManager: NSLayoutManager, shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<NSRect>, lineFragmentUsedRect: UnsafeMutablePointer<NSRect>, baselineOffset: UnsafeMutablePointer<CGFloat>, in textContainer: NSTextContainer, forGlyphRange glyphRange: NSRange) -> Bool {
+            let rect = CGRect(x: 0, y: 0, width: lineFragmentRect.pointee.width, height: 20)
+            let editor = textContainer.textView as? TaskTextView
+            let scale = editor?.window?.backingScaleFactor ?? 1
+            let geometry = TextLineGeometry(font: parent.font, in: rect, sample: editor?.opticalSample ?? "中文任务")
+            // TextKit snaps fractional baselines upward when drawing. Round to
+            // the nearest device pixel first; otherwise Projects jumps one pixel
+            // at 1x even though its CoreText bounds are analytically centered.
+            baselineOffset.pointee = (geometry.baseline * scale).rounded() / scale
+            return true
+        }
         var parent: TaskEditor
         init(_ parent: TaskEditor) { self.parent = parent }
         func textDidChange(_ notification: Notification) {
@@ -77,6 +90,7 @@ struct TaskEditor: NSViewRepresentable {
 }
 
 final class TaskTextView: NSTextView {
+    var opticalSample = "中文任务"
     var commit: () -> Void = {}
     var cancel: () -> Void = {}
     var indent: (Bool) -> Void = { _ in }

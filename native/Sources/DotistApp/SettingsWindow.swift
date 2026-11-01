@@ -55,12 +55,11 @@ struct SettingsWindow: View {
     private var sidebar: some View {
         VStack(spacing: 12) {
             HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass").foregroundStyle(DotistDesign.muted).accessibilityHidden(true)
-                TextField(model.text("搜索设置"), text: $query).textFieldStyle(.plain)
+                SearchRow(text: $query, placeholder: model.text("搜索设置"), language: model.language, identifier: "settings-search")
                     .accessibilityIdentifier("settings-search")
                 if !query.isEmpty {
                     Button { query = "" } label: {
-                        Image(systemName: "xmark").font(font(10)).frame(width: 18, height: 22)
+                        OpticalSymbol(name: "xmark", size: 10).frame(width: 18, height: 22)
                     }.buttonStyle(.plain).accessibilityLabel(model.text("清除"))
                 }
             }.padding(.horizontal, 11).frame(height: 34).glassEffect(.regular, in: .capsule)
@@ -73,7 +72,7 @@ struct SettingsWindow: View {
                                 active = module; searchTarget = nil; emphasized = nil; searchRequest = UUID()
                             } label: {
                                 HStack(spacing: 10) {
-                                    Text(model.text(module.title)).font(font(13, active == module ? .semibold : .regular))
+                                    OpticalText(title: model.text(module.title), size: 13, weight: active == module ? .semibold : .regular, language: model.language)
                                         .foregroundStyle(active == module ? DotistDesign.ink : DotistDesign.muted)
                                     Spacer(minLength: 0)
                                 }.padding(.horizontal, 15).frame(height: 38).contentShape(Rectangle())
@@ -154,14 +153,14 @@ struct SettingsWindow: View {
                 settingRow("主题") {
                     SettingsSegmentedPicker(selection: Binding(get: { model.settings.theme }, set: { value in update { $0.theme = value } }),
                                           options: [("system", model.text("跟随系统")), ("light", model.text("浅色")), ("dark", model.text("深色"))],
-                                          label: model.text("主题"), language: model.language).frame(width: 244, height: 24)
+                                          label: model.text("主题"), language: model.language).frame(width: 244)
                 }
                 settingRow("玻璃预设") {
                     SettingsSegmentedPicker(selection: Binding(get: { glassPreset }, set: { value in
                         let preset = value == "clear" ? (UInt8(38), UInt8(22)) : value == "ultra" ? (UInt8(8), UInt8(4)) : (UInt8(60), UInt8(40))
                         update { $0.opacity = preset.0; $0.frost = preset.1 }
                     }), options: [("standard", model.text("标准")), ("clear", model.text("透明玻璃")), ("ultra", model.text("极致通透"))],
-                        label: model.text("玻璃预设"), language: model.language).frame(width: 244, height: 24)
+                        label: model.text("玻璃预设"), language: model.language).frame(width: 244)
                 }
                 settingRow("透明程度") {
                     Slider(value: Binding(get: { transparency }, set: { value in update { $0.opacity = UInt8((95 - 91 * pow(value / 100, 1.5)).rounded()) } }), in: 0...100).frame(width: 110).modifier(DotistFocusRing())
@@ -169,8 +168,8 @@ struct SettingsWindow: View {
                 }
                 numberRow("磨砂程度", value: Double(model.settings.frost), range: 0...100, unit: "%") { $0.frost = UInt8($1.rounded()) }
             }
-            settingsGroup("颜色主题", footer: "分组未设置颜色时使用‘全部’的默认颜色") {
-                settingRow("全部(默认颜色)") {
+            settingsGroup("颜色主题", footer: "分组未设置颜色时使用「全部」的默认颜色。") {
+                settingRow("全部（默认颜色）") {
                     SettingsColorPalette(model: model, selected: DotistGroupColor(rawValue: model.settings.allColor), identifier: "settings-all-color") { color in
                         update { $0.allColor = color.rawValue }
                     }
@@ -227,9 +226,9 @@ struct SettingsWindow: View {
                 List {
                     ForEach(model.settings.filters, id: \.self) { id in
                         HStack(spacing: 10) {
-                            Text(model.text(filterLabel(id)))
+                            OpticalText(title: model.text(filterLabel(id)), size: 13, language: model.language)
                             Spacer()
-                            Button { setFilter(id, enabled: false) } label: { Image(systemName: "xmark").frame(width: 20, height: 20) }
+                            Button { setFilter(id, enabled: false) } label: { OpticalSymbol(name: "xmark", size: 11).frame(width: 20, height: 20) }
                                 .buttonStyle(.plain).modifier(DotistFocusRing()).disabled(model.settings.filters.count == 1)
                                 .accessibilityLabel(Text(model.text("清除") + " " + model.text(filterLabel(id))))
                         }.frame(height: 44).contentShape(Rectangle())
@@ -276,7 +275,7 @@ struct SettingsWindow: View {
     }
     private var toolbarSettings: some View {
         VStack(alignment: .leading, spacing: 22) {
-            settingsGroup("工具栏", footer: "在面板上按住 ⌘ 可以左右拖动图标调整顺序") {
+            settingsGroup("工具栏", footer: "在面板上按住 ⌘ 可以左右拖动图标调整顺序。") {
                 ForEach(orderedToolbarItems, id: \.self) { item in
                     toolbarRow(item)
                 }
@@ -286,7 +285,7 @@ struct SettingsWindow: View {
     }
     private func toolbarRow(_ item: ToolbarItem) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: "line.3.horizontal").font(font(13))
+            OpticalSymbol(name: "line.3.horizontal", size: 13)
                 .foregroundStyle(draggedToolbarItem == item ? DotistDesign.accent : DotistDesign.faint)
                 .frame(width: 24, height: 32).contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 3).onChanged { value in
@@ -307,14 +306,14 @@ struct SettingsWindow: View {
                     let to = direction == .increment ? min(from + 1, items.count - 1) : max(from - 1, 0)
                     if from != to { toolbar.move(item, onto: items[to]) }
                 }
-            Text(model.text(toolbarTitle(item))).font(font(13, emphasized == rowID(toolbarTitle(item)) ? .semibold : .regular))
+            OpticalText(title: model.text(toolbarTitle(item)), size: 13, weight: emphasized == rowID(toolbarTitle(item)) ? .semibold : .regular, language: model.language)
                 .foregroundStyle(emphasized == rowID(toolbarTitle(item)) ? DotistDesign.accent : DotistDesign.ink)
             Spacer(minLength: 8)
             SettingsSegmentedPicker(selection: Binding(
                 get: { toolbar.visibility(of: item).rawValue },
                 set: { if let visibility = ToolbarVisibility(rawValue: $0) { toolbar.setVisibility(visibility, for: item) } }),
                 options: [("always", model.text("常驻")), ("hover", model.text("悬停显示"))] + (item == .collapse ? [] : [("hidden", model.text("隐藏"))]),
-                label: model.text(toolbarTitle(item)), language: model.language).frame(width: 230, height: 24)
+                label: model.text(toolbarTitle(item)), language: model.language).frame(width: 230)
                 .accessibilityLabel(model.text(toolbarTitle(item)))
                 .accessibilityIdentifier("settings-toolbar-visibility-" + item.rawValue)
         }.padding(.horizontal, 14).frame(height: 44)
@@ -366,7 +365,7 @@ struct SettingsWindow: View {
             settingsGroup("关于") {
                 infoRow("版本", Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
             }
-            settingsGroup("更新", footer: "新版本在退出 Dotist 时安装，重新打开后生效") {
+            settingsGroup("更新", footer: "新版本在退出 Dotist 时安装，重新打开后生效。") {
                 settingRow("更新") { Button(model.text("检查更新"), action: updater.check).disabled(updater.busy) }
                 boolRow("自动检查更新", value: model.settings.autoCheckUpdates) { $0.autoCheckUpdates = $1 }
                 boolRow("自动安装更新", value: model.settings.autoInstallUpdates) { $0.autoInstallUpdates = $1 }
@@ -415,7 +414,7 @@ struct SettingsWindow: View {
             .id(rowID(label)).accessibilityIdentifier("settings-row-" + rowID(label))
     }
     private func numericValue(_ value: String) -> some View {
-        Text(value).monospacedDigit().frame(width: 56, alignment: .trailing).foregroundStyle(DotistDesign.muted)
+        OpticalText(title: value, size: 13, language: model.language).monospacedDigit().frame(width: 56, alignment: .trailing).foregroundStyle(DotistDesign.muted)
     }
     private func settingMenu(_ label: String, value: String, options: [(String, String)], choose: @escaping (String) -> Void) -> some View {
         Menu {
@@ -426,7 +425,7 @@ struct SettingsWindow: View {
                 }
             }
         } label: {
-            Text(options.first(where: { $0.0 == value })?.1 ?? "").lineLimit(1).frame(width: 190, alignment: .leading)
+            OpticalText(title: options.first(where: { $0.0 == value })?.1 ?? "", size: 13, language: model.language).lineLimit(1).frame(width: 190, alignment: .leading)
         }.menuStyle(.automatic).frame(minHeight: 28).modifier(DotistFocusRing())
             .accessibilityLabel(Text(model.text(label)))
             .accessibilityValue(Text(options.first(where: { $0.0 == value })?.1 ?? ""))
@@ -451,9 +450,9 @@ struct SettingsWindow: View {
     }
     private func shortcutRow(_ label: String, id: UInt32, value: String) -> some View {
         settingRow(label) {
-            ShortcutRecorder(value: value, label: model.text(label), empty: model.text("未设置"), recordingText: model.text("按下新的快捷键…"), begin: beginShortcutCapture, finish: { endShortcutCapture(id, $0) }).frame(width: 150, height: 28)
+            ShortcutRecorder(value: value, label: model.text(label), empty: model.text("未设置"), recordingText: model.text("按下新的快捷键…"), language: model.language, begin: beginShortcutCapture, finish: { endShortcutCapture(id, $0) }).frame(width: 150, height: 28)
             if !value.isEmpty {
-                Button { beginShortcutCapture(); endShortcutCapture(id, "") } label: { Image(systemName: "xmark").frame(width: 24, height: 24) }
+                Button { beginShortcutCapture(); endShortcutCapture(id, "") } label: { OpticalSymbol(name: "xmark", size: 11).frame(width: 24, height: 24) }
                     .modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("清除")))
             }
         }

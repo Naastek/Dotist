@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CoreText
 import DotistCore
 import SwiftUI
 
@@ -14,6 +15,41 @@ enum TaskRowMetrics {
     static func circleFrame(_ depth: Int, titleHeight: CGFloat) -> CGRect {
         let size = diameter(depth)
         return CGRect(x: circleX(depth), y: (height(depth, titleHeight: titleHeight) - size) / 2, width: size, height: size)
+    }
+}
+
+/// Action hit boxes share a fixed right edge, independent of metadata length.
+enum TaskRowActionMetrics {
+    static let reservedMetadataWidth: CGFloat = 88
+    static func rightInset(metadataWidth: CGFloat) -> CGFloat {
+        metadataWidth > reservedMetadataWidth ? metadataWidth + 8 : reservedMetadataWidth
+    }
+    static func width(count: Int) -> CGFloat { CGFloat(count * 22 + max(0, count - 1)) }
+    static func frame(row: CGRect, metadataWidth: CGFloat, actionWidth: CGFloat) -> CGRect {
+        CGRect(x: row.maxX - rightInset(metadataWidth: metadataWidth) - actionWidth,
+               y: row.midY - 11, width: actionWidth, height: 22)
+    }
+}
+
+enum TaskRowBackgroundState: Equatable {
+    case idle, hovered, selected, editing
+    init(hovered: Bool, selected: Bool, editing: Bool, dragging: Bool, carried: Bool = false) {
+        if carried { self = .idle }
+        else if editing { self = .editing }
+        else if selected { self = .selected }
+        else if hovered && !dragging { self = .hovered }
+        else { self = .idle }
+    }
+    var opacity: Double {
+        switch self { case .idle: 0; case .hovered: 0.10; case .selected: 0.16; case .editing: 0.18 }
+    }
+}
+
+enum TaskDateFilterMetrics {
+    static func size(selected: Bool) -> CGFloat { selected ? 15 : 13 }
+    static func weight(selected: Bool) -> NSFont.Weight { selected ? .medium : .regular }
+    static func slotWidth(title: String, language: String) -> CGFloat {
+        ceil((title as NSString).size(withAttributes: [.font: DotistDesign.nativeFont(15, weight: .medium, language: language)]).width)
     }
 }
 
@@ -39,6 +75,11 @@ struct TaskRowLayout: Layout {
         subviews[1].place(at: CGPoint(x: bounds.minX + TaskRowMetrics.textX(depth) - TaskRowMetrics.inset, y: bounds.midY - title.height / 2), proposal: .init(width: titleWidth, height: title.height))
         let metadata = subviews[2].sizeThatFits(.unspecified)
         subviews[2].place(at: CGPoint(x: bounds.maxX - metadata.width, y: bounds.midY - metadata.height / 2), proposal: .init(width: metadata.width, height: metadata.height))
+        if subviews.count > 3 {
+            let actions = subviews[3].sizeThatFits(.unspecified)
+            let frame = TaskRowActionMetrics.frame(row: bounds, metadataWidth: metadata.width, actionWidth: actions.width)
+            subviews[3].place(at: frame.origin, proposal: .init(width: frame.width, height: frame.height))
+        }
     }
 }
 
@@ -125,7 +166,7 @@ struct TaskCheckmark: View {
         ZStack {
             if completed {
                 Circle().fill(DotistDesign.accent)
-                Image(systemName: "checkmark").font(DotistDesign.font(depth == 0 ? 9 : 7.5, weight: .heavy, language: "en")).foregroundStyle(DotistDesign.paper)
+                OpticalSymbol(name: "checkmark", size: depth == 0 ? 9 : 7.5, weight: .heavy).foregroundStyle(DotistDesign.paper)
             } else if children.isEmpty {
                 Circle().strokeBorder(emphasized ? DotistDesign.accent : DotistDesign.checkStroke, lineWidth: 1.25)
             } else {
@@ -172,7 +213,7 @@ enum TaskDragBatch {
 
 struct TaskListRowFrame: Equatable {
     let task: DotistTask
-    let frame: CGRect
+    var frame: CGRect
     var sub = false
     var allTasks = false
     var hideDue = false
@@ -216,6 +257,7 @@ struct TaskListDrag {
     var baselineRows: [TaskListRowFrame] = []
     var baselineGroups: [TaskListGroupFrame] = []
     var scrollOriginY: CGFloat = 0
+    var expandedDropGroup: String?
 }
 
 @MainActor
@@ -396,16 +438,8 @@ final class TaskDragSourceView: NSView, NSDraggingSource {
               hypot(event.locationInWindow.x - down.x, event.locationInWindow.y - down.y) > 4 else { return }
         dragging = true
         self.down = nil
-        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor.withAlphaComponent(0.8)]
-        let size = NSSize(width: min(348, max(120, ceil((title as NSString).size(withAttributes: attributes).width) + 42)), height: 32)
-        let image = NSImage(size: size, flipped: false) { [title] _ in
-            NSColor.secondaryLabelColor.withAlphaComponent(0.8).setStroke()
-            let circle = NSBezierPath(ovalIn: NSRect(x: 1, y: 8, width: 16, height: 16))
-            circle.lineWidth = 1.25
-            circle.stroke()
-            (title as NSString).draw(at: NSPoint(x: 26, y: 8), withAttributes: attributes)
-            return true
-        }
+        let image = TaskDragPreview.image(title: title, font: font)
+        let size = image.size
         let item = NSDraggingItem(pasteboardWriter: taskID as NSString)
         let point = convert(event.locationInWindow, from: nil)
         item.setDraggingFrame(NSRect(x: point.x - 26, y: point.y - size.height / 2, width: size.width, height: size.height), contents: image)
@@ -515,9 +549,14 @@ struct TaskGhostConnector: Shape {
 /// paper over the panel tint, and leaves the transparent title hit region intact.
 struct TaskTitleFade: View {
     let trailing: CGFloat
+    var rowRight: CGFloat? = nil
+    var coordinateSpace: String = "dotist-task-list"
     var body: some View {
         GeometryReader { geometry in
-            let end = max(0, geometry.size.width - trailing)
+            let title = geometry.frame(in: .named(coordinateSpace))
+            let metadata = rowRight.map { max(0, $0 - title.maxX - 8) } ?? 0
+            let rawEnd = max(0, rowRight.map { $0 - TaskRowActionMetrics.rightInset(metadataWidth: metadata) - trailing - title.minX } ?? (geometry.size.width - trailing))
+            let end = min(geometry.size.width, rawEnd)
             let start = max(0, end - 24)
             let width = max(1, geometry.size.width)
             LinearGradient(stops: [
@@ -537,4 +576,60 @@ enum TaskDragGeometry {
         guard !frame.isEmpty else { return y }
         return y - min(frame.height, max(0, y - frame.minY))
     }
+}
+
+/// The board/calendar adapters use exactly the same geometry as native fields.
+/// Unlike a fixed y origin this remains centered for every preview font size.
+enum TaskDragPreview {
+    static func image(title: String, font: NSFont) -> NSImage {
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor.withAlphaComponent(0.8)]
+        let size = NSSize(width: min(348, max(120, ceil((title as NSString).size(withAttributes: attributes).width) + 42)), height: 32)
+        return NSImage(size: size, flipped: false) { _ in
+            NSColor.secondaryLabelColor.withAlphaComponent(0.8).setStroke()
+            let circle = NSBezierPath(ovalIn: NSRect(x: 1, y: 8, width: 16, height: 16))
+            circle.lineWidth = 1.25
+            circle.stroke()
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            let line = TextLineGeometry(font: font, in: CGRect(x: 26, y: 0, width: size.width - 26, height: size.height), sample: title)
+            context.saveGState()
+            context.textMatrix = .identity
+            context.textPosition = CGPoint(x: 26, y: size.height - line.baseline)
+            CTLineDraw(CTLineCreateWithAttributedString(NSAttributedString(string: title, attributes: attributes)), context)
+            context.restoreGState()
+            return true
+        }
+    }
+}
+
+/// Only this layer observes pointer frames; the document's row tree stays still.
+struct TaskLiftedBlock<Content: View>: View {
+    let drag: TaskListDrag
+    @ObservedObject var motion: TaskDragMotion
+    @ViewBuilder let content: (TaskListRowFrame) -> Content
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(drag.visibleBlock, id: \.task.id) { row in content(row).frame(height: row.frame.height) }
+        }.frame(width: drag.startFrame.width, height: drag.startFrame.height, alignment: .topLeading)
+            .offset(x: drag.startFrame.minX, y: drag.startFrame.minY + motion.location.y - drag.startLocation.y)
+            .shadow(color: .black.opacity(0.12), radius: 3, y: 2)
+            .allowsHitTesting(false).accessibilityHidden(true)
+    }
+}
+
+/// Collapsed groups accept a complete subtree as a new final root.
+enum TaskCollapsedGroupDrop {
+    static func target(groupID: String) -> TaskReorderEngine.Target {
+        .init(groupID: groupID, slot: Int.max, level: 0, parentID: nil, beforeID: nil)
+    }
+    static func removingGap(_ frame: CGRect, gap: CGRect) -> CGRect {
+        guard !gap.isEmpty else { return frame }
+        let minY = TaskDragGeometry.pointerY(frame.minY, excludingGhost: gap)
+        let maxY = TaskDragGeometry.pointerY(frame.maxY, excludingGhost: gap)
+        return CGRect(x: frame.minX, y: minY, width: frame.width, height: maxY - minY)
+    }
+}
+
+struct TaskSectionHeadingKey: PreferenceKey {
+    static let defaultValue: [String] = []
+    static func reduce(value: inout [String], nextValue: () -> [String]) { value.append(contentsOf: nextValue()) }
 }

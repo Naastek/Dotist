@@ -22,7 +22,7 @@ final class SettingsSearchTests: XCTestCase {
             XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.title == "开机启动" }, query)
         }
         for query in ["默认颜色", "default color", "デフォルトカラー", "預設顏色"] {
-            XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.title == "全部(默认颜色)" }, query)
+            XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.title.folding(options: .widthInsensitive, locale: nil) == "全部(默认颜色)" }, query)
         }
     }
     func testTokensCanMatchAcrossModuleAndSettingTitle() {
