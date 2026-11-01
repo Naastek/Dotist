@@ -11,13 +11,12 @@ struct SettingsWindow: View {
     @ObservedObject private var toolbar = ToolbarConfig.shared
     @State private var active = "appearance"
     @State private var manager: Manager?
+    @State private var hoveredToolbarItem: ToolbarItem?
     private enum Manager: String, Identifiable { case tags, groups; var id: String { rawValue } }
-    private let sections: [(String, String, String)] = [
-        ("appearance", "外观", "paintpalette"), ("general", "通用", "slider.horizontal.3"),
-        ("filters", "筛选器", "list.bullet"), ("menubar", "菜单栏", "eye"),
-        ("toolbar", "工具栏", "rectangle.topthird.inset.filled"),
-        ("keyboard", "键盘快捷键", "keyboard"), ("shortcuts", "快捷键", "keyboard"), ("mcp", "MCP", "cable.connector"),
-        ("data", "数据", "externaldrive"), ("about", "关于", "info.circle"),
+    private let sections: [(String, String)] = [
+        ("appearance", "外观"), ("general", "通用"), ("filters", "筛选器"),
+        ("menubar", "菜单栏"), ("toolbar", "工具栏"), ("shortcuts", "快捷键"),
+        ("mcp", "MCP"), ("data", "数据"), ("about", "关于"),
     ]
     private func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular, serif: Bool = false) -> Font {
         DotistDesign.font(size, weight: weight, serif: serif, language: model.language)
@@ -33,13 +32,12 @@ struct SettingsWindow: View {
         Group {
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(sections, id: \.0) { id, title, icon in
+                    ForEach(sections, id: \.0) { id, title in
                         Button {
                             active = id
                         } label: {
                             HStack(spacing: 8) {
-                                Image(systemName: icon).frame(width: 16).foregroundColor(active == id ? DotistDesign.accent : DotistDesign.muted)
-                                Text(model.text(title)).font(font(13, active == id ? .medium : .regular))
+                                Text(model.text(title)).font(font(13, active == id ? .semibold : .regular))
                                 Spacer()
                             }.padding(.horizontal, 10).frame(height: 32).contentShape(Rectangle())
                         }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(active == id ? DotistDesign.ink : DotistDesign.muted)
@@ -148,40 +146,46 @@ struct SettingsWindow: View {
                         section("toolbar", "工具栏") {
                             Text(model.text("在面板上按住 ⌘ 可以左右拖动图标调整顺序"))
                                 .font(font(12)).foregroundColor(DotistDesign.muted).padding(.vertical, 8)
-                            ForEach(Array(toolbar.order.enumerated()), id: \.element) { index, item in
-                                HStack(spacing: 6) {
-                                    Text(model.text(toolbarTitle(item))).frame(maxWidth: .infinity, alignment: .leading)
-                                    Picker(model.text(toolbarTitle(item)), selection: Binding(
-                                        get: { toolbar.visibility(of: item) },
-                                        set: { toolbar.setVisibility($0, for: item) })) {
-                                        Text(model.text("常驻")).tag(ToolbarVisibility.always)
-                                        Text(model.text("悬停显示")).tag(ToolbarVisibility.hover)
-                                        if item != .collapse { Text(model.text("隐藏")).tag(ToolbarVisibility.hidden) }
-                                    }.pickerStyle(.segmented).labelsHidden().frame(width: 210)
-                                        .accessibilityLabel(Text(model.text(toolbarTitle(item))))
-                                    Button { toolbar.move(item, onto: toolbar.order[index - 1]) } label: { Image(systemName: "chevron.up") }
-                                        .disabled(index == 0).accessibilityLabel(Text(model.text("上移")))
-                                    Button { toolbar.move(item, onto: toolbar.order[index + 1]) } label: { Image(systemName: "chevron.down") }
-                                        .disabled(index == toolbar.order.count - 1).accessibilityLabel(Text(model.text("下移")))
-                                }.frame(minHeight: 40)
-                            }
+                            List {
+                                ForEach(toolbar.order, id: \.self) { item in
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "line.3.horizontal")
+                                            .foregroundColor(hoveredToolbarItem == item ? DotistDesign.muted : DotistDesign.faint)
+                                            .accessibilityHidden(true)
+                                        Text(model.text(toolbarTitle(item))).frame(maxWidth: .infinity, alignment: .leading)
+                                        Picker(model.text(toolbarTitle(item)), selection: Binding(
+                                            get: { toolbar.visibility(of: item) },
+                                            set: { toolbar.setVisibility($0, for: item) })) {
+                                            Text(model.text("常驻")).tag(ToolbarVisibility.always)
+                                            Text(model.text("悬停显示")).tag(ToolbarVisibility.hover)
+                                            if item != .collapse { Text(model.text("隐藏")).tag(ToolbarVisibility.hidden) }
+                                        }.pickerStyle(.segmented).labelsHidden().frame(width: 210)
+                                            .accessibilityLabel(Text(model.text(toolbarTitle(item))))
+                                    }.frame(height: 40).contentShape(Rectangle())
+                                        .onHover { hoveredToolbarItem = $0 ? item : nil }
+                                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                                }.onMove { source, destination in
+                                    var reordered = toolbar.order
+                                    reordered.move(fromOffsets: source, toOffset: destination)
+                                    for (index, item) in reordered.enumerated() where toolbar.order[index] != item {
+                                        toolbar.move(item, onto: toolbar.order[index])
+                                    }
+                                }
+                            }.listStyle(PlainListStyle()).environment(\.defaultMinListRowHeight, 40)
+                                .frame(height: CGFloat(toolbar.order.count * 40 + 8))
+                                .accessibilityIdentifier("settings-toolbar-order")
                             Button(model.text("恢复默认")) { toolbar.reset() }.padding(.top, 8)
                         }
-                        section("keyboard", "键盘快捷键") {
+                        section("shortcuts", "快捷键") {
                             Text(model.text("面板内")).font(font(13, .medium)).padding(.top, 8)
                             infoRow("移动焦点", "↑↓")
                             infoRow("调整顺序", "⌥↑↓")
                             infoRow("缩进", "Tab")
-                            infoRow("保存 / 新建", "Return")
+                            infoRow("新建同级任务", "Return")
                             infoRow("换行", "⇧Return")
                             infoRow("取消", "Esc")
+                            infoRow("完成 / 取消完成", model.text("空格"))
                             Text(model.text("全局快捷键")).font(font(13, .medium)).padding(.top, 12)
-                            infoRow("显示 / 收起窗口", shortcutValue(model.settings.toggleShortcut))
-                            infoRow("打开设置", shortcutValue(model.settings.settingsShortcut))
-                            infoRow("打开任务视图", shortcutValue(model.settings.viewsShortcut))
-                            infoRow("快速添加", shortcutValue(model.settings.quickAddShortcut))
-                        }
-                        section("shortcuts", "快捷键") {
                             shortcutRow("显示 / 收起窗口", id: 1, value: model.settings.toggleShortcut)
                             shortcutRow("打开设置", id: 3, value: model.settings.settingsShortcut)
                             if ["Command+Comma", "CommandOrControl+Comma"].contains(model.settings.settingsShortcut) {

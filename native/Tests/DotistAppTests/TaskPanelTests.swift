@@ -23,6 +23,7 @@ final class TaskPanelTests: XCTestCase {
     }
 
     func testGroupPanelsKeepNavigationAndCompactGeometryIndependent() async throws {
+        guard NSScreen.main != nil else { throw XCTSkip("Group-panel placement requires a WindowServer display") }
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-panel-test-\(UUID().uuidString)")
         let model = try AppModel(store: TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path))

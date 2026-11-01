@@ -208,6 +208,21 @@ final class AppModel: ObservableObject {
         change { try $0.reorder(id, relativeTo: target, after: after, allTasks: allTasks) }
     }
 
+    /// The active drag remains frozen until the UI ends its session. The store
+    /// validates the anchor and commits the complete move in one transaction.
+    func commitReorder(taskID: String, to target: TaskReorderEngine.Target, completed: (() -> Void)? = nil, failed: (() -> Void)? = nil) {
+        var committedSnapshot: TaskSnapshot?
+        change(completed: { [weak self] in
+            // Publish the committed snapshot before the UI releases its frozen
+            // drag. Database observation delivery may otherwise arrive later.
+            if let committedSnapshot { self?.apply(committedSnapshot) }
+            completed?()
+        }, failed: failed) { store in
+            try store.commitReorder(taskID, groupID: target.groupID, parentID: target.parentID, beforeID: target.beforeID)
+            committedSnapshot = try store.snapshot()
+        }
+    }
+
     func updateSettings(_ patch: DotistSettingsPatch, completed: ((Bool) -> Void)? = nil) {
         let core = core
         queue.async { [weak self] in

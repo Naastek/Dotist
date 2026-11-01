@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import DotistCore
 import SwiftUI
 
@@ -16,9 +17,7 @@ struct MainWindow: View {
     @State private var panelHovered = false
     @State private var composerHovered = false
     @State private var composerFocused = false
-    @State private var hint = ""
     @State private var draggedToolbarItem: ToolbarItem?
-    @State private var dropAsChild = false
     @State private var shelfTarget: String?
     @State private var composer = ""
     @State private var composerSubmitting = false
@@ -33,12 +32,15 @@ struct MainWindow: View {
     @State private var childSubmitting = false
     @State private var groupIndented: Set<String> = []
     @State private var editing: String?
+    @State private var draftAfter: String?
+    @State private var draftTitle = ""
+    @State private var draftParent: String?
+    @State private var draftHeight: CGFloat = 20
+    @State private var draftSaving = false
     @State private var editedTitle = ""
     @State private var editSaving = false
     @State private var editHeight: CGFloat = 20
     @State private var pendingEdit: DotistTask?
-    @State private var dropTarget: String?
-    @State private var dropAfter = false
     @State private var manageGroups = false
     @State private var manageTags = false
     @State private var showCalendar = false
@@ -51,7 +53,15 @@ struct MainWindow: View {
     @State private var customEnd: String?
     @State private var upcomingOpen = false
     @State private var todayDoneOpen = false
-    @State private var rowHeights: [String: CGFloat] = [:]
+    private static let listSpace = "dotist-task-list"
+    @State private var rowFrames: [TaskListRowFrame] = []
+    @State private var groupFrames: [TaskListGroupFrame] = []
+    @State private var shelfFrames: [String: CGRect] = [:]
+    @State private var listViewport = CGRect.zero
+    @State private var drag: TaskListDrag?
+    @State private var dragCancelled = false
+    @GestureState private var reorderGestureActive = false
+    @StateObject private var reorderRuntime = TaskReorderRuntime()
 
     private var textColor: Color { DotistDesign.ink }
     private var panelTasks: [DotistTask] {
@@ -75,66 +85,32 @@ struct MainWindow: View {
                 header
                 dateFilters
                 if model.tagCounts.contains(where: { $0.open > 0 }) { tagBar }
-                ScrollViewReader { proxy in
-                    GeometryReader { space in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            if state.scope == "all" { allGroups }
-                            else if state.scope == "today" && customStart == nil { todayList }
-                            else { filteredTasks }
-                        }.padding(.horizontal, 16).padding(.bottom, 12)
-                            .frame(minHeight: space.size.height, alignment: .topLeading).background(WindowDragArea())
-                    }.contextMenu {
-                        Button(model.text("新建分组…")) { manageGroups = true }
-                        Button(model.text("管理分组…")) { manageGroups = true }
-                        Button(model.text("管理标签…")) { manageTags = true }
-                        Button(model.text("任务视图"), action: showViews)
-                        Button(model.text("收起为悬浮球"), action: collapse)
-                    }.onChange(of: model.gotoGroup) { id in
-                        guard primary, let id else { return }
-                        state.groupID = id
-                        withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration: 0.22)) { proxy.scrollTo(id, anchor: .top) }
-                        model.gotoGroup = nil
-                    }
-                    .onChange(of: model.focusNavigation) { _ in
-                        guard primary, let id = model.focusId else { return }
-                        proxy.scrollTo(id, anchor: .center)
-                    }
-                    .onAppear {
-                        // Management pages unmount the list; consume navigation when it returns.
-                        if let id = model.focusId { proxy.scrollTo(id, anchor: .center) }
-                        else if let id = model.gotoGroup { proxy.scrollTo(id, anchor: .top) }
-                        model.gotoGroup = nil
-                    }
-                    }
-                }
+                taskList
             }
             if !manageGroups && !manageTags {
-                GlassEffectContainer(spacing: 12) {
-                    Group {
-                        if model.dragId != nil { groupShelf } else { composerBar }
-                    }.overlay(alignment: .top) {
-                        if let undo = model.undo {
-                            HStack(spacing: 8) {
-                                Text(model.text("已删除「{title}」").replacingOccurrences(of: "{title}", with: undo.title)).lineLimit(1)
-                                Button(model.text("撤销")) { model.restore() }.font(font(13, .medium)).foregroundColor(DotistDesign.accent)
-                                Button { model.undo = nil } label: { Image(systemName: "xmark").font(.system(size: 11)).frame(width: 22, height: 22) }
-                                    .accessibilityLabel(Text(model.text("关闭")))
-                            }.buttonStyle(.plain).font(font(13)).foregroundColor(DotistDesign.muted)
-                                .padding(.leading, 16).padding(.trailing, 6).frame(height: 36)
-                                .glassEffect(.regular, in: .capsule).fixedSize().offset(y: -48)
-                        }
-                    }
-                }
-                Text(hint.isEmpty ? " " : hint).font(font(12)).foregroundColor(DotistDesign.faint)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).frame(height: 22)
-                    .accessibilityHidden(true)
+                composerArea
+
             }
         }
+        .coordinateSpace(name: Self.listSpace)
+        .overlay(alignment: .topLeading) { liftedTaskBlock }
+        .background(TaskReorderInteractionGuard(rowFrames: rowFrames.map(\.frame), dragging: drag != nil, cancel: cancelReorder))
+        .onPreferenceChange(TaskListRowFrame.Key.self) { rowFrames = $0 }
+        .onPreferenceChange(TaskListGroupFrame.Key.self) { groupFrames = $0 }
+        .onPreferenceChange(TaskShelfFrameKey.self) { shelfFrames = $0 }
+        .onChange(of: reorderGestureActive) { active in
+            if !active {
+                if drag?.committing == false { cancelReorder() }
+                dragCancelled = false
+            }
+        }
+        .onReceive(Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect()) { _ in autoScrollReorder() }
+        .onDisappear { cancelReorder() }
         .onHover { panelHovered = $0 }
         .foregroundColor(textColor)
         .onAppear { category = state.groupID ?? DotistGroup.inboxID }
         .onChange(of: state.groupID) { id in
+            cancelReorder()
             category = id ?? DotistGroup.inboxID
             if addingToGroup != id { addingToGroup = nil }
             addingChild = nil
@@ -148,7 +124,7 @@ struct MainWindow: View {
             if let tag = state.activeTag, !model.tagCounts.contains(where: { $0.tag == tag && $0.open > 0 }) { state.activeTag = nil }
         }
         .onChange(of: model.scope) { scope in if primary { state.scope = scope } }
-        .onChange(of: state.scope) { scope in if primary { model.scope = scope } }
+        .onChange(of: state.scope) { scope in cancelReorder(); if primary { model.scope = scope } }
         .onChange(of: model.scopeNavigation) { _ in
             guard primary else { return }
             state.activeTag = nil
@@ -157,21 +133,250 @@ struct MainWindow: View {
         }
     }
 
+    private var taskList: some View {
+        ScrollViewReader { proxy in
+            GeometryReader { space in
+                ScrollView {
+                    // An eager stack keeps the gesture source alive while auto-scrolling
+                    // beyond the viewport. A lazy stack may recycle it mid-drag.
+                    VStack(alignment: .leading, spacing: 0) {
+                        listSections
+                        emptyDropGroups
+                    }.padding(.horizontal, 16).padding(.bottom, 12)
+                        .frame(minHeight: space.size.height, alignment: .topLeading)
+                        .background(WindowDragArea())
+                        .background(TaskReorderScrollBridge(runtime: reorderRuntime))
+                }
+                .background(GeometryReader { geometry in
+                    Color.clear.onAppear { listViewport = geometry.frame(in: .named(Self.listSpace)) }
+                        .onChange(of: geometry.frame(in: .named(Self.listSpace))) { listViewport = $0 }
+                })
+                .contextMenu { listMenu }
+                .onChange(of: model.gotoGroup) { id in
+                    guard primary, let id else { return }
+                    state.groupID = id
+                    withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration: 0.22)) { proxy.scrollTo(id, anchor: .top) }
+                    model.gotoGroup = nil
+                }
+                .onChange(of: model.focusNavigation) { _ in
+                    guard primary, let id = model.focusId else { return }
+                    proxy.scrollTo(id, anchor: .center)
+                }
+                .onAppear {
+                    if let id = model.focusId { proxy.scrollTo(id, anchor: .center) }
+                    else if let id = model.gotoGroup { proxy.scrollTo(id, anchor: .top) }
+                    model.gotoGroup = nil
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var listSections: some View {
+        if state.scope == "all" { allGroups }
+        else if state.scope == "today" && customStart == nil { todayList }
+        else { filteredTasks }
+    }
+
+    @ViewBuilder private var listMenu: some View {
+        Button(model.text("新建分组…")) { manageGroups = true }
+        Button(model.text("管理分组…")) { manageGroups = true }
+        Button(model.text("管理标签…")) { manageTags = true }
+        Button(model.text("任务视图"), action: showViews)
+        Button(model.text("收起为悬浮球"), action: collapse)
+    }
+
+    private var composerArea: some View {
+        GlassEffectContainer(spacing: 12) {
+            Group {
+                if drag != nil && state.groupID != nil { groupShelf } else { composerBar }
+            }.overlay(alignment: .top) { undoToast }
+        }
+    }
+
+    @ViewBuilder private var undoToast: some View {
+        if let undo = model.undo {
+            HStack(spacing: 8) {
+                Text(model.text("已删除「{title}」").replacingOccurrences(of: "{title}", with: undo.title)).lineLimit(1)
+                Button(model.text("撤销")) { model.restore() }.font(font(13, .medium)).foregroundColor(DotistDesign.accent)
+                Button { model.undo = nil } label: { Image(systemName: "xmark").font(.system(size: 11)).frame(width: 22, height: 22) }
+                    .accessibilityLabel(Text(model.text("关闭")))
+            }.buttonStyle(.plain).font(font(13)).foregroundColor(DotistDesign.muted)
+                .padding(.leading, 16).padding(.trailing, 6).frame(height: 36)
+                .glassEffect(.regular, in: .capsule).fixedSize().offset(y: -48)
+        }
+    }
+
+    private func rowGeometry(_ task: DotistTask, sub: Bool, allTasks: Bool, hideDue: Bool) -> some View {
+        GeometryReader { geometry in
+            Color.clear.preference(key: TaskListRowFrame.Key.self, value: [TaskListRowFrame(
+                task: task, frame: geometry.frame(in: .named(Self.listSpace)), sub: sub, allTasks: allTasks, hideDue: hideDue
+            )])
+        }
+    }
+
+    private func groupGeometry(_ id: String, region: String) -> some View {
+        GeometryReader { geometry in
+            Color.clear.preference(key: TaskListGroupFrame.Key.self, value: [TaskListGroupFrame(
+                id: id, region: region, frame: geometry.frame(in: .named(Self.listSpace))
+            )])
+        }
+    }
+
+    @ViewBuilder private var emptyDropGroups: some View {
+        if drag != nil && state.scope != "all" && state.groupID == nil {
+            ForEach(model.groups.filter { group in !rowFrames.contains { $0.task.category == group.id } }) { group in
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(group.name).font(font(15, .semibold, serif: true)).foregroundColor(DotistDesign.faint).frame(height: 34)
+                    emptyGroupGhost(group.id, region: "empty:\(group.id)")
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                    .background(groupGeometry(group.id, region: "empty:\(group.id)"))
+            }
+        }
+    }
+
+    private var ghostBeforeID: String? { shelfTarget == nil ? drag?.ghostBeforeID : nil }
+    private var ghostAfterID: String? { shelfTarget == nil ? drag?.ghostAfterID : nil }
+
+    @ViewBuilder private func emptyGroupGhost(_ id: String, region: String) -> some View {
+        if let drag, drag.target?.groupID == id, drag.region == region, drag.targetIsEmpty, shelfTarget == nil {
+            taskGhost(compensatingIndent: 0)
+        }
+    }
+
+    @ViewBuilder private func taskGhost(compensatingIndent: CGFloat) -> some View {
+        if let drag, let target = drag.target {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(drag.visibleBlock, id: \.task.id) { row in
+                    let level = row.task.id == drag.taskID ? target.level : 1
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Circle().strokeBorder(DotistDesign.checkStroke, lineWidth: 1.25)
+                            .frame(width: level == 1 ? 13 : 16, height: level == 1 ? 13 : 16)
+                            .frame(width: level == 1 ? 14 : 18, height: 20, alignment: .leading)
+                            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                        Text(row.task.title).font(font(13)).foregroundColor(DotistDesign.ink)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }.padding(.leading, level == 1 ? 26 : 0)
+                        .frame(height: row.frame.height)
+                }
+            }.opacity(0.35).padding(.leading, -compensatingIndent)
+                .allowsHitTesting(false).accessibilityHidden(true)
+        }
+    }
+
+    @ViewBuilder private var liftedTaskBlock: some View {
+        if let drag {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(drag.visibleBlock, id: \.task.id) { row in
+                    liftedRow(row, headFrame: drag.startFrame)
+                }
+            }.frame(width: drag.startFrame.width, alignment: .leading)
+                .background(DotistDesign.paper.opacity(0.96))
+                .overlay { Rectangle().strokeBorder(DotistDesign.rule, lineWidth: 0.5) }
+                .shadow(color: .black.opacity(0.07), radius: 3, y: 2)
+                .opacity(0.96)
+                .offset(x: drag.startFrame.minX, y: drag.startFrame.minY + drag.location.y - drag.startLocation.y)
+                .allowsHitTesting(false).accessibilityHidden(true)
+        }
+    }
+
+    private func liftedRow(_ row: TaskListRowFrame, headFrame: CGRect) -> some View {
+        let task = row.task
+        return rowContent(task, children: row.allTasks ? [] : model.visibleChildren(of: task), sub: row.sub, allTasks: row.allTasks, previous: nil, hideDue: row.hideDue, titleParts: model.tags(for: task), actionsVisible: false)
+            .frame(width: row.frame.width, height: row.frame.height)
+            .padding(.leading, max(0, row.frame.minX - headFrame.minX))
+    }
+
+    private func reorderGesture(_ task: DotistTask) -> some Gesture {
+        DragGesture(minimumDistance: 6, coordinateSpace: .named(Self.listSpace))
+            .updating($reorderGestureActive) { _, active, _ in active = true }
+            .onChanged { value in
+                guard !dragCancelled, editing == nil, draftAfter == nil else { return }
+                if drag == nil { beginReorder(task, at: value.startLocation) }
+                guard drag?.taskID == task.id, drag?.committing == false else { return }
+                drag?.location = value.location
+                retargetReorder()
+            }
+            .onEnded { value in
+                guard !dragCancelled, drag?.taskID == task.id, drag?.committing == false else { return }
+                drag?.location = value.location
+                retargetReorder()
+                finishReorder()
+            }
+    }
+
+    private func beginReorder(_ task: DotistTask, at start: CGPoint) {
+        guard let head = rowFrames.first(where: { $0.task.id == task.id }) else { return }
+        let ids = Set([task.id] + model.tasks.filter { $0.parentId == task.id }.map(\.id))
+        let block = rowFrames.filter { ids.contains($0.task.id) }.sorted { $0.frame.minY < $1.frame.minY }
+        drag = TaskListDrag(taskID: task.id, blockIDs: ids, visibleBlock: block, startFrame: head.frame, startLocation: start, location: start)
+        model.beginDrag(task.id, scope: "list:\(state.scope)")
+        model.focusId = task.id
+    }
+
+    private func retargetReorder() {
+        guard let drag, !drag.committing else { return }
+        if state.groupID != nil, let shelf = shelfFrames.first(where: { $0.value.contains(drag.location) })?.key {
+            shelfTarget = shelf
+            self.drag?.target = .init(groupID: shelf, slot: Int.max, level: 0, parentID: nil, beforeID: nil)
+            return
+        }
+        shelfTarget = nil
+        let groups = groupFrames.sorted { $0.frame.minY < $1.frame.minY }
+        let engineGroups = groups.map { TaskReorderEngine.Group(id: $0.id, minY: $0.frame.minY, maxY: $0.frame.maxY) }
+        let rows = rowFrames.sorted { $0.frame.midY < $1.frame.midY }.map { row in
+            TaskReorderEngine.Row(id: row.task.id, level: row.task.parentId == nil ? 0 : 1, groupID: row.task.category, parentID: row.task.parentId, midY: row.frame.midY)
+        }
+        let target = TaskReorderEngine.target(rows: rows, groups: engineGroups, draggedID: drag.taskID, blockIDs: drag.blockIDs, startY: drag.startLocation.y, offsetY: drag.location.y - drag.startLocation.y, offsetX: drag.location.x - drag.startLocation.x, indentStep: 26)
+        if target != drag.target { self.drag?.target = target }
+        let rest = rows.filter { $0.groupID == target?.groupID && !drag.blockIDs.contains($0.id) }
+        let slot = target?.slot ?? 0
+        self.drag?.ghostBeforeID = rest.indices.contains(slot) ? rest[slot].id : nil
+        self.drag?.ghostAfterID = slot >= rest.count ? rest.last?.id : nil
+        self.drag?.targetIsEmpty = rest.isEmpty
+        let region = groups.first { $0.id == target?.groupID && drag.location.y >= $0.frame.minY && drag.location.y < $0.frame.maxY }
+            ?? groups.filter { $0.id == target?.groupID }.min { abs($0.frame.midY - drag.location.y) < abs($1.frame.midY - drag.location.y) }
+        if region?.region != drag.region { self.drag?.region = region?.region }
+    }
+
+    private func finishReorder() {
+        guard let drag, !drag.committing else { return }
+        // A release outside the list or shelf abandons the move.
+        guard let target = drag.target, listViewport.contains(drag.location) || shelfTarget != nil else { cancelReorder(); return }
+        self.drag?.committing = true
+        model.commitReorder(taskID: drag.taskID, to: target, completed: {
+            if let parent = target.parentID { state.expanded.insert(parent) }
+            if let moved = model.tasks.first(where: { $0.id == drag.taskID }), moved.completed { state.folded.insert(target.groupID) }
+            clearReorder()
+        }, failed: { clearReorder() })
+    }
+
+    private func cancelReorder() {
+        guard drag != nil, drag?.committing == false else { return }
+        dragCancelled = reorderGestureActive
+        clearReorder()
+    }
+
+    private func clearReorder() {
+        drag = nil
+        shelfTarget = nil
+        model.endDrag()
+    }
+
+    private func autoScrollReorder() {
+        guard let drag, !drag.committing, shelfTarget == nil,
+              drag.location.x >= listViewport.minX, drag.location.x <= listViewport.maxX else { return }
+        let y = drag.location.y
+        let delta: CGFloat
+        if y >= listViewport.minY - 24 && y < listViewport.minY + 24 {
+            delta = -max(2, min(14, (listViewport.minY + 24 - y) * 0.45))
+        } else if y > listViewport.maxY - 24 && y <= listViewport.maxY + 24 {
+            delta = max(2, min(14, (y - listViewport.maxY + 24) * 0.45))
+        } else { return }
+        if reorderRuntime.scroll(by: delta) { retargetReorder() }
+    }
+
     private var header: some View {
         HStack(spacing: 4) {
-            Text(model.groups.first(where: { $0.id == state.groupID })?.name ?? model.text("全部"))
-                .font(font(18, .semibold, serif: true)).lineLimit(1).frame(height: 28)
-                .accessibilityIdentifier("group-menu")
-                .contextMenu {
-                    Button(model.text("全部分组")) { state.groupID = nil }.accessibilityIdentifier("group-menu:all")
-                    ForEach(model.groups) { group in
-                        Button(group.name) { state.groupID = group.id }.accessibilityIdentifier("group-menu:" + group.id)
-                    }
-                    Menu(model.text("在独立面板中打开")) {
-                        ForEach(model.groups) { group in Button(group.name) { showGroupPanel(group.id) }.accessibilityIdentifier("group-open:" + group.id) }
-                    }
-                    Button(model.text("管理分组…")) { manageGroups = true }
-                }
             Spacer(minLength: 4)
             ForEach(toolbarConfig.order, id: \.self) { item in
                 if toolbarConfig.visibility(of: item) != .hidden {
@@ -245,7 +450,7 @@ struct MainWindow: View {
 
     private func toolbarButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: symbol).font(.system(size: 14)).frame(width: 28, height: 28).contentShape(Rectangle()) }
-            .buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted).onHover { hint = $0 ? label : "" }.accessibilityLabel(Text(label))
+            .buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted).help(label).accessibilityLabel(Text(label))
     }
 
     private var tagBar: some View {
@@ -281,10 +486,15 @@ struct MainWindow: View {
 
     private var allGroups: some View {
         ForEach(model.groups.filter { state.groupID == nil || $0.id == state.groupID }) { group in
+            taskGroup(group)
+        }
+    }
+
+    private func taskGroup(_ group: DotistGroup) -> some View {
             let roots = model.ordered(panelTasks.filter { $0.category == group.id && $0.parentId == nil })
             let open = roots.filter { !$0.completed }
             let completed = roots.filter(\.completed)
-            VStack(alignment: .leading, spacing: 0) {
+            return VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(group.name).font(font(15, .semibold, serif: true)).foregroundColor(roots.isEmpty ? DotistDesign.faint : DotistDesign.ink)
                 }.frame(maxWidth: .infinity, alignment: .leading).frame(height: 30).padding(.top, 4)
@@ -302,6 +512,7 @@ struct MainWindow: View {
                         Button(model.text("在独立面板中打开")) { showGroupPanel(group.id) }
                     }
                 ForEach(Array(open.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? open[index - 1].id : nil, next: index + 1 < open.count ? open[index + 1].id : nil) }
+                emptyGroupGhost(group.id, region: group.id)
                 if addingToGroup == group.id {
                     QuickInput(text: Binding(get: { groupTitles[group.id] ?? "" }, set: { groupTitles[group.id] = $0 }), placeholder: model.text(groupIndented.contains(group.id) ? "子任务" : "写下一件小事"), label: model.text("新任务（{name}）").replacingOccurrences(of: "{name}", with: group.name), font: DotistDesign.nativeFont(13, language: model.language), commit: {
                         let title = (groupTitles[group.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -322,7 +533,7 @@ struct MainWindow: View {
                         if state.folded.contains(group.id) { state.folded.remove(group.id) } else { state.folded.insert(group.id) }
                     } label: {
                         HStack(spacing: 8) {
-                            Image(systemName: state.folded.contains(group.id) ? "chevron.down" : "chevron.right").frame(width: 18)
+                            Image(systemName: state.folded.contains(group.id) ? "chevron.down" : "chevron.right").offset(x: -1).frame(width: 18)
                             Text(model.text("已完成"))
                         }.font(font(12)).foregroundColor(DotistDesign.faint).frame(height: 28)
                     }.buttonStyle(.plain).modifier(DotistFocusRing())
@@ -330,8 +541,7 @@ struct MainWindow: View {
                 }
             }.padding(.top, group.id == model.groups.first(where: { state.groupID == nil || $0.id == state.groupID })?.id ? 6 : 20).id(group.id).contentShape(Rectangle())
                 .onHover { over in if over { hoveredGroup = group.id } else if hoveredGroup == group.id { hoveredGroup = nil } }
-                .onDrop(of: ["public.utf8-plain-text"], delegate: GroupDrop(model: model, group: group.id))
-        }
+                .background(groupGeometry(group.id, region: group.id))
     }
 
     @ViewBuilder private func taskTree(_ task: DotistTask, previous: String?, next: String?) -> some View {
@@ -340,6 +550,7 @@ struct MainWindow: View {
         if state.expanded.contains(task.id) {
             ForEach(Array(children.enumerated()), id: \.element.id) { index, child in
                 taskRow(child, children: [], sub: true, allTasks: false, previous: index > 0 ? children[index - 1].id : nil, next: index + 1 < children.count ? children[index + 1].id : nil).padding(.leading, 26)
+                draftRow(after: child, sub: true).padding(.leading, 26)
             }
             if addingChild == task.id {
                 QuickInput(text: Binding(get: { childTitles[task.id] ?? "" }, set: { childTitles[task.id] = $0 }), placeholder: model.text("子任务"), label: model.text("新子任务"), font: DotistDesign.nativeFont(13, language: model.language), commit: {
@@ -361,6 +572,7 @@ struct MainWindow: View {
                 }).padding(.leading, 48).frame(height: 28)
             }
         }
+        draftRow(after: task, sub: false)
     }
 
     @ViewBuilder private var filteredTasks: some View {
@@ -394,7 +606,7 @@ struct MainWindow: View {
                 let done = model.ordered(values.filter(\.completed))
                 if !done.isEmpty {
                     Button { todayDoneOpen.toggle() } label: {
-                        HStack { Image(systemName: todayDoneOpen ? "chevron.down" : "chevron.right").frame(width: 18); Text(model.text("已完成")) }.font(font(12)).foregroundColor(DotistDesign.muted)
+                        HStack { Image(systemName: todayDoneOpen ? "chevron.down" : "chevron.right").offset(x: -1).frame(width: 18); Text(model.text("已完成")) }.font(font(12)).foregroundColor(DotistDesign.muted)
                     }.buttonStyle(.plain).modifier(DotistFocusRing())
                     if todayDoneOpen { flatRows(done) }
                 }
@@ -445,7 +657,7 @@ struct MainWindow: View {
             }
             if !done.isEmpty {
                 Button { todayDoneOpen.toggle() } label: {
-                    HStack { Image(systemName: todayDoneOpen ? "chevron.down" : "chevron.right").frame(width: 18); Text(model.text("已完成")) }
+                    HStack { Image(systemName: todayDoneOpen ? "chevron.down" : "chevron.right").offset(x: -1).frame(width: 18); Text(model.text("已完成")) }
                         .font(font(12)).foregroundColor(DotistDesign.faint).frame(height: 28)
                 }.buttonStyle(.plain).modifier(DotistFocusRing())
                 if todayDoneOpen { flatRows(done) }
@@ -459,117 +671,60 @@ struct MainWindow: View {
         }
     }
     private func flatRows(_ items: [DotistTask], hideDue: Bool = false) -> some View {
-        ForEach(Array(items.enumerated()), id: \.element.id) { index, task in
-            taskRow(task, children: [], sub: false, allTasks: true, previous: index > 0 ? items[index - 1].id : nil, next: index + 1 < items.count ? items[index + 1].id : nil, hideDue: hideDue)
+        ForEach(model.groups.filter { state.groupID == nil || $0.id == state.groupID }) { group in
+            let values = items.filter { $0.category == group.id }
+            if !values.isEmpty { flatGroupRows(values, group: group, hideDue: hideDue) }
         }
     }
 
+    private func flatGroupRows(_ items: [DotistTask], group: DotistGroup, hideDue: Bool) -> some View {
+        let region = "flat:\(items.first?.id ?? ""):\(group.id)"
+        let ids = Set(items.map(\.id))
+        let children = Dictionary(grouping: items.filter { $0.parentId != nil }, by: { $0.parentId! })
+        let heads = items.filter { $0.parentId == nil || !ids.contains($0.parentId!) }
+        let outlined = heads.flatMap { [$0] + (children[$0.id] ?? []) }
+        return VStack(alignment: .leading, spacing: 0) {
+            if state.groupID == nil {
+                Text(group.name).font(font(12, .semibold, serif: true)).foregroundColor(DotistDesign.faint).frame(height: 26)
+            }
+            ForEach(Array(outlined.enumerated()), id: \.element.id) { index, task in
+                taskRow(task, children: [], sub: task.parentId != nil, allTasks: true, previous: index > 0 ? outlined[index - 1].id : nil, next: index + 1 < outlined.count ? outlined[index + 1].id : nil, hideDue: hideDue)
+                    .padding(.leading, task.parentId != nil ? 26 : 0)
+                draftRow(after: task, sub: task.parentId != nil)
+                    .padding(.leading, task.parentId != nil ? 26 : 0)
+            }
+            emptyGroupGhost(group.id, region: region)
+        }.background(groupGeometry(group.id, region: region))
+    }
+
     private func taskRow(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, next: String?, hideDue: Bool = false) -> some View {
-        let scope = allTasks
-            ? (state.scope == "today" && customStart == nil
-                ? (task.completed ? "today:done" : task.dueDate.map { $0 < Date().dotistDay ? "today:overdue" : $0 == Date().dotistDay ? "today:today" : "today:upcoming" } ?? "today:undated")
-                : state.scope == "overdue" || state.scope == "done" ? "scope:\(state.scope)"
-                : state.scope == "undated" ? "undated:\(task.category)"
-                : task.completed ? "range:done"
-                : "day:\(task.dueDate ?? "undated")")
-            : (task.parentId.map { "children:\($0)" } ?? "group:\(task.category):\(task.completed)")
         let titleParts = model.tags(for: task)
         let actionsVisible = hoveredTask == task.id || focusedTask == task.id || pickingTask == task.id
-        return HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Button { model.complete(task) } label: {
-                ZStack {
-                    if task.completed {
-                        Circle().fill(DotistDesign.accent)
-                        Image(systemName: "checkmark").font(.system(size: sub ? 7.5 : 9, weight: .heavy)).foregroundColor(DotistDesign.paper)
-                    } else {
-                        Circle().strokeBorder(focusedTask == task.id ? DotistDesign.accent : DotistDesign.checkStroke, lineWidth: 1.25)
-                    }
-                }.frame(width: sub ? 13 : 16, height: sub ? 13 : 16).frame(width: sub ? 14 : 18, height: 20, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).focusEffectDisabled().accessibilityLabel(Text(model.text(task.completed ? "恢复 {title}" : "完成 {title}").replacingOccurrences(of: "{title}", with: task.title)))
-                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+        return VStack(alignment: .leading, spacing: 0) {
+            if ghostBeforeID == task.id { taskGhost(compensatingIndent: sub ? 26 : 0) }
+            interactiveTaskRow(task, children: children, sub: sub, allTasks: allTasks, previous: previous, next: next, hideDue: hideDue, titleParts: titleParts, actionsVisible: actionsVisible)
+            if ghostAfterID == task.id { taskGhost(compensatingIndent: sub ? 26 : 0) }
+        }
+    }
 
-            if editing == task.id {
-                VStack(alignment: .leading, spacing: 3) {
-                TaskEditor(text: $editedTitle, height: $editHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("任务内容"), commit: {
-                    saveEditing(task)
-                }, cancel: { editing = nil }, indent: { reverse in
-                    if reverse && sub { saveEditing(task) { model.change { _ = try $0.reparent(task.id, parentId: nil) } } }
-                    if !reverse && !sub, let previous { saveEditing(task) { model.change(completed: { state.expanded.insert(previous) }) { _ = try $0.reparent(task.id, parentId: previous) } } }
-                }, blur: { saveEditing(task) }).frame(height: editHeight).alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.top] + 14 }
-                }
-            } else {
-                HStack(spacing: 4) {
-                    Text(titleParts?.tags.isEmpty == false ? (titleParts?.text ?? task.title) : task.title).font(font(13)).foregroundColor(task.completed ? DotistDesign.faint : DotistDesign.ink)
-                        .contentShape(Rectangle()).onTapGesture { beginEditing(task) }
-                        .overlay(TaskDragSource(model: model, task: task, scope: scope, font: DotistDesign.nativeFont(13, language: model.language), click: { beginEditing(task) }).accessibilityHidden(true))
-                    ForEach(titleParts?.tags ?? [], id: \.self) { tag in
-                        Button("#" + tag) { state.activeTag = state.activeTag == tag ? nil : tag }.buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12, state.activeTag == tag ? .medium : .regular)).foregroundColor(state.activeTag == tag ? DotistDesign.ink : DotistDesign.faint)
-                    }
-                    Color.clear.frame(maxWidth: .infinity, minHeight: 20)
-                        .overlay(TaskDragSource(model: model, task: task, scope: scope, font: DotistDesign.nativeFont(13, language: model.language), click: { beginEditing(task) }).accessibilityHidden(true))
-                }.frame(maxWidth: .infinity, alignment: .leading)
-            }
-            HStack(spacing: 8) {
-            if let due = task.dueDate, !hideDue, editing != task.id {
-                Button(model.dueLabel(due)) { pickingTask = task.id }.buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12))
-                    .foregroundColor(due < Date().dotistDay && !task.completed ? DotistDesign.danger : due == Date().dotistDay ? DotistDesign.accent : DotistDesign.muted)
-                    .accessibilityLabel(Text(model.text("到期日 {date}，点击修改").replacingOccurrences(of: "{date}", with: model.dueLabel(due))))
-            }
-            if allTasks, state.groupID == nil, let group = model.group(for: task) { Text(group.name).font(font(12, .semibold, serif: true)).foregroundColor(DotistDesign.faint).lineLimit(1) }
-            if !children.isEmpty {
-                Button {
-                    if state.expanded.contains(task.id) { state.expanded.remove(task.id) } else { state.expanded.insert(task.id) }
-                } label: {
-                    HStack(spacing: 2) {
-                        Text("\(children.filter(\.completed).count)/\(children.count)")
-                        Image(systemName: state.expanded.contains(task.id) ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .semibold))
-                    }.font(font(12)).foregroundColor(DotistDesign.faint)
-                }.buttonStyle(.plain).modifier(DotistFocusRing())
-                    .accessibilityLabel(Text(model.text("子任务 {done}/{total}").replacingOccurrences(of: "{done}", with: "\(children.filter(\.completed).count)").replacingOccurrences(of: "{total}", with: "\(children.count)")))
-            }
-            }.opacity(actionsVisible ? 0 : 1)
-        }
-        .overlay(alignment: .trailing) {
-            if editing != task.id {
-                HStack(spacing: 1) {
-                    if !sub && !allTasks {
-                        Button { state.expanded.insert(task.id); addingChild = task.id } label: { Image(systemName: "plus").frame(width: 22, height: 22) }
-                            .help(model.text("添加子任务"))
-                            .accessibilityLabel(Text(model.text("添加子任务 {title}").replacingOccurrences(of: "{title}", with: task.title)))
-                    }
-                    if task.dueDate == nil || hideDue {
-                        Button { pickingTask = task.id } label: { Image(systemName: "calendar").frame(width: 22, height: 22) }
-                            .help(model.text("设置到期日"))
-                            .accessibilityLabel(Text(model.text("设置到期日 {title}").replacingOccurrences(of: "{title}", with: task.title)))
-                    }
-                    Button { model.delete(task) } label: { Image(systemName: "xmark").frame(width: 22, height: 22) }
-                        .help(model.text("删除"))
-                        .accessibilityLabel(Text(model.text("删除 {title}").replacingOccurrences(of: "{title}", with: task.title)))
-                }.buttonStyle(.plain).font(.system(size: 11, weight: .regular)).foregroundColor(DotistDesign.muted)
-                    .offset(x: 5).opacity(actionsVisible ? 1 : 0).disabled(!actionsVisible).accessibilityHidden(!actionsVisible)
-                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-            }
-        }
+    private func interactiveTaskRow(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, next: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool) -> some View {
+        let carried = drag?.blockIDs.contains(task.id) == true
+        return rowContent(task, children: children, sub: sub, allTasks: allTasks, previous: previous, hideDue: hideDue, titleParts: titleParts, actionsVisible: actionsVisible)
+        .overlay(alignment: .trailing) { rowActions(task, sub: sub, allTasks: allTasks, hideDue: hideDue, visible: actionsVisible) }
         .frame(minHeight: sub ? 28 : 32)
         .background { if editing == task.id { RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(0.18)).padding(.horizontal, -6) } }
-        .background(GeometryReader { geometry in
-            Color.clear.onAppear { rowHeights[task.id] = geometry.size.height }.onChange(of: geometry.size.height) { rowHeights[task.id] = $0 }
-        })
         .contentShape(Rectangle())
         .focusable(true).focused($focusedTask, equals: task.id).focusEffectDisabled()
+        .onKeyPress(keys: [.return, .space, .tab], phases: .down) { press in
+            handleRowKey(press, task: task, previous: previous, allTasks: allTasks)
+        }
         .onMoveCommand { direction in
             guard NSEvent.modifierFlags.contains(.option) else { return }
             if direction == .up, let previous { model.reorder(task.id, relativeTo: previous, after: false, allTasks: allTasks) }
             if direction == .down, let next { model.reorder(task.id, relativeTo: next, after: true, allTasks: allTasks) }
         }
         .onTapGesture { model.focusId = task.id }
-        .onDrop(of: ["public.utf8-plain-text"], delegate: TaskDrop(model: model, target: task.id, scope: scope, height: rowHeights[task.id] ?? (sub ? 28 : 32), allTasks: allTasks, sub: sub, dropTarget: $dropTarget, dropAfter: $dropAfter, dropAsChild: $dropAsChild))
-        .overlay(alignment: dropAfter ? .bottom : .top) {
-            if model.dragScope == scope, model.dragId != nil, model.dragId != task.id, dropTarget == task.id {
-                Rectangle().fill(DotistDesign.accent).frame(height: 1.5).padding(.leading, dropAsChild && !sub ? 48 : 0)
-                    .allowsHitTesting(false).accessibilityHidden(true)
-            }
-        }
+        .gesture(reorderGesture(task), including: editing == nil && draftAfter == nil ? .all : .subviews)
         .onHover { over in if over { hoveredTask = task.id } else if hoveredTask == task.id { hoveredTask = nil } }
         .popover(isPresented: Binding(get: { pickingTask == task.id }, set: { if !$0 && pickingTask == task.id { pickingTask = nil } })) {
             RangeCalendar(model: model, start: task.dueDate ?? "", end: task.dueDate ?? "", choose: { date, _ in
@@ -579,10 +734,20 @@ struct MainWindow: View {
                 model.change(completed: { pickingTask = nil }) { _ = try $0.setDueDate(task.id, date: nil) }
             })
         }
-        .contextMenu {
+        .contextMenu { rowMenu(task, sub: sub, allTasks: allTasks, previous: previous, next: next) }
+        .accessibilityElement(children: .contain)
+        // Keep the source and its gesture mounted, even when its layout space is
+        // occupied by a ghost in another group. Removing it ends SwiftUI's drag.
+        .opacity(carried ? 0 : 1)
+        .frame(height: carried ? 0 : nil, alignment: .top)
+        .background(rowGeometry(task, sub: sub, allTasks: allTasks, hideDue: hideDue))
+        .accessibilityIdentifier("task-row:\(task.id)")
+    }
+
+    @ViewBuilder private func rowMenu(_ task: DotistTask, sub: Bool, allTasks: Bool, previous: String?, next: String?) -> some View {
             Button(model.text("编辑 {title}").replacingOccurrences(of: "{title}", with: task.title)) { beginEditing(task) }
-            if !sub { Button(model.text("添加子任务")) { state.expanded.insert(task.id); addingChild = task.id } }
-            if sub { Button(model.text("取消缩进")) { model.change { _ = try $0.reparent(task.id, parentId: nil) } } }
+            if task.parentId == nil { Button(model.text("添加子任务")) { state.expanded.insert(task.id); addingChild = task.id } }
+            if task.parentId != nil { Button(model.text("取消缩进")) { model.change { _ = try $0.reparent(task.id, parentId: nil) } } }
             if !sub && !allTasks, let previous {
                 Button(model.text("缩进为上一条的子任务")) {
                     model.change(completed: { state.expanded.insert(previous) }) { _ = try $0.reparent(task.id, parentId: previous) }
@@ -603,8 +768,156 @@ struct MainWindow: View {
             }
             Button(model.text(task.completed ? "恢复" : "完成")) { model.complete(task) }
             Button(model.text("删除")) { model.delete(task) }
+    }
+
+    private func rowContent(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Button { model.complete(task) } label: {
+                ZStack {
+                    if task.completed {
+                        Circle().fill(DotistDesign.accent)
+                        Image(systemName: "checkmark").font(.system(size: sub ? 7.5 : 9, weight: .heavy)).foregroundColor(DotistDesign.paper)
+                    } else {
+                        Circle().strokeBorder(focusedTask == task.id ? DotistDesign.accent : DotistDesign.checkStroke, lineWidth: 1.25)
+                    }
+                }.frame(width: sub ? 13 : 16, height: sub ? 13 : 16).frame(width: sub ? 14 : 18, height: 20, alignment: .leading).contentShape(Rectangle())
+            }.buttonStyle(.plain).focusEffectDisabled().accessibilityLabel(Text(model.text(task.completed ? "恢复 {title}" : "完成 {title}").replacingOccurrences(of: "{title}", with: task.title)))
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+
+            if editing == task.id {
+                VStack(alignment: .leading, spacing: 3) {
+                TaskEditor(text: $editedTitle, height: $editHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("任务内容"), commit: {
+                    if editedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { editing = nil }
+                    else { saveEditing(task) { startDraft(after: task) } }
+                }, cancel: { editing = nil }, indent: { reverse in
+                    if reverse && task.parentId != nil { saveEditing(task) { model.change { _ = try $0.reparent(task.id, parentId: nil) } } }
+                    if !reverse && task.parentId == nil, let previous, model.tasks.contains(where: { $0.id == previous && $0.parentId == nil && $0.category == task.category }) { saveEditing(task) { model.change(completed: { state.expanded.insert(previous) }) { _ = try $0.reparent(task.id, parentId: previous) } } }
+                }, blur: { saveEditing(task) }).frame(height: editHeight).alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.top] + 14 }
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(titleParts?.tags.isEmpty == false ? (titleParts?.text ?? task.title) : task.title).font(font(13)).foregroundColor(task.completed ? DotistDesign.faint : DotistDesign.ink)
+                        .contentShape(Rectangle()).onTapGesture { beginEditing(task) }
+
+                    ForEach(titleParts?.tags ?? [], id: \.self) { tag in
+                        Button("#" + tag) { state.activeTag = state.activeTag == tag ? nil : tag }.buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12, state.activeTag == tag ? .medium : .regular)).foregroundColor(state.activeTag == tag ? DotistDesign.ink : DotistDesign.faint)
+                    }
+                    Color.clear.frame(maxWidth: .infinity).frame(height: 20)
+                        .contentShape(Rectangle()).onTapGesture { beginEditing(task) }
+
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            rowMetadata(task, children: children, allTasks: allTasks, hideDue: hideDue, visible: actionsVisible)
         }
-        .accessibilityElement(children: .contain)
+    }
+
+    private func rowMetadata(_ task: DotistTask, children: [DotistTask], allTasks: Bool, hideDue: Bool, visible: Bool) -> some View {
+            HStack(spacing: 8) {
+            if let due = task.dueDate, !hideDue, editing != task.id {
+                Button(model.dueLabel(due)) { pickingTask = task.id }.buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12))
+                    .foregroundColor(due < Date().dotistDay && !task.completed ? DotistDesign.danger : due == Date().dotistDay ? DotistDesign.accent : DotistDesign.muted)
+                    .accessibilityLabel(Text(model.text("到期日 {date}，点击修改").replacingOccurrences(of: "{date}", with: model.dueLabel(due))))
+            }
+            if allTasks, state.groupID == nil, let group = model.group(for: task) { Text(group.name).font(font(12, .semibold, serif: true)).foregroundColor(DotistDesign.faint).lineLimit(1) }
+            if !children.isEmpty {
+                Button {
+                    if state.expanded.contains(task.id) { state.expanded.remove(task.id) } else { state.expanded.insert(task.id) }
+                } label: {
+                    HStack(spacing: 2) {
+                        Text("\(children.filter(\.completed).count)/\(children.count)")
+                        Image(systemName: state.expanded.contains(task.id) ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .semibold))
+                    }.font(font(12)).foregroundColor(DotistDesign.faint)
+                }.buttonStyle(.plain).modifier(DotistFocusRing())
+                    .accessibilityLabel(Text(model.text("子任务 {done}/{total}").replacingOccurrences(of: "{done}", with: "\(children.filter(\.completed).count)").replacingOccurrences(of: "{total}", with: "\(children.count)")))
+            }
+            }.opacity(visible ? 0 : 1)
+    }
+
+    @ViewBuilder private func rowActions(_ task: DotistTask, sub: Bool, allTasks: Bool, hideDue: Bool, visible: Bool) -> some View {
+            if editing != task.id {
+                HStack(spacing: 1) {
+                    if !sub && !allTasks {
+                        Button { state.expanded.insert(task.id); addingChild = task.id } label: { Image(systemName: "plus").frame(width: 22, height: 22) }
+                            .help(model.text("添加子任务"))
+                            .accessibilityLabel(Text(model.text("添加子任务 {title}").replacingOccurrences(of: "{title}", with: task.title)))
+                    }
+                    if task.dueDate == nil || hideDue {
+                        Button { pickingTask = task.id } label: { Image(systemName: "calendar").frame(width: 22, height: 22) }
+                            .help(model.text("设置到期日"))
+                            .accessibilityLabel(Text(model.text("设置到期日 {title}").replacingOccurrences(of: "{title}", with: task.title)))
+                    }
+                    Button { model.delete(task) } label: { Image(systemName: "xmark").frame(width: 22, height: 22) }
+                        .help(model.text("删除"))
+                        .accessibilityLabel(Text(model.text("删除 {title}").replacingOccurrences(of: "{title}", with: task.title)))
+                }.buttonStyle(.plain).font(.system(size: 11, weight: .regular)).foregroundColor(DotistDesign.muted)
+                    .offset(x: 5).opacity(visible ? 1 : 0).disabled(!visible).accessibilityHidden(!visible)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+            }
+    }
+
+    private func handleRowKey(_ press: KeyPress, task: DotistTask, previous: String?, allTasks: Bool) -> KeyPress.Result {
+        guard editing == nil else { return .ignored }
+        if press.key == .return {
+            if press.modifiers.contains(.command) { model.complete(task) } else { startDraft(after: task) }
+            return .handled
+        }
+        if press.key == .space { model.complete(task); return .handled }
+        if press.key == .tab {
+            if press.modifiers.contains(.shift), task.parentId != nil {
+                model.change { _ = try $0.reparent(task.id, parentId: nil) }; return .handled
+            }
+            if task.parentId == nil, let previous, model.tasks.contains(where: { $0.id == previous && $0.parentId == nil && $0.category == task.category }) {
+                model.change(completed: { state.expanded.insert(previous) }) { _ = try $0.reparent(task.id, parentId: previous) }; return .handled
+            }
+        }
+        return .ignored
+    }
+
+    private func startDraft(after task: DotistTask) {
+        draftTitle = ""; draftHeight = 20; draftAfter = task.id; draftParent = task.parentId
+        if let parent = task.parentId { state.expanded.insert(parent) }
+    }
+
+    @ViewBuilder private func draftRow(after task: DotistTask, sub: Bool) -> some View {
+        if draftAfter == task.id {
+            let indented = draftParent != nil
+            HStack(alignment: .top, spacing: 8) {
+                Circle().strokeBorder(DotistDesign.checkStroke, lineWidth: 1.25)
+                    .frame(width: indented ? 13 : 16, height: indented ? 13 : 16)
+                    .frame(width: indented ? 14 : 18, height: 20, alignment: .leading)
+                TaskEditor(text: $draftTitle, height: $draftHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("任务内容"), commit: {
+                    saveDraft(after: task, continueEditing: true)
+                }, cancel: { draftAfter = nil }, indent: { reverse in
+                    if reverse { draftParent = nil }
+                    else if task.parentId == nil { draftParent = task.id; state.expanded.insert(task.id) }
+                }, blur: {
+                    saveDraft(after: task, continueEditing: false)
+                }).frame(height: draftHeight)
+            }.frame(minHeight: indented ? 28 : 32)
+                .padding(.leading, !sub && indented ? 26 : 0)
+                .offset(x: sub && !indented ? -26 : 0)
+                .background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(0.18)).padding(.horizontal, -6))
+        }
+    }
+
+    private func saveDraft(after task: DotistTask, continueEditing: Bool) {
+        guard draftAfter == task.id, !draftSaving else { return }
+        let title = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { draftAfter = nil; return }
+        draftSaving = true
+        let parent = draftParent
+        var created: DotistTask?
+        model.change(completed: {
+            draftSaving = false
+            guard draftAfter == task.id else { return }
+            if continueEditing, let created { startDraft(after: created) }
+            else { draftAfter = nil }
+        }, failed: { draftSaving = false }) { store in
+            let newTask = try store.addTask(title: title, category: task.category, parentId: parent, dueDate: task.dueDate)
+            if parent == task.parentId { try store.reorder(newTask.id, relativeTo: task.id, after: true, allTasks: false) }
+            else if parent == nil, let formerParent = task.parentId { try store.reorder(newTask.id, relativeTo: formerParent, after: true, allTasks: false) }
+            created = newTask
+        }
     }
 
     private func beginEditing(_ task: DotistTask) {
@@ -631,7 +944,7 @@ struct MainWindow: View {
 
     private var composerBar: some View {
         let selected = model.groups.first(where: { $0.id == category }) ?? model.groups.first
-        let shownDue = dueDate?.dotistDay ?? (["today", "tomorrow", "week", "nextweek", "next7"].contains(state.scope) ? rangeBounds.0 : nil)
+        let shownDue = dueDate?.dotistDay
         return ComposerLayout {
             Menu {
                 ForEach(model.groups) { group in
@@ -643,7 +956,7 @@ struct MainWindow: View {
                 HStack(spacing: 4) {
                     Text(selected?.name ?? "").font(font(13, .semibold, serif: true)).lineLimit(1)
                 }.foregroundColor(DotistDesign.muted).frame(height: 24)
-            }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel(Text(model.text("分组"))).accessibilityValue(Text(selected?.name ?? "")).onHover { hint = $0 ? model.text("分组") : "" }
+            }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help(model.text("分组")).accessibilityLabel(Text(model.text("分组"))).accessibilityValue(Text(selected?.name ?? ""))
             ZStack(alignment: .topLeading) {
                 ComposerInput(text: $composer, focused: $composerFocused, placeholder: model.text("写下一件小事"), label: model.text("新任务"), font: DotistDesign.nativeFont(13, language: model.language), commit: addTask, navigate: { direction in
                     let values = tagSuggestions
@@ -667,7 +980,7 @@ struct MainWindow: View {
                 }.foregroundColor(shownDue == nil ? DotistDesign.muted : DotistDesign.accent)
             }
                 .buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("设置到期日")))
-                .onHover { hint = $0 ? model.text("设置到期日") : "" }
+                .help(model.text("设置到期日"))
                 .popover(isPresented: $showDuePicker) {
                     RangeCalendar(model: model, start: shownDue ?? "", end: shownDue ?? "", choose: { date, _ in dueDate = Date.dotistDay(date); showDuePicker = false }, close: { showDuePicker = false }, single: true, clear: { dueDate = nil; showDuePicker = false })
                 }
@@ -676,17 +989,20 @@ struct MainWindow: View {
     }
 
     private var groupShelf: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 18) {
             ForEach(model.groups) { group in
                 Text(group.name).font(font(14, .semibold, serif: true))
                     .foregroundColor(shelfTarget == group.id ? DotistDesign.ink : DotistDesign.faint)
                     .frame(height: 48).contentShape(Rectangle())
-                    .onDrop(of: ["public.utf8-plain-text"], delegate: ShelfDrop(model: model, group: group.id, target: $shelfTarget))
+                    .background(GeometryReader { geometry in
+                        Color.clear.preference(key: TaskShelfFrameKey.self, value: [group.id: geometry.frame(in: .named(Self.listSpace))])
+                    })
             }
             Button("＋ " + model.text("新分组")) { manageGroups = true }
                 .buttonStyle(.plain).font(font(14, .semibold, serif: true)).foregroundColor(DotistDesign.faint)
-        }.padding(.horizontal, 22).frame(maxWidth: .infinity).frame(height: 48)
-            .glassEffect(.regular, in: .capsule).frame(height: 52)
+        }.padding(.horizontal, 22).frame(height: 48)
+        }.frame(height: 52)
     }
 
     private var tagSuggestions: [String] {
@@ -780,67 +1096,5 @@ private struct HeaderMenuEscape: NSViewRepresentable {
     }
     final class Coordinator {
         var monitor: Any?
-    }
-}
-
-private struct GroupDrop: DropDelegate {
-    let model: AppModel
-    let group: String
-    func validateDrop(info: DropInfo) -> Bool {
-        guard let id = model.dragId, let task = model.tasks.first(where: { $0.id == id }) else { return false }
-        return task.parentId == nil && task.category != group
-    }
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        return DropProposal(operation: .move)
-    }
-    func performDrop(info: DropInfo) -> Bool {
-        guard validateDrop(info: info), let id = model.dragId else { return false }
-        model.endDrag()
-        model.change { _ = try $0.patchTask(id: id, category: group) }
-        return true
-    }
-}
-
-private struct TaskDrop: DropDelegate {
-    let model: AppModel
-    let target: String
-    let scope: String
-    let height: CGFloat
-    let allTasks: Bool
-    let sub: Bool
-    @Binding var dropTarget: String?
-    @Binding var dropAfter: Bool
-    @Binding var dropAsChild: Bool
-    func validateDrop(info: DropInfo) -> Bool { model.dragScope == scope && model.dragId != target }
-    func dropEntered(info: DropInfo) { if model.dragScope == scope { dropTarget = target } }
-    func dropExited(info: DropInfo) { if dropTarget == target { dropTarget = nil } }
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        let after = info.location.y >= height / 2
-        dropAsChild = !allTasks && !sub && info.location.x >= 48
-        if dropAfter != after { dropAfter = after }
-        return DropProposal(operation: .move)
-    }
-    func performDrop(info: DropInfo) -> Bool {
-        guard model.dragScope == scope, let id = model.dragId else { return false }
-        let asChild = !allTasks && !sub && info.location.x >= 48
-        model.endDrag()
-        dropTarget = nil
-        dropAsChild = false
-        if asChild { model.change { _ = try $0.reparent(id, parentId: target) } }
-        else { model.reorder(id, relativeTo: target, after: info.location.y >= height / 2, allTasks: allTasks) }
-        return true
-    }
-}
-
-private struct ShelfDrop: DropDelegate {
-    let model: AppModel
-    let group: String
-    @Binding var target: String?
-    func dropEntered(info: DropInfo) { target = group }
-    func dropExited(info: DropInfo) { if target == group { target = nil } }
-    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
-    func performDrop(info: DropInfo) -> Bool {
-        target = nil
-        return GroupDrop(model: model, group: group).performDrop(info: info)
     }
 }

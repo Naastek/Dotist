@@ -4,18 +4,14 @@ import SwiftUI
 
 /// Geometry is kept independent of the window and view lifecycles.
 enum SideTabGeometry {
-    static let sensorWidth: CGFloat = 96
-    static let windowMargin: CGFloat = 110
+    static let collapsedWidth: CGFloat = 10
     static let height: CGFloat = 34
     static let spacing: CGFloat = 4
-    static func isRight(panelMinX: CGFloat, visibleMinX: CGFloat) -> Bool {
-        panelMinX - windowMargin < visibleMinX
+    static func isRight(panelMinX: CGFloat, visibleMinX: CGFloat, expandedWidth: CGFloat) -> Bool {
+        panelMinX - expandedWidth < visibleMinX
     }
-    static func width(selected: Bool, expanded: Bool, hovered: Bool) -> CGFloat {
-        guard expanded else { return selected ? 26 : 8 }
-        if selected { return 78 }
-        return hovered ? 92 : 70
-    }
+    static func expandedWidth(textWidth: CGFloat) -> CGFloat { max(48, ceil(textWidth) + 28) }
+    static func width(expanded: Bool, fullWidth: CGFloat) -> CGFloat { expanded ? fullWidth : collapsedWidth }
 }
 
 private struct SideTabShape: Shape {
@@ -57,12 +53,14 @@ private struct SideTabView: View {
                     shape.fill(DotistDesign.paper)
                     if !selected { shape.fill(DotistDesign.rule.opacity(0.45)) }
                     shape.stroke(DotistDesign.rule, lineWidth: 0.5)
-                    if selected || expanded {
+                    if expanded {
                         Text(model.text(name))
                             .font(DotistDesign.font(13, weight: selected ? .semibold : .regular, serif: true, language: model.language))
                             .foregroundColor(selected || hovered ? DotistDesign.ink : DotistDesign.faint)
-                            .lineLimit(1).truncationMode(.tail)
-                            .frame(maxWidth: min(120, max(0, geometry.size.width - 6)), alignment: right ? .leading : .trailing)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .frame(maxWidth: .infinity, alignment: right ? .leading : .trailing)
+                            .padding(.horizontal, 14)
+                            .clipped()
                     }
                 }.frame(width: geometry.size.width, height: geometry.size.height)
             }.frame(height: SideTabGeometry.height).contentShape(Rectangle())
@@ -85,6 +83,8 @@ final class SideTabsController {
     private var viewStates: [String: String] = [:]
     private var timer: Timer?
     private var shown = false
+    private var expanded = false
+    private var leftSensorAt: Date?
 
     init(parent: NSPanel, model: AppModel, state: TaskPanelState, motion: PanelMotion) {
         self.parent = parent; self.model = model; self.state = state; self.motion = motion
@@ -102,6 +102,7 @@ final class SideTabsController {
         let visible = parent.isVisible && parent.isOnActiveSpace && !motion.bubble && !motion.animationInProgress
         guard visible else {
             if shown { windows.values.forEach { $0.orderOut(nil) }; shown = false }
+            expanded = false; leftSensorAt = nil
             return
         }
         let items: [(String, String?, String)] = [("all", nil, "全部")] + model.groups.map { ($0.id, Optional($0.id), $0.name) }
@@ -112,16 +113,35 @@ final class SideTabsController {
             viewStates.removeValue(forKey: key)
         }
         let frame = parent.frame
-        let right = SideTabGeometry.isRight(panelMinX: frame.minX, visibleMinX: (parent.screen ?? NSScreen.main)?.visibleFrame.minX ?? frame.minX)
+        let fullWidths = items.map { item in
+            let name = model.text(item.2) as NSString
+            let regular = DotistDesign.nativeFont(13, serif: true, language: model.language)
+            let selected = DotistDesign.nativeFont(13, weight: .semibold, serif: true, language: model.language)
+            return SideTabGeometry.expandedWidth(textWidth: max(name.size(withAttributes: [.font: regular]).width, name.size(withAttributes: [.font: selected]).width))
+        }
+        let maxWidth = fullWidths.max() ?? SideTabGeometry.collapsedWidth
+        let right = SideTabGeometry.isRight(panelMinX: frame.minX, visibleMinX: (parent.screen ?? NSScreen.main)?.visibleFrame.minX ?? frame.minX, expandedWidth: maxWidth)
         let top = frame.maxY - 40
         let totalHeight = CGFloat(items.count) * SideTabGeometry.height + CGFloat(max(0, items.count - 1)) * SideTabGeometry.spacing
-        let sensor = NSRect(x: right ? frame.maxX : frame.minX - SideTabGeometry.sensorWidth, y: top - totalHeight, width: SideTabGeometry.sensorWidth, height: totalHeight)
+        let sensorWidth = expanded ? maxWidth : SideTabGeometry.collapsedWidth
+        let sensor = NSRect(x: right ? frame.maxX : frame.minX - sensorWidth, y: top - totalHeight, width: sensorWidth, height: totalHeight)
         let mouse = NSEvent.mouseLocation
-        let expanded = sensor.contains(mouse)
+        let overEar = items.indices.contains { index in
+            let y = top - CGFloat(index) * (SideTabGeometry.height + SideTabGeometry.spacing) - SideTabGeometry.height
+            return mouse.y >= y && mouse.y <= y + SideTabGeometry.height
+        }
+        if sensor.contains(mouse) && (expanded || overEar) {
+            expanded = true
+            leftSensorAt = nil
+        } else if expanded {
+            if let leftSensorAt {
+                if Date().timeIntervalSince(leftSensorAt) >= 0.15 { expanded = false; self.leftSensorAt = nil }
+            } else { leftSensorAt = Date() }
+        }
         for (index, item) in items.enumerated() {
             let y = top - CGFloat(index) * (SideTabGeometry.height + SideTabGeometry.spacing) - SideTabGeometry.height
-            let hovered = expanded && mouse.y >= y && mouse.y <= y + SideTabGeometry.height
-            let width = SideTabGeometry.width(selected: state.groupID == item.1, expanded: expanded, hovered: hovered)
+            let width = SideTabGeometry.width(expanded: expanded, fullWidth: fullWidths[index])
+            let hovered = expanded && NSRect(x: right ? frame.maxX : frame.minX - width, y: y, width: width, height: SideTabGeometry.height).contains(mouse)
             let target = NSRect(x: right ? frame.maxX : frame.minX - width, y: y, width: width, height: SideTabGeometry.height)
             let window: NSPanel
             if let existing = windows[item.0] { window = existing }

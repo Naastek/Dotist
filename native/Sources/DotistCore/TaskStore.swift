@@ -304,6 +304,40 @@ public final class TaskStore: @unchecked Sendable {
         }
     }
 
+    /// Moves one task and its children atomically. `beforeID` is a destination
+    /// sibling; nil appends. Invalid or stale anchors roll the entire move back.
+    public func commitReorder(_ id: String, groupID: String, parentID: String?, beforeID: String?) throws {
+        try database.write { db in
+            let old = try Self.task(db, id)
+            guard try Self.groups(db).contains(where: { $0.id == groupID }) else { throw TaskStoreError("找不到分组") }
+            let children = try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE parent_id=? AND deleted_at IS NULL", arguments: [id])
+            if let parentID {
+                guard parentID != id, children.isEmpty else { throw TaskStoreError("有子任务的任务不能再缩进") }
+                let parent = try Self.task(db, parentID)
+                guard parent.parentId == nil, parent.category == groupID else { throw TaskStoreError("只支持一级子任务") }
+            }
+            let peers = try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE category=? AND parent_id IS ? AND deleted_at IS NULL AND id<>? ORDER BY position,id", arguments: [groupID, parentID, id])
+            let anchor: DotistTask?
+            if let beforeID {
+                guard let found = peers.first(where: { $0.id == beforeID }) else { throw TaskStoreError("找不到任务") }
+                anchor = found
+            } else { anchor = peers.last }
+            let now = Self.timestamp()
+            try db.execute(sql: "UPDATE tasks SET category=?,parent_id=?,updated_at=?,revision=revision+1 WHERE id=?", arguments: [groupID, parentID, old.completed ? old.updatedAt : now, id])
+            let moved = try Self.task(db, id)
+            try Self.record(db, moved, kind: "update", base: old.revision)
+            if let anchor {
+                try Self.reorder(db, task: moved, target: anchor, after: beforeID == nil)
+            }
+            if old.category != groupID {
+                for child in children {
+                    try db.execute(sql: "UPDATE tasks SET category=?,updated_at=?,revision=revision+1 WHERE id=?", arguments: [groupID, child.completed ? child.updatedAt : now, child.id])
+                    try Self.record(db, Self.task(db, child.id), kind: "update", base: child.revision)
+                }
+            }
+        }
+    }
+
     public func reorder(_ id: String, relativeTo targetId: String, after: Bool, allTasks: Bool) throws {
         try database.write { db in
             let task = try Self.task(db, id)

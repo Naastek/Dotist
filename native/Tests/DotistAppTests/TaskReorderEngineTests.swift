@@ -1,0 +1,89 @@
+import XCTest
+@testable import DotistApp
+
+final class TaskReorderEngineTests: XCTestCase {
+    func testSlotsThresholdGroupsAndSubtrees() throws {
+        let rows: [TaskReorderEngine.Row] = [
+            .init(id: "a", level: 0, groupID: "work", parentID: nil, midY: 20),
+            .init(id: "b", level: 0, groupID: "work", parentID: nil, midY: 52),
+            .init(id: "c", level: 1, groupID: "work", parentID: "b", midY: 80),
+            .init(id: "d", level: 0, groupID: "life", parentID: nil, midY: 150)
+        ]
+        let groups: [TaskReorderEngine.Group] = [.init(id: "work", minY: 0, maxY: 110), .init(id: "life", minY: 110, maxY: 180), .init(id: "empty", minY: 180, maxY: 220)]
+        func target(_ y: Double, _ x: Double, _ block: Set<String> = ["a"]) throws -> TaskReorderEngine.Target {
+            try XCTUnwrap(TaskReorderEngine.target(rows: rows, groups: groups, draggedID: "a", blockIDs: block, startY: 20, offsetY: y, offsetX: x))
+        }
+        let before = try target(20, 0)
+        XCTAssertEqual(before.slot, 0)
+        XCTAssertEqual(before.beforeID, "b")
+        let after = try target(65, 0)
+        XCTAssertEqual(after.slot, 2)
+        XCTAssertNil(after.parentID)
+        XCTAssertEqual(try target(40, 15.3).level, 0)
+        let child = try target(40, 15.5)
+        XCTAssertEqual(child.level, 1)
+        XCTAssertEqual(child.parentID, "b")
+        XCTAssertEqual(try target(130, 0).groupID, "life")
+        XCTAssertEqual(try target(180, 0).groupID, "empty")
+        XCTAssertEqual(try target(180, 0).slot, 0)
+        XCTAssertEqual(try target(40, 30, ["a", "c"]).level, 0)
+    }
+    func testChildOutdentsOnlyPastThreshold() throws {
+        let rows: [TaskReorderEngine.Row] = [
+            .init(id: "parent", level: 0, groupID: "g", parentID: nil, midY: 10),
+            .init(id: "child", level: 1, groupID: "g", parentID: "parent", midY: 40),
+            .init(id: "next", level: 0, groupID: "g", parentID: nil, midY: 70)
+        ]
+        let groups: [TaskReorderEngine.Group] = [.init(id: "g", minY: 0, maxY: 100)]
+        func target(_ x: Double) throws -> TaskReorderEngine.Target {
+            try XCTUnwrap(TaskReorderEngine.target(rows: rows, groups: groups, draggedID: "child", blockIDs: ["child"], startY: 40, offsetY: 0, offsetX: x))
+        }
+        XCTAssertEqual(try target(-15.3).parentID, "parent")
+        XCTAssertEqual(try target(-15.5).level, 0)
+        XCTAssertEqual(try target(-15.5).beforeID, "next")
+    }
+
+    func testHoveringOverAnotherRowDoesNotIndentWithoutHorizontalMovement() throws {
+        let rows: [TaskReorderEngine.Row] = [
+            .init(id: "source", level: 0, groupID: "g", parentID: nil, midY: 16),
+            .init(id: "destination", level: 0, groupID: "g", parentID: nil, midY: 48)
+        ]
+        let target = try XCTUnwrap(TaskReorderEngine.target(
+            rows: rows, groups: [.init(id: "g", minY: 0, maxY: 64)],
+            draggedID: "source", blockIDs: ["source"], startY: 16,
+            offsetY: 40, offsetX: 0
+        ))
+        XCTAssertEqual(target.level, 0)
+        XCTAssertNil(target.parentID)
+        XCTAssertNil(target.beforeID)
+    }
+
+    func testPanelIndentThresholdAndGroupHeaderOrEmptyGroupTargets() throws {
+        let rows: [TaskReorderEngine.Row] = [
+            .init(id: "source", level: 0, groupID: "a", parentID: nil, midY: 50),
+            .init(id: "parent", level: 0, groupID: "b", parentID: nil, midY: 150)
+        ]
+        let groups: [TaskReorderEngine.Group] = [
+            .init(id: "a", minY: 0, maxY: 80),
+            .init(id: "b", minY: 100, maxY: 180),
+            .init(id: "empty", minY: 200, maxY: 234)
+        ]
+        func target(y: Double, x: Double, block: Set<String> = ["source"]) throws -> TaskReorderEngine.Target {
+            try XCTUnwrap(TaskReorderEngine.target(rows: rows, groups: groups, draggedID: "source", blockIDs: block, startY: 50, offsetY: y - 50, offsetX: x, indentStep: 26))
+        }
+        let header = try target(y: 110, x: 0)
+        XCTAssertEqual(header.groupID, "b")
+        XCTAssertEqual(header.beforeID, "parent")
+        XCTAssertNil(header.parentID)
+        XCTAssertEqual(try target(y: 170, x: 18.1).level, 0)
+        XCTAssertEqual(try target(y: 170, x: 18.3).parentID, "parent")
+        // Hidden children still travel with the parent and prevent indenting it.
+        XCTAssertNil(try target(y: 170, x: 40, block: ["source", "hidden-child"]).parentID)
+        let empty = try target(y: 210, x: 40)
+        XCTAssertEqual(empty.groupID, "empty")
+        XCTAssertEqual(empty.slot, 0)
+        XCTAssertEqual(empty.level, 0)
+        XCTAssertNil(empty.beforeID)
+    }
+
+}

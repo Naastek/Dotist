@@ -6,6 +6,10 @@ import XCTest
 
 @MainActor
 final class PanelMotionTests: XCTestCase {
+    override func setUpWithError() throws {
+        guard NSScreen.main != nil else { throw XCTSkip("Panel motion placement requires a WindowServer display") }
+    }
+
     private func model() throws -> AppModel {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-motion-test-\(UUID().uuidString)")

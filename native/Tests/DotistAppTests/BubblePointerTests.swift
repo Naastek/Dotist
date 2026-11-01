@@ -147,10 +147,10 @@ final class BubblePointerTests: XCTestCase {
         XCTAssertEqual(panel.frame.origin, NSPoint(x: 200, y: 200))
     }
 
-    func testHoverCapsuleCanBeDraggedToScreenEdgesWithoutResizing() {
+    func testHoverCapsuleCanBeDraggedToScreenEdgesWithoutResizing() throws {
+        guard let area = NSScreen.main?.visibleFrame else { throw XCTSkip("Screen-edge placement requires a WindowServer display") }
         let panel = panel(width: 280)
         let pointer = panel.contentView as! BubblePointerView
-        let area = NSScreen.main!.visibleFrame
         for point in [NSPoint(x: area.minX + 24, y: area.midY), NSPoint(x: area.maxX - 24, y: area.midY), NSPoint(x: area.midX, y: area.maxY - 24), NSPoint(x: area.midX, y: area.minY + 24)] {
             panel.setFrameOrigin(NSPoint(x: 200, y: 200))
             pointer.mouseDown(with: event(.leftMouseDown, at: NSPoint(x: 224, y: 224), in: panel))
