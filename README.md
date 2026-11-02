@@ -1,95 +1,122 @@
 # Dotist
 
-Mac 桌面上的本地待办小窗。当前 macOS 应用使用 SwiftUI + AppKit、Swift 任务核心、GRDB/SQLite 和官方 Swift MCP SDK。界面与应用内 MCP 共用任务服务，不再链接 Rust 或 Tauri；保留的旧源码不属于当前构建。默认位于屏幕右上角，可按住顶部、筛选器或面板空白处拖动整个窗口。顶部第一行留给主要操作，日期筛选在第二行。技术与交互收敛说明见 [原生技术链路](docs/native-consolidation.md)。原生界面、兼容范围、构建和签名更新说明见 [macOS 原生应用](docs/native-macos.md)。
+<p align="right"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
 
-## 使用
+**A local-first task window for macOS.** Dotist stays within reach as a small floating panel, keeps tasks in a local SQLite database, and exposes the same task service to the native UI and local MCP clients.
 
-UI 的锁定决定、修改流程与防回退清单见 [UI 决定](docs/ui-decisions.md)。
+<p align="center">
+  <img src="docs/images/dotist-main-en.png" width="360" alt="Dotist main task panel">
+</p>
 
-- 面板第一行右侧是工具栏，收起始终位于最右；其余按钮默认悬停显示，可在设置中配置。按 ⌘K 打开或关闭命令面板。
-- 面板侧边便签切换分组，悬停耳朵展开完整名称；拖动便签可排序。无分组任务在「全部」最上方，删除分组会将任务移至无分组。
-- 输入栏添加任务；Return 连续添加同级，Tab 缩进、⇧Tab 提升，Esc 取消。任务最多五层，父任务的子任务始终显示；组和已完成区可折叠。
-- Shift 或 ⌘ 配合点击可多选；拖动任务及子树可调整顺序和层级。⌘Z／⇧⌘Z 撤销／重做，文本编辑由输入框处理。
-- 日期筛选可查看今天、全部、明天、本周及其他范围；子任务命中时保留祖先上下文。任务日期可通过行操作或输入栏日历设置。
-- 分组可设主题色，面板、便签和悬浮球随当前分组着色。悬浮球只显示剩余数字；悬停可查看下一件任务。
-- 设置可用 ⌘, 或菜单栏打开；支持外观、工具栏、筛选器、快捷键和 MCP 等配置。数据保存在本机。
+<p align="center"><sub>The main panel keeps groups, dates, and quick entry together without taking over the desktop.</sub></p>
 
-## 本地 MCP
+## Why Dotist
 
-在设置 → MCP 中启用本地服务，然后复制客户端命令或 JSON 配置。客户端使用统一应用可执行文件的 stdio 代理：
+Most task managers assume a full window and a cloud account. Dotist takes a smaller approach:
+
+- **Local first.** Tasks and settings live on your Mac in SQLite and a local settings file.
+- **Always close by.** Use a floating panel, a menu bar entry, or a compact bubble that expands on hover.
+- **Keyboard friendly.** Add, indent, select, move, complete, and undo without reaching for the mouse.
+- **One task service.** The SwiftUI interface and the built-in MCP server read and write through the same Swift task core.
+
+## Features
+
+- Nested tasks up to five levels, multi-select, drag-and-drop ordering, and undo/redo.
+- Date filters for today, tomorrow, this week, next week, the next seven days, overdue, undated, completed, and custom ranges.
+- Group tabs, per-group floating panels, group colors, and collapsible group sections.
+- A compact floating bubble showing the remaining task count, with the next task revealed on hover.
+- A command palette with `⌘K`.
+- Calendar, board, and Gantt task views.
+- Native macOS appearance, Liquid Glass surfaces, configurable fonts, and reduced-motion/accessibility handling.
+- Local MCP access for compatible AI clients, disabled by default.
+
+<p align="center">
+  <img src="docs/images/dotist-calendar-en.png" width="900" alt="Dotist calendar, board, and Gantt task views">
+</p>
+
+<p align="center"><sub>Calendar, board, and Gantt views share the same tasks and dates as the floating panel.</sub></p>
+
+## Install
+
+1. Download the latest app from [GitHub Releases](https://github.com/Naastek/Dotist/releases/latest).
+2. Move `Dotist.app` to **Applications** or another local folder.
+3. Launch Dotist. The panel opens near the top-right corner of the screen.
+
+Requirements: **macOS 26 or later** on an **Apple Silicon Mac**. Intel builds are not published.
+
+The current app is ad-hoc signed and is not notarized by Apple. If macOS blocks the first launch, open **System Settings → Privacy & Security** and choose **Open Anyway**.
+
+## Usage
+
+### Add and edit tasks
+
+- Type in the bottom input and press `Return` to add a task.
+- Press `Return` again to keep adding siblings.
+- Press `Tab` to indent, `Shift-Tab` to outdent, and `Esc` to cancel.
+- Press `Space` or `⌘Return` to complete a task.
+- Click a task title to edit it.
+
+### Organize
+
+- Use the group tabs along the left edge to switch groups.
+- Drag tasks or whole subtrees to reorder or change nesting.
+- Use `Shift` or `⌘` click for multi-select.
+- Right-click a group for actions such as opening it in its own panel or changing its color.
+- Use `⌘Z` and `Shift-⌘Z` for undo and redo.
+
+### Find and focus
+
+- Press `⌘K` to open the command palette.
+- Use the date filters to narrow the list.
+- Click the toolbar’s collapse button to turn the panel into a floating bubble.
+- Open **Task views** for calendar, board, and Gantt layouts.
+- Open Settings with `⌘,` or the menu bar item.
+
+## Local MCP
+
+Dotist includes an optional local MCP server. It is off by default and does not include an AI model.
+
+Enable it in **Settings → MCP**, then copy the generated command or JSON configuration into your MCP client. The client launches the app executable in stdio proxy mode:
 
 ```sh
 ~/Applications/Dotist.app/Contents/MacOS/dotist --mcp
 ```
 
-代理连接应用内的 Unix socket 服务，每个客户端有独立 MCP 会话。GUI 未运行时会后台启动；普通读写不会抢焦点，只有 `focus_task` 明确打开并定位任务。修改通过数据库观察即时反映到窗口，不再定时全量轮询。
+The proxy connects to the app’s local Unix socket service. Ordinary reads and writes do not steal keyboard focus; only `focus_task` brings the app forward. Each client gets its own MCP session while sharing the same task database and change notifications.
 
-工具包括 `list_tasks`、`get_task`、`search_tasks`、`add_tasks`、`update_task`、`delete_task`、`restore_task`、`set_due_date`、`set_start_date`、`set_task_parent`、`move_task`、`list_groups`、`add_group`、`update_group`、`delete_group`、`restore_group`、`focus_task`。`add_tasks` 支持原子批量新增；`update_task` 可修改标题、分组、状态和完成标记。分组参数接受当前分组 ID 或名称，保存的是稳定 ID。
+Available tools include `list_tasks`, `get_task`, `search_tasks`, `add_tasks`, `update_task`, `delete_task`, `restore_task`, date and parent operations, group operations, and `focus_task`.
 
-服务默认关闭，不包含模型，也不会自动连接 AI 客户端。启用并配置后，该客户端可以读取和修改本机任务。此原生版本不再分发旧 MCP sidecar。
+## Data and privacy
 
-## 当前限制
+- Tasks are stored in `~/Library/Application Support/com.dotist.app/tasks.sqlite`.
+- Preferences are stored in `settings.json` next to the database.
+- Dotist does not require an account and does not send tasks to a cloud service.
+- Android and iCloud/CloudKit sync are not implemented. The SQLite schema reserves local change metadata for future work, but it is not an active sync feature.
 
-Android 和 iCloud/CloudKit 同步尚未实现。SQLite 保留任务 ID、修改版本、删除墓碑和同步 outbox，不能因此视为同步功能已经可用。`docs/cloudkit.md` 记录后续需要验证的条件。
+## Development
 
-## 开发
+The current macOS app is built with SwiftUI, AppKit, GRDB/SQLite, and the official Swift MCP SDK. It does not link Rust, Tauri, or a web runtime.
 
-需要 macOS 26 或更高版本的 Apple Silicon Mac、支持 macOS 26 或更新 SDK 的 Xcode、Swift 与 Python 3。窗口材质与控件统一使用 Liquid Glass，保留系统无障碍偏好，不再提供较早 macOS 的材质或交互分支。当前发布不包含 Intel 包。
+Requirements: macOS 26 or later, an Apple Silicon Mac, Xcode with a macOS 26+ SDK, Swift, and Python 3.
 
 ```sh
-bash native/scripts/test-native.sh       # Swift 核心、MCP、窗口单元测试
-bash native/scripts/build-qa.sh          # 隔离 QA 应用
-bash native/scripts/build-local.sh       # 原生候选包，不自动安装
+bash native/scripts/test-native.sh   # Swift core, MCP, and window tests
+bash native/scripts/build-qa.sh      # isolated QA app
+bash native/scripts/build-local.sh   # local release candidate
 ```
 
-SwiftPM 依赖由 `native/Package.resolved` 锁定。版本、最低系统和公开更新配置集中在 `native/app.json`。字体与第三方许可证随包分发。当前构建和发布无需 Node、Rust 或 Tauri。
+SwiftPM dependencies are locked by `native/Package.resolved`. Versioning, minimum macOS, and public update configuration live in `native/app.json`.
 
-## 更新与发布
+## Updates and release
 
-原生更新只使用 Sparkle Ed25519 与 GitHub Releases 的 `appcast.xml`，不再生成 Tauri `latest.json` 或 minisign 兼容签名。自动检查默认开启；自动安装默认关闭。自动下载后在正常退出时安装，下一次打开生效，不在输入过程中自动重启。
+Dotist uses Sparkle with GitHub Releases and the native `appcast.xml`. Automatic update checks are enabled by default; automatic installation is off by default. A downloaded update is installed when the app exits normally and takes effect on the next launch.
 
-`main` 推送触发原生测试、构建、完整草稿、下载回验和当前 SHA 检查，通过后公开发布。版本由 `native/app.json` 的主次版本与 Actions 运行编号组合，源码补丁号须为 `.0`。
+A push to `main` runs native tests, builds the app, creates a complete draft release, downloads and verifies the published assets, checks the current `main` SHA, and then publishes the release. The CI signing key must match the public Sparkle key in `native/app.json`.
 
-CI 使用 `SPARKLE_SIGNING_PRIVATE_KEY`，必须匹配 `native/app.json` 中的现有公开密钥。密钥仅通过 stdin 交给官方签名器。更新信任根与 Apple Developer ID／公证不同；当前应用包仍为 ad hoc 签名，尚未公证。
+The application bundle is currently ad-hoc signed. Apple Developer ID signing and notarization are separate from the Sparkle update trust root and have not yet been completed.
 
-以下各段是历史记录，其中 UI 描述已被取代；当前决定以 [UI 决定](docs/ui-decisions.md) 为准，当前架构见 [原生技术链路](docs/native-consolidation.md)。
+## Documentation
 
-## 菜单栏与悬浮球(最新一轮)
-
-- 菜单栏菜单为平铺结构:分组(缩进,⌘0–⌘9)与日期透视(⌥⌘1–⌥⌘9)直接展开,不再是子菜单。
-- 悬浮球使用接近实色的底,不随窗口透明/磨砂滑块变化,也不参与空闲淡出。
-- 系统窗口阴影默认开启(柔和);旧设置文件会一次性迁移为开启,之后以用户选择为准(可在设置中关闭)。
-
-## 设计系统 v3.1 与显示位置(最新一轮)
-
-- 已叠加 `design-system/evolution-v3.1.css`(去黄中性色、悬停/选中不再铺圆角色块)。有意不采用其中"图钉开启也保持线性"一条:开启时仍是实心、竖直,关闭时空心、斜放,否则看不出开关。
-- 日历入口是标签条旁边固定的图标(不随标签滚动);选了范围时图标旁显示范围文字。
-- 设置里可分别选择显示在 Dock、显示在菜单栏,两者可同时开、只开一个或都关(都关时靠快捷键或悬浮球)。
-- 点 Dock 图标不会再收起或替换已有的悬浮球、横条、快速添加窗口,只在窗口被隐藏时把它带回来。
-- 悬浮球从边缘出来时的动画限制在窗口范围内(之前放大超出窗口被裁成切角)。
-
-## 去竖条、小耳朵、不被系统窗口管理接管(最新一轮)
-
-- 选中/悬停一律只用颜色,不用左侧竖条、色块,正在编辑的任务和输入栏聚焦也不画线(这是对 DS v3.1 里"左侧细线""编辑下划线"两条的有意取舍)。
-- 小耳朵是屏幕边上的竖向小胶囊,数字居中;悬浮球、横条、耳朵之间的动画都不再回弹。
-- 悬浮球的横条只由原生的鼠标位置驱动(之前网页自己的悬停事件会在窗口变形时误触发,造成开合抖动),关闭前有 220ms 的缓冲。
-- 所有窗口关闭 macOS 的"拖到边缘自动半屏/全屏"。
-
-## 液态玻璃、宽阴影、水滴、# 补全(最新一轮)
-
-- 液态玻璃:浅色亮边(左上与右下最亮)、左上柔光和内发光;不画硬线。
-- 阴影:系统阴影无法调宽,所以主窗口背后跟随一个透明、不接收鼠标的"阴影窗口"(比主窗口每边大 80pt,顶部贴近菜单栏时自动收窄),页面在里面画长而柔的阴影。
-- 悬浮球从耳朵出来、缩回耳朵时,有一颗玻璃小水滴飞出/飞回(独立小窗口,因为球的窗口画不出界)。
-- 输入 `#` 会提示已有标签,↑↓ 选,Tab 补全(Enter 只在用 ↑↓ 选过之后才补全,否则正常提交)。
-
-## 去掉小耳朵、水滴球(最新一轮)
-
-- 删除"小耳朵/边缘停靠/水滴飞出"整套需求;悬浮球只保留:拖放后不出屏、鼠标指上去展开横条。
-- 悬浮球改成水滴状玻璃球:左上高光、下缘柔影、清晰的亮边,数字加大加粗。
-
-## 设置与拖动修整（2026-10-31）
-
-- 设置使用原生分段控件、弹出按钮和普通操作按钮，移除设置里的自绘玻璃胶囊；外观、筛选器、MCP、数据、关于等各自为独立页面。
-- 主面板、任务视图和快速添加统一使用中性分组文字，移除分组颜色选项和换色入口。本条覆盖较早版本关于彩色名称、色点和色块的说明。
-- 浅深主题同步应用到各窗口。深色使用较深的背景与较亮的次要文字；透明程度在保留可读性的范围内连续变化。设置正文使用稳定背景。
-- 主面板左下角分组选择左对齐；日历和缩小仍保留在右上角菜单外。
+- [UI decisions](docs/ui-decisions.md): current interaction and visual contracts.
+- [Native macOS app](docs/native-macos.md): data, windows, build, QA, signing, and updating.
+- [Native architecture](docs/native-consolidation.md): Swift task service, MCP, and release architecture.
