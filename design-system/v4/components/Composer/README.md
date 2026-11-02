@@ -6,4 +6,6 @@
 
 placeholder 与 editor 同一时刻只能有一个绘制所有者；箭头位置须按真实原生窗口的墨迹验证。
 
+组名 24 pt 原生模板以最终 muted 着色和深浅外观校准可见墨迹；黑色模板边界不等于最终 tint 的边界。52 pt 栏中按整栏共同中心及上下余白验收，分开记录控制框、墨迹框、窗口 backing 与位图倍率。保留原生 cell／editor、幂等 drawingRect、IME／marked text／undo，不绘制第二份输入文字。
+
 最终决定与守护测试见 [UI 决定](../../../../docs/ui-decisions.md)。示意仅说明结构，不作为实机验收。

@@ -23,11 +23,17 @@ final class NativeRenderingFixture<Content: View> {
         }
     }
 
-    init(_ content: Content, size: CGSize, colorSpace: NSColorSpace? = nil) {
+    private final class FixtureWindow: NSWindow {
+        var simulatedBackingScale: CGFloat?
+        override var backingScaleFactor: CGFloat { simulatedBackingScale ?? super.backingScaleFactor }
+    }
+    init(_ content: Content, size: CGSize, colorSpace: NSColorSpace? = nil, simulatedBackingScale: CGFloat? = nil) {
         _ = NSApplication.shared
         host = NSHostingView(rootView: content)
         host.frame = CGRect(origin: .zero, size: size)
-        window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false, screen: NSScreen.main)
+        let fixtureWindow = FixtureWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false, screen: NSScreen.main)
+        fixtureWindow.simulatedBackingScale = simulatedBackingScale
+        window = fixtureWindow
         window.isReleasedWhenClosed = false
         if let colorSpace { window.colorSpace = colorSpace }
         captureView.frame = host.frame
@@ -55,6 +61,8 @@ final class NativeRenderingFixture<Content: View> {
             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
         let image = raw.retagging(with: window.colorSpace ?? .sRGB) ?? raw
         image.size = host.bounds.size
+        // Transparent subtrees may paint nothing; do not expose allocator bytes.
+        image.bitmapData?.initialize(repeating: 0, count: image.bytesPerRow * image.pixelsHigh)
         scaleProbe.scale = nil
         scaleProbe.needsDisplay = true
         captureView.cacheDisplay(in: captureView.bounds, to: image)

@@ -68,8 +68,12 @@ final class GroupHeaderRenderingTests: XCTestCase {
                     XCTAssertEqual(glyphs.titleInkFrame, fullTitle, "Title must retain all glyphs, including its final letter")
                     XCTAssertEqual(pixels.width, fullTitle.width, accuracy: 0.5 / scale)
                     XCTAssertEqual(pixels.midY, 15, accuracy: 0.5 / scale)
-                    if collapsed || hovered {
+                    if collapsed || hovered || glyphs.disclosureProgress < 1 {
                         let arrow = try XCTUnwrap(inkBounds(bitmap, x: (frame.minX + glyphs.symbolInkFrame.minX)..<(frame.minX + glyphs.symbolInkFrame.maxX)))
+                        if abs(arrow.midY - pixels.midY) > 0.5 / scale {
+                            print("ROTATION AXIS title=\(title), collapsed=\(collapsed), hovered=\(hovered), delay=\(delay), fraction=\(glyphs.disclosureProgress), titleFrame=\(glyphs.titleInkFrame), symbolFrame=\(glyphs.symbolInkFrame), titlePixels=\(pixels), arrowPixels=\(arrow), glyphViewFrame=\(frame)")
+                            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: "/private/tmp/dotist-rotation-axis.png"))
+                        }
                         XCTAssertEqual(arrow.midY, pixels.midY, accuracy: 0.5 / scale)
                     }
                 }

@@ -141,12 +141,13 @@ struct GroupHeaderInkLabel: NSViewRepresentable {
     let collapsed: Bool
     let showsChevron: Bool
     let empty: Bool
+    var disclosureProgress: CGFloat? = nil
 
     func makeNSView(context: Context) -> GroupHeaderInkView { GroupHeaderInkView() }
     func updateNSView(_ view: GroupHeaderInkView, context: Context) {
         view.configure(title: title, font: DotistDesign.nativeFont(15, weight: .semibold, serif: true, language: language),
                        symbol: collapsed ? "chevron.right" : "chevron.down", showsChevron: showsChevron,
-                       titleColor: NSColor(empty ? DotistDesign.faint : DotistDesign.ink))
+                       titleColor: NSColor(empty ? DotistDesign.faint : DotistDesign.ink), disclosureProgress: disclosureProgress)
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: GroupHeaderInkView, context: Context) -> CGSize? {
         let ideal = nsView.intrinsicContentSize
@@ -167,10 +168,13 @@ final class GroupHeaderInkView: NSView {
     private var titleColor = NSColor.labelColor
     private var titleImage: InkRaster?
     private var symbolImages: [String: InkRaster] = [:]
-    private var symbolImage: InkRaster? { symbolImages[symbol] }
+    private var symbolImage: InkRaster? { symbolImages["chevron.right"] }
+    private(set) var disclosureProgress: CGFloat = 0
+    private var rotationKey = ""
+    private var rotatedSymbol: InkRaster?
     // Both directions share a slot, including while the arrow is hidden. A
     // direction change cannot take width from the already laid-out title.
-    private var symbolSlotWidth: CGFloat { symbolImages.values.map(\.size.width).max() ?? 0 }
+    private var symbolSlotWidth: CGFloat { symbolImages.values.map { ceil(hypot($0.size.width, $0.size.height)) }.max() ?? 0 }
     private var rasterScale: CGFloat = 0
     private var rasterColorSpace: NSColorSpace?
     // These are also useful to isolate the two glyph masks in native captures.
@@ -180,10 +184,11 @@ final class GroupHeaderInkView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    func configure(title: String, font: NSFont, symbol: String, showsChevron: Bool, titleColor: NSColor) {
+    func configure(title: String, font: NSFont, symbol: String, showsChevron: Bool, titleColor: NSColor, disclosureProgress: CGFloat? = nil) {
         let changed = self.title != title || titleFont != font || self.titleColor != titleColor
         self.title = title; titleFont = font; self.symbol = symbol
         self.showsChevron = showsChevron; self.titleColor = titleColor
+        self.disclosureProgress = disclosureProgress ?? (symbol == "chevron.down" ? 1 : 0)
         if changed { invalidateRasters() }
         needsDisplay = true
     }
@@ -209,6 +214,7 @@ final class GroupHeaderInkView: NSView {
         let colorSpace = window?.colorSpace ?? .sRGB
         guard rasterScale != scale || rasterColorSpace != colorSpace else { return }
         rasterScale = scale; rasterColorSpace = colorSpace
+        rotationKey = ""
         effectiveAppearance.performAsCurrentDrawingAppearance {
             let text = NSAttributedString(string: title, attributes: [.font: titleFont, .foregroundColor: titleColor])
             titleImage = Self.inkImage(size: text.size(), scale: scale, colorSpace: colorSpace) { text.draw(at: $0) }
@@ -330,11 +336,30 @@ final class GroupHeaderInkView: NSView {
         titleInkFrame = titleFrames.ink
         Self.drawInkImage(displayedTitle, in: titleFrames.drawing)
         guard let symbolImage else { return }
-        let symbolFrames = frames(symbolImage, x: titleInkFrame.maxX + 6, center: titleInkFrame.midY, upperTie: true)
-        symbolInkFrame = symbolFrames.ink
-        if showsChevron {
-            Self.drawInkImage(symbolImage, in: symbolFrames.drawing)
+        let key = "\(rasterScale)|\(disclosureProgress)"
+        if key != rotationKey {
+            rotationKey = key
+            let extent = symbolSlotWidth
+            let angle = disclosureProgress * .pi / 2
+            rotatedSymbol = Self.inkImage(size: CGSize(width: extent, height: extent), scale: rasterScale,
+                                          colorSpace: window?.colorSpace ?? .sRGB) { origin in
+                guard let context = NSGraphicsContext.current?.cgContext else { return }
+                context.saveGState()
+                context.translateBy(x: origin.x + extent / 2, y: origin.y + extent / 2)
+                context.rotate(by: -angle)
+                NSImage(cgImage: symbolImage.image, size: symbolImage.size)
+                    .draw(in: CGRect(x: -symbolImage.size.width / 2, y: -symbolImage.size.height / 2,
+                                     width: symbolImage.size.width, height: symbolImage.size.height))
+                context.restoreGState()
+            }
         }
+        guard let rotatedSymbol else { return }
+        // A rotated chevron's triangular ink does not have the same center as
+        // its rotated rectangle. Center the final raster at every angle.
+        let symbolX = ((titleInkFrame.maxX + 6 + (symbolSlotWidth - rotatedSymbol.alignmentRect.width) / 2) * rasterScale).rounded() / rasterScale
+        let symbolFrames = frames(rotatedSymbol, x: symbolX, center: titleInkFrame.midY, upperTie: true)
+        symbolInkFrame = symbolFrames.ink
+        if showsChevron { Self.drawInkImage(rotatedSymbol, in: symbolFrames.drawing) }
     }
 }
 
@@ -496,5 +521,111 @@ struct GanttRowLayout: Layout {
         let label = subviews[0].sizeThatFits(.init(width: 220, height: nil))
         subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.midY - label.height / 2), proposal: .init(width: 220, height: label.height))
         subviews[1].place(at: CGPoint(x: bounds.minX + 220, y: bounds.minY), proposal: .init(width: max(0, bounds.width - 220), height: bounds.height))
+    }
+}
+
+/// A run-loop clock also advances in unordered hosting windows. Retarget from
+/// the presented fraction, so rapid reversals never restart at an endpoint.
+@MainActor
+final class DisclosureMotion: ObservableObject {
+    #if DEBUG
+    struct Sample {
+        let id: ObjectIdentifier
+        let event: String
+        let uptime: TimeInterval
+        let fraction: CGFloat
+        let target: CGFloat
+        let animating: Bool
+    }
+    static var trace: ((Sample) -> Void)?
+    private func record(_ event: String, target: CGFloat) {
+        Self.trace?(Sample(id: ObjectIdentifier(self), event: event, uptime: ProcessInfo.processInfo.systemUptime,
+                           fraction: fraction, target: target, animating: timer != nil))
+    }
+    #endif
+    @Published private(set) var fraction: CGFloat
+    private var timer: Timer?
+    init(expanded: Bool) { fraction = expanded ? 1 : 0 }
+    func setExpanded(_ expanded: Bool, reduceMotion: Bool) {
+        let target: CGFloat = expanded ? 1 : 0
+        #if DEBUG
+        record("retarget", target: target)
+        #endif
+        timer?.invalidate(); timer = nil
+        guard !reduceMotion, abs(target - fraction) > 0.001 else {
+            fraction = target
+            #if DEBUG
+            record("snap", target: target)
+            #endif
+            return
+        }
+        let start = fraction
+        let began = ProcessInfo.processInfo.systemUptime
+        let duration = 0.22 * Double(abs(target - start))
+        let clock = Timer(timeInterval: 1 / 60, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self else { timer.invalidate(); return }
+                let t = min(1, (ProcessInfo.processInfo.systemUptime - began) / duration)
+                let eased = t * t * (3 - 2 * t)
+                var transaction = Transaction(); transaction.animation = nil
+                withTransaction(transaction) { self.fraction = start + (target - start) * eased }
+                if t >= 1 { timer.invalidate(); self.timer = nil }
+                #if DEBUG
+                self.record(t >= 1 ? "finish" : "tick", target: target)
+                #endif
+            }
+        }
+        timer = clock
+        #if DEBUG
+        record("start", target: target)
+        #endif
+        RunLoop.main.add(clock, forMode: .common)
+    }
+    func stop() { timer?.invalidate(); timer = nil }
+    deinit { timer?.invalidate() }
+}
+
+/// Measure real rows at their complete intrinsic height, then reveal that
+/// height. An opacity-only removal lets the intrinsic stack jump immediately.
+private struct DisclosureLayout: Layout {
+    let fraction: CGFloat
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let size = subviews[0].sizeThatFits(.init(width: proposal.width, height: nil))
+        return CGSize(width: size.width, height: size.height * fraction)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews[0].place(at: bounds.origin, proposal: .init(width: bounds.width, height: nil))
+    }
+}
+
+struct CollapsibleTaskSection<Content: View>: View {
+    let expanded: Bool
+    @ViewBuilder let content: () -> Content
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var motion: DisclosureMotion
+    init(expanded: Bool, @ViewBuilder content: @escaping () -> Content) {
+        self.expanded = expanded; self.content = content
+        _motion = StateObject(wrappedValue: DisclosureMotion(expanded: expanded))
+    }
+    var body: some View {
+        let interactive = expanded && motion.fraction == 1
+        // Keep lifecycle identity even at zero height. A conditional Group
+        // re-fires onAppear when rows return and would snap an opening to 1.
+        VStack(alignment: .leading, spacing: 0) {
+            if motion.fraction > 0 {
+                DisclosureLayout(fraction: motion.fraction) { content() }
+                    .clipped().opacity(Double(motion.fraction))
+                    .allowsHitTesting(interactive).accessibilityHidden(!interactive)
+            }
+        }
+        // Rendered transition rows are not interaction geometry: this key also
+        // drives keyboard selection, drag targeting and native mouse guards.
+        .transformPreference(TaskListRowFrame.Key.self) { frames in
+            if !interactive { frames.removeAll() }
+        }
+        .onAppear { motion.setExpanded(expanded, reduceMotion: true) }
+        .onChange(of: expanded) { value in motion.setExpanded(value, reduceMotion: reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) }
+        .onChange(of: reduceMotion) { value in if value { motion.setExpanded(expanded, reduceMotion: true) } }
+        .onDisappear { motion.stop() }
     }
 }

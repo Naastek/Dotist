@@ -9,7 +9,7 @@ final class SideTabAppearanceTests: XCTestCase {
     func testOpacityControlsBackgroundAndLeavesExpandedTextOpaque() throws {
         for scheme in [ColorScheme.light, .dark] {
             for inward in [false, true] {
-                for opacity: UInt8 in [10, 47, 85, 100] {
+                for opacity: UInt8 in [0, 4, 10, 47, 85, 100] {
                     let background = try bitmap(scheme: scheme, inward: inward, opacity: opacity, labels: false)
                     let labeled = try bitmap(scheme: scheme, inward: inward, opacity: opacity, labels: true)
                     let center = try XCTUnwrap(background.colorAt(x: background.pixelsWide / 2, y: 3))
@@ -87,6 +87,124 @@ final class SideTabAppearanceTests: XCTestCase {
         let green = try surface(neutral.id)
         XCTAssertGreaterThan(blue.blueComponent - green.blueComponent, 0.015)
         XCTAssertEqual(try surface(nil).blueComponent, blue.blueComponent, accuracy: 0.005)
+    }
+
+    /// Capture the actual live paper tree. Interior coverage must have exactly
+    /// the same color at the perimeter; a stroked outline adds differing pixels.
+    func testNoOutlinePixelsAndFlushCornersAcrossTransparencyAndAccessibility() throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".cache/feedback-host-audit/current/five")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var measurements = ["scheme,inward,expanded,opacity,protection,tab,backgroundAlpha,outlinePixels"]
+        for scheme in [ColorScheme.light, .dark] {
+            for inward in [false, true] {
+                for expanded in [false, true] {
+                    for opacity: UInt8 in [0, 4, 85, 100] {
+                        for protection in 0...2 {
+                            let snapshot = try XCTUnwrap(SideTabsSnapshot.render(names: ["All", "Long project name 工作"], language: "zh-CN",
+                                scheme: scheme, inward: inward, expanded: expanded, showLabels: false, opacity: opacity,
+                                reduceTransparency: protection == 1, contrast: protection == 2 ? .increased : .standard,
+                                color: { _ in .none }))
+                            let bitmap = NSBitmapImageRep(cgImage: snapshot.image)
+                            let name = "\(scheme)-inward\(inward)-expanded\(expanded)-opacity\(opacity)-protection\(protection)"
+                            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent(name + ".png"))
+                            let expected = protection == 0 ? CGFloat(opacity) / 100 : 1
+                            for (index, rect) in snapshot.tabs.enumerated() {
+                                let connectionX = Int(inward ? rect.minX : rect.maxX - 1)
+                                let outerX = Int(inward ? rect.maxX - 1 : rect.minX)
+                                let center = try XCTUnwrap(bitmap.colorAt(x: Int(rect.midX), y: Int(rect.midY))?.usingColorSpace(.deviceRGB))
+                                XCTAssertEqual(center.alphaComponent, expected, accuracy: 0.005, name)
+                                for y in Int(rect.minY)..<Int(rect.maxY) {
+                                    XCTAssertEqual(bitmap.colorAt(x: connectionX, y: y)?.alphaComponent ?? 0, expected,
+                                                   accuracy: 0.005, "\(name): connection edge must stay square")
+                                }
+                                for y in [Int(rect.minY), Int(rect.maxY - 1)] {
+                                    XCTAssertEqual(bitmap.colorAt(x: outerX, y: y)?.alphaComponent ?? 0, 0, name)
+                                }
+                                var outlinePixels = 0
+                                for y in Int(rect.minY)..<Int(rect.maxY) {
+                                    for x in Int(rect.minX)..<Int(rect.maxX) {
+                                        let pixel = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                                        if expected == 0 { XCTAssertEqual(pixel.alphaComponent, 0, name); continue }
+                                        // Exclude the outer corner's antialias coverage, but
+                                        // retain every fully covered boundary pixel.
+                                        guard abs(pixel.alphaComponent - expected) < 0.001 else { continue }
+                                        let difference = visibleDifference(pixel, center)
+                                        if difference > 1.0 / 255 { outlinePixels += 1 }
+                                    }
+                                }
+                                XCTAssertEqual(outlinePixels, 0, "\(name): no colored outline in selected or unselected tabs")
+                                measurements.append("\(scheme),\(inward),\(expanded),\(opacity),\(protection),\(index),\(center.alphaComponent),\(outlinePixels)")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        try measurements.joined(separator: "\n").write(to: directory.appendingPathComponent("pixels.csv"), atomically: true, encoding: .utf8)
+        // A panel backdrop makes the two attachment directions inspectable.
+        // The tab image is the same full live tree used by the pixel matrix;
+        // the rectangle is an illustration, not an activated desktop window.
+        for scheme in [ColorScheme.light, .dark] {
+            for inward in [false, true] {
+                let tabs = try XCTUnwrap(SideTabsSnapshot.render(names: ["全部", "Work projects 工作计划"], language: "zh-CN",
+                    scheme: scheme, inward: inward, expanded: true, opacity: 100, color: { _ in .teal }))
+                let canvas = ZStack(alignment: .topLeading) {
+                    (scheme == .dark ? Color(white: 0.08) : Color(white: 0.78)).zIndex(-2)
+                    RoundedRectangle(cornerRadius: 20).fill(scheme == .dark ? Color(white: 0.2) : Color(white: 0.97))
+                        .frame(width: 364, height: 180).offset(x: 220).zIndex(0)
+                    Image(decorative: tabs.image, scale: 1)
+                        .offset(x: inward ? 210 : 220 - CGFloat(tabs.image.width), y: SideTabGeometry.topInset)
+                        .zIndex(inward ? 1 : -1)
+                }.frame(width: 604, height: 180)
+                let renderer = ImageRenderer(content: canvas)
+                renderer.scale = 1
+                let image = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+                try XCTUnwrap(image.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent("connection-\(scheme)-inward\(inward).png"))
+            }
+        }
+        print("SIDE TAB FIVE evidence=\(directory.path), screens=\(NSScreen.screens.count); ImageRenderer paper snapshots, no desktop window ordering")
+    }
+
+    /// Compare final color over black AND white. Unassociated RGB magnifies
+    /// one low-alpha quantization step by 1/alpha; that is not visible contrast.
+    /// The existing 1/255 threshold and zero-outline assertion stay unchanged.
+    private func visibleDifference(_ a: NSColor, _ b: NSColor) -> CGFloat {
+        let lhs = [a.redComponent, a.greenComponent, a.blueComponent]
+        let rhs = [b.redComponent, b.greenComponent, b.blueComponent]
+        return [CGFloat(0), 1].flatMap { backdrop in
+            zip(lhs, rhs).map { abs(($0 * a.alphaComponent + backdrop * (1 - a.alphaComponent))
+                                 - ($1 * b.alphaComponent + backdrop * (1 - b.alphaComponent))) }
+        }.max() ?? 0
+    }
+
+    func testVisibleColorComparisonRetainsLegacyStrokeCounterexample() throws {
+        for scheme in [ColorScheme.light, .dark] {
+            for opacity in [0.85, 1.0] {
+                let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+                let legacy = shape.fill(DotistDesign.paper)
+                    .overlay(shape.stroke(DotistDesign.faint.opacity(0.45), lineWidth: 0.75))
+                    .compositingGroup().opacity(opacity).frame(width: 120, height: 34)
+                    .environment(\.colorScheme, scheme)
+                let renderer = ImageRenderer(content: legacy)
+                renderer.scale = 1
+                let image = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+                let center = try XCTUnwrap(image.colorAt(x: 60, y: 17)?.usingColorSpace(.deviceRGB))
+                var count = 0
+                for x in 12..<108 {
+                    let pixel = try XCTUnwrap(image.colorAt(x: x, y: 0)?.usingColorSpace(.deviceRGB))
+                    if visibleDifference(pixel, center) > 1.0 / 255 { count += 1 }
+                }
+                XCTAssertGreaterThan(count, 0, "The original 0.75pt stroke must still be rejected at the original threshold")
+                print("LEGACY STROKE \(scheme), opacity=\(opacity), visible outline pixels=\(count)")
+            }
+        }
+        // Exact host outlier replay: unassociated RGB differs by 0.0785653,
+        // while composited RGB differs by 0.003081, below 1/255.
+        let a = NSColor(deviceRed: 0.9214347, green: 0.9214347, blue: 0.9214347, alpha: 10.0 / 255)
+        let b = NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 10.0 / 255)
+        XCTAssertGreaterThan(abs(a.redComponent - b.redComponent), 1.0 / 255)
+        XCTAssertLessThan(visibleDifference(a, b), 1.0 / 255)
     }
 
     private func bitmap(scheme: ColorScheme, inward: Bool, opacity: UInt8, labels: Bool) throws -> NSBitmapImageRep {

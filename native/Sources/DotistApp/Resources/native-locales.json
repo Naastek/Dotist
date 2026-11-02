@@ -143,7 +143,10 @@
     "思源宋体": "Noto Serif",
     "思源黑体": "Noto Sans",
     "昭源宋体": "Chiron Sung HK",
-    "Aa 全部 work": "Aa All work"
+    "Aa 全部 work": "Aa All work",
+    "主表面透明度": "Main surface transparency",
+    "分组便签背景透明度": "Group tab background transparency",
+    "失焦后整窗透明度": "Unfocused window transparency"
   },
   "zh-TW": {
     "今日未完成（含逾期）": "今日未完成（含逾期）",
@@ -289,7 +292,10 @@
     "思源宋体": "思源宋體",
     "思源黑体": "思源黑體",
     "昭源宋体": "昭源宋體",
-    "Aa 全部 work": "Aa 全部 work"
+    "Aa 全部 work": "Aa 全部 work",
+    "主表面透明度": "主表面透明度",
+    "分组便签背景透明度": "群組便籤背景透明度",
+    "失焦后整窗透明度": "失焦後整窗透明度"
   },
   "ja": {
     "今日未完成（含逾期）": "今日の未完了件数（期限切れを含む）",
@@ -435,6 +441,9 @@
     "思源宋体": "Noto Serif",
     "思源黑体": "Noto Sans",
     "昭源宋体": "Chiron Sung HK",
-    "Aa 全部 work": "Aa すべて work"
+    "Aa 全部 work": "Aa すべて work",
+    "主表面透明度": "メイン背景の透明度",
+    "分组便签背景透明度": "グループタブ背景の透明度",
+    "失焦后整窗透明度": "非アクティブ時のウィンドウ透明度"
   }
 }

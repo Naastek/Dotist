@@ -24,8 +24,8 @@ final class SettingsSearchTests: XCTestCase {
         for query in ["全部", "All", "すべて", "default color"] {
             XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.target == "appearance.全部" && $0.title == "全部" }, query)
         }
-        for query in ["分组便签不透明度", "Group tab opacity", "グループタブの不透明度", "群組便籤不透明度"] {
-            XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.target == "appearance.分组便签不透明度" }, query)
+        for query in ["分组便签背景透明度", "Group tab background transparency", "グループタブ背景の透明度", "群組便籤背景透明度"] {
+            XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.target == "appearance.分组便签背景透明度" }, query)
         }
     }
     func testTokensCanMatchAcrossModuleAndSettingTitle() {

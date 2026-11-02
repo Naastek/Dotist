@@ -36,7 +36,7 @@ struct SettingsSearchEntry: Identifiable, Equatable {
 enum SettingsSearchIndex {
     static let entries: [SettingsSearchEntry] = {
         let rows: [(SettingsModule, [String])] = [
-            (.appearance, ["主题", "玻璃预设", "透明程度", "磨砂程度", "字体", "西文衬线", "西文无衬线", "中文衬线", "中文无衬线", "恢复默认字体", "失焦淡出", "淡出前等待", "淡出用时", "淡出后的不透明度", "全部", "分组便签不透明度"]),
+            (.appearance, ["主题", "玻璃预设", "主表面透明度", "磨砂程度", "字体", "西文衬线", "西文无衬线", "中文衬线", "中文无衬线", "恢复默认字体", "失焦淡出", "淡出前等待", "淡出用时", "失焦后整窗透明度", "全部", "分组便签背景透明度"]),
             (.general, ["语言", "显示在 Dock", "显示在菜单栏", "开机启动", "悬停显示详情", "窗口大小", "固定窗口", "自动收起", "收起等待时间", "窗口置顶", "分组", "标签"]),
             (.filters, ["启动时打开", "筛选器"]),
             (.menubar, ["显示内容", "日期透视", "分组", "轮播间隔", "左键点击", "右键点击"]),
@@ -91,6 +91,9 @@ enum SettingsSearchIndex {
     }
     private static func aliases(_ title: String) -> [String] {
         switch title {
+        case "主表面透明度": return ["transparency opacity alpha glass 透明程度 不透明度 透過率"] + translations("透明程度")
+        case "分组便签背景透明度": return ["transparency opacity alpha group tab 分组便签不透明度"] + translations("分组便签不透明度")
+        case "失焦后整窗透明度": return ["transparency opacity alpha idle fade 淡出后的不透明度"] + translations("淡出后的不透明度")
         case "字体": return ["Fonts Typeface フォント 字型 字體"]
         case "西文衬线": return ["Fonts Latin serif 西文襯線 欧文セリフ Newsreader Source Serif New York 系统 系統 システム system"]
         case "西文无衬线": return ["Fonts Latin sans serif 西文無襯線 欧文サンセリフ Atkinson Hyperlegible Next Source Sans SF Pro 系统 系統 システム system"]
@@ -263,5 +266,75 @@ struct SettingsSegmentedPicker: NSViewRepresentable {
             guard parent.options.indices.contains(sender.selectedSegment) else { return }
             parent.selection = parent.options[sender.selectedSegment].0
         }
+    }
+}
+
+
+/// A native popup with a shared actual control width. SwiftUI's menu Picker
+/// centers an intrinsic-width AppKit bezel inside its fixed outer frame.
+struct SettingsFontPicker: NSViewRepresentable {
+    static let previewWidth: CGFloat = 110
+    static let columnWidth: CGFloat = 244
+    @Binding var selection: String
+    let options: [(String, String)]
+    let label: String
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.cell = SettingsFontPickerCell(textCell: "", pullsDown: false)
+        popup.controlSize = .small
+        popup.font = .systemFont(ofSize: 13)
+        popup.alignment = .left
+        popup.lineBreakMode = .byTruncatingTail
+        popup.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        popup.target = context.coordinator
+        popup.action = #selector(Coordinator.changed(_:))
+        return popup
+    }
+    func updateNSView(_ popup: NSPopUpButton, context: Context) {
+        context.coordinator.parent = self
+        let titles = options.map(\.1)
+        if popup.itemTitles != titles { popup.removeAllItems(); popup.addItems(withTitles: titles) }
+        popup.selectItem(at: options.firstIndex { $0.0 == selection } ?? 0)
+        popup.setAccessibilityLabel(label)
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSPopUpButton, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? Self.columnWidth, height: 28)
+    }
+    final class Coordinator: NSObject {
+        var parent: SettingsFontPicker
+        init(_ parent: SettingsFontPicker) { self.parent = parent }
+        @objc func changed(_ popup: NSPopUpButton) {
+            guard parent.options.indices.contains(popup.indexOfSelectedItem) else { return }
+            parent.selection = parent.options[popup.indexOfSelectedItem].0
+        }
+    }
+}
+
+
+/// The popup still owns its bezel, menu, focus, selection and AX value. Its
+/// title cell centers the final native glyph run, including descenders, within
+/// the common row axis rather than centering the font's line rectangle.
+private final class SettingsFontPickerCell: NSPopUpButtonCell {
+    private var rasterKey = ""
+    private var raster: GroupHeaderInkView.InkRaster?
+    override func drawTitle(_ title: NSAttributedString, withFrame frame: NSRect, in controlView: NSView) -> NSRect {
+        let scale = controlView.window?.backingScaleFactor ?? 1
+        let key = "\(title)|\(controlView.effectiveAppearance.name)|\(scale)"
+        if key != rasterKey {
+            rasterKey = key
+            controlView.effectiveAppearance.performAsCurrentDrawingAppearance {
+                raster = GroupHeaderInkView.inkImage(size: title.size(), scale: scale,
+                    colorSpace: controlView.window?.colorSpace ?? .sRGB) { title.draw(at: $0) }
+            }
+        }
+        guard let raster else { return super.drawTitle(title, withFrame: frame, in: controlView) }
+        let inkCenter = controlView.isFlipped ? raster.size.height - raster.alignmentRect.midY : raster.alignmentRect.midY
+        let rect = CGRect(x: frame.minX - raster.alignmentRect.minX,
+                          y: ((controlView.bounds.midY - inkCenter) * scale).rounded() / scale,
+                          width: raster.size.width, height: raster.size.height)
+        NSImage(cgImage: raster.image, size: raster.size).draw(in: rect, from: .zero,
+            operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        return rect
     }
 }

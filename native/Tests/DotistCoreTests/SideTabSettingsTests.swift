@@ -42,7 +42,7 @@ final class SideTabSettingsTests: XCTestCase {
     func testPatchClampsAndPersistsOpacityIndependentlyOfPanelOpacity() throws {
         try withSettings { path in
             let store = try SettingsStore(path: path)
-            for (input, expected): (UInt8, UInt8) in [(0, 10), (9, 10), (10, 10), (47, 47), (100, 100), (255, 100)] {
+            for (input, expected): (UInt8, UInt8) in [(0, 0), (9, 9), (10, 10), (47, 47), (100, 100), (255, 100)] {
                 var patch = DotistSettingsPatch()
                 patch.sideTabOpacity = input
                 let updated = try store.update(patch)
@@ -61,7 +61,7 @@ final class SideTabSettingsTests: XCTestCase {
 
     func testStoredOutOfRangeValuesClampWithoutRewritingOnRead() throws {
         try withSettings { path in
-            for (input, expected) in [(0, 10), (255, 100)] {
+            for (input, expected) in [(0, 0), (255, 100)] {
                 let stored = Data("{\"side_tab_opacity\":\(input)}".utf8)
                 try stored.write(to: path)
                 XCTAssertEqual(try SettingsStore(path: path).current().sideTabOpacity, UInt8(expected))

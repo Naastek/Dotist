@@ -18,6 +18,7 @@ enum ComposerMetrics {
 struct ComposerGroupLabel: View {
     @ObservedObject private var typography = DotistTypography.shared
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.colorScheme) private var scheme
     let title: String
     let language: String
     private static let images: NSCache<NSString, NSImage> = {
@@ -28,13 +29,14 @@ struct ComposerGroupLabel: View {
 
     private func image(font: NSFont) -> NSImage {
         let scale = max(1, displayScale)
-        let key = "\(DotistDesign.fontCacheKey)|\(font.fontDescriptor)|\(title)|\(scale)" as NSString
+        let key = "\(DotistDesign.fontCacheKey)|\(font.fontDescriptor)|\(title)|\(scale)|\(scheme)" as NSString
         if let image = Self.images.object(forKey: key) { return image }
-        let text = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: NSColor.black])
-        // A template's coverage is independent of the application's appearance.
-        // Measure black ink on light paper even when the live menu is dark.
+        let text = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: NSColor(DotistDesign.muted)])
+        // The template keeps native alpha coverage, but its optical rectangle
+        // must be measured in the final menu tint and appearance. Black-mask
+        // edges do not describe faint/muted antialiasing on the live surface.
         var measured: GroupHeaderInkView.InkRaster?
-        NSAppearance(named: .aqua)?.performAsCurrentDrawingAppearance {
+        NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance {
             measured = GroupHeaderInkView.inkImage(size: text.size(), scale: scale) { text.draw(at: $0) }
         }
         guard let raster = measured else {

@@ -108,10 +108,15 @@ struct SideTabExpansion {
 }
 
 private struct SideTabShape: Shape {
+    let inward: Bool
     func path(in rect: CGRect) -> Path {
-        // Both attachment corners are exposed when the child overlays the panel.
-        RoundedRectangle(cornerRadius: min(8, rect.width / 2, rect.height / 2), style: .continuous)
-            .path(in: rect)
+        let radius = min(8, rect.width / 2, rect.height / 2)
+        // Outward tabs attach on the right; inward tabs attach on the left.
+        // The connection edge stays square at every sampled expansion width.
+        return UnevenRoundedRectangle(topLeadingRadius: inward ? 0 : radius,
+            bottomLeadingRadius: inward ? 0 : radius,
+            bottomTrailingRadius: inward ? radius : 0,
+            topTrailingRadius: inward ? radius : 0, style: .continuous).path(in: rect)
     }
 }
 
@@ -167,6 +172,7 @@ extension EnvironmentValues {
 }
 
 private struct SideTabBackground: View {
+    let inward: Bool
     let color: DotistGroupColor
     let selected: Bool
     let opacity: UInt8
@@ -177,10 +183,10 @@ private struct SideTabBackground: View {
     @Environment(\.sideTabAccessibility) private var accessibility
 
     var body: some View {
-        let shape = SideTabShape()
+        let shape = SideTabShape(inward: inward)
         let reduceTransparency = accessibility?.reduceTransparency ?? self.reduceTransparency
         let contrast = accessibility?.contrast ?? self.contrast
-        let alpha = reduceTransparency || contrast == .increased ? 1 : Double(min(100, max(10, opacity))) / 100
+        let alpha = reduceTransparency || contrast == .increased ? 1 : Double(min(100, opacity)) / 100
         ZStack {
             // This underlay also protects contrast if a glass host loses sampling.
             shape.fill(DotistDesign.paper)
@@ -189,9 +195,8 @@ private struct SideTabBackground: View {
                 Color.clear
                     .glassEffect(.regular.tint(DotistTheme.tint(color, scheme).opacity(selected ? 1 : 0.5)), in: shape)
             }
-            shape.stroke(DotistDesign.faint.opacity(selected ? 0.45 : 0.35), lineWidth: 0.75)
         }
-        // Composite first so tint and outline cannot raise the configured alpha.
+        // Composite first so tint cannot raise the configured alpha.
         // Foreground text lives outside this background group.
         .compositingGroup()
         .opacity(alpha)
@@ -241,7 +246,7 @@ private struct SideTabContent: View {
 
     var body: some View {
         ZStack(alignment: inward ? .leading : .trailing) {
-            SideTabBackground(color: color, selected: selected, opacity: opacity)
+            SideTabBackground(inward: inward, color: color, selected: selected, opacity: opacity)
                 .frame(width: row.rect.width, height: SideTabGeometry.height)
             SideTabLabel(name: row.name, language: language, selected: selected,
                          hovered: hovered, right: inward, width: row.rect.width,

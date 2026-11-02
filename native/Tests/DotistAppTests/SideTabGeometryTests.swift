@@ -215,37 +215,23 @@ final class SideTabLabelRenderingTests: XCTestCase {
         }
     }
 
-    func testTenPointEarsKeepVisibleOutlineInLightAndDark() throws {
-        for scheme in [ColorScheme.light, .dark] {
-            for inward in [false, true] {
-                let sample = try XCTUnwrap(SideTabsSnapshot.render(names: ["All", "Work"], language: "en",
-                    scheme: scheme, inward: inward, expanded: false))
-                let bitmap = NSBitmapImageRep(cgImage: sample.image)
-                XCTAssertEqual(bitmap.pixelsWide, 10)
-                for rect in sample.tabs {
-                    let y = Int(rect.midY)
-                    let edge = try XCTUnwrap(bitmap.colorAt(x: inward ? 9 : 0, y: y)?.usingColorSpace(.deviceRGB))
-                    let center = try XCTUnwrap(bitmap.colorAt(x: 5, y: y)?.usingColorSpace(.deviceRGB))
-                    XCTAssertGreaterThan(edge.alphaComponent, 0.8)
-                    let contrast = max(abs(edge.redComponent - center.redComponent),
-                        abs(edge.greenComponent - center.greenComponent), abs(edge.blueComponent - center.blueComponent))
-                    XCTAssertGreaterThan(contrast, 0.025, "Selected and unselected 10pt ears need a visible outline: \(scheme), inward=\(inward)")
-                }
-            }
-        }
-    }
-
-    func testExpandedTabsRoundEveryExposedCornerInEitherDirection() throws {
+    func testConnectionEdgeIsSquareAndOnlyOuterCornersRoundInEitherDirection() throws {
         for inward in [false, true] {
-            let sample = try XCTUnwrap(SideTabsSnapshot.render(names: ["Work"], language: "en",
-                scheme: .light, inward: inward, expanded: true, showLabels: false))
-            let bitmap = NSBitmapImageRep(cgImage: sample.image)
-            for x in [0, bitmap.pixelsWide - 1] {
-                for y in [0, bitmap.pixelsHigh - 1] {
-                    XCTAssertEqual(bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0, 0,
-                        "Every exposed corner must be soft, including the attachment edge")
+            for expanded in [false, true] {
+                let sample = try XCTUnwrap(SideTabsSnapshot.render(names: ["Work"], language: "en",
+                    scheme: .light, inward: inward, expanded: expanded, showLabels: false, opacity: 100))
+                let bitmap = NSBitmapImageRep(cgImage: sample.image)
+                let connectionX = inward ? 0 : bitmap.pixelsWide - 1
+                let outerX = inward ? bitmap.pixelsWide - 1 : 0
+                for y in 0..<bitmap.pixelsHigh {
+                    XCTAssertEqual(bitmap.colorAt(x: connectionX, y: y)?.alphaComponent ?? 0, 1,
+                                   accuracy: 0.005, "Connection edge is flush through both corners: inward=\(inward), expanded=\(expanded), y=\(y)")
                 }
-                XCTAssertGreaterThan(bitmap.colorAt(x: x, y: bitmap.pixelsHigh / 2)?.alphaComponent ?? 0, 0.8)
+                for y in [0, bitmap.pixelsHigh - 1] {
+                    XCTAssertEqual(bitmap.colorAt(x: outerX, y: y)?.alphaComponent ?? 0, 0,
+                                   "Only the outer two corners are rounded")
+                }
+                XCTAssertEqual(bitmap.colorAt(x: outerX, y: bitmap.pixelsHigh / 2)?.alphaComponent ?? 0, 1, accuracy: 0.005)
             }
         }
     }
@@ -263,7 +249,33 @@ final class SideTabLabelRenderingTests: XCTestCase {
         return count
     }
 
-    func testExpandedNamesRenderAndCollapsedNamesAreFullyTransparent() throws {
+    private func clearedBitmap(_ source: CGImage) throws -> NSBitmapImageRep {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: source.width, pixelsHigh: source.height,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        try XCTUnwrap(bitmap.bitmapData).initialize(repeating: 0, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
+        let graphics = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: bitmap))
+        graphics.cgContext.setBlendMode(.copy)
+        graphics.cgContext.draw(source, in: CGRect(x: 0, y: 0, width: source.width, height: source.height))
+        graphics.flushGraphics()
+        return bitmap
+    }
+
+    private func renderToClearedBitmap<Content: View>(_ renderer: ImageRenderer<Content>, size: CGSize) throws -> NSBitmapImageRep {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+            pixelsWide: Int(size.width), pixelsHigh: Int(size.height), bitsPerSample: 8,
+            samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        try XCTUnwrap(bitmap.bitmapData).initialize(repeating: 0, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
+        let graphics = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: bitmap))
+        renderer.render { measured, draw in
+            XCTAssertEqual(measured, size)
+            draw(graphics.cgContext)
+        }
+        graphics.flushGraphics()
+        return bitmap
+    }
+
+    func testExpandedNamesRenderAndCollapsedNamesAreFullyTransparent() async throws {
         for (language, name) in [("zh-CN", "全部"), ("en", "Work projects"), ("ja", "仕事の計画"), ("zh-Hant", "工作與生活")] {
             let text = name as NSString
             let fullWidth = SideTabGeometry.expandedWidth(textWidth: max(
@@ -274,7 +286,32 @@ final class SideTabLabelRenderingTests: XCTestCase {
                     let label = SideTabLabel(name: name, language: language, selected: true, hovered: false,
                         right: inward, width: expanded ? fullWidth : 10, fullWidth: fullWidth, textOpacity: expanded ? 1 : 0)
                     let renderer = ImageRenderer(content: label.environment(\.colorScheme, .light))
-                    let bitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+                    renderer.scale = 1
+                    renderer.proposedSize = ProposedViewSize(width: expanded ? fullWidth : 10, height: SideTabGeometry.height)
+                    // Preserve the OLD default-proposal/default-scale shortcut
+                    // independently, so host diagnostics can still reproduce it.
+                    let legacyRenderer = ImageRenderer(content: label.environment(\.colorScheme, .light))
+                    let source = try XCTUnwrap(legacyRenderer.cgImage)
+                    let legacy = NSBitmapImageRep(cgImage: source)
+                    let sourceCopy = try clearedBitmap(source)
+                    let bitmap = try renderToClearedBitmap(renderer, size: CGSize(width: expanded ? fullWidth : 10, height: SideTabGeometry.height))
+                    var copiedPixels = 0
+                    for y in 0..<sourceCopy.pixelsHigh { for x in 0..<sourceCopy.pixelsWide {
+                        if (sourceCopy.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.2 { copiedPixels += 1 }
+                    }}
+                    var legacyPixels = 0
+                    for y in 0..<legacy.pixelsHigh { for x in 0..<legacy.pixelsWide {
+                        if (legacy.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.2 { legacyPixels += 1 }
+                    }}
+                    if !expanded && legacyPixels > 0 {
+                        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".cache/feedback-host-audit/current")
+                        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                        try XCTUnwrap(legacy.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent("legacy-transparent-\(language)-\(inward).png"))
+                        try XCTUnwrap(sourceCopy.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent("cgimage-copy-transparent-\(language)-\(inward).png"))
+                        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent("direct-render-transparent-\(language)-\(inward).png"))
+                    }
+                    print("COLLAPSED RASTER language=\(language), inward=\(inward), expanded=\(expanded), source=\(source.width)x\(source.height), sourceAlpha=\(source.alphaInfo.rawValue), legacyScale=\(legacyRenderer.scale), legacyPixels=\(legacyPixels), cgImageCopyPixels=\(copiedPixels), directRenderDestinationInitialized=true")
                     var foregroundPixels = 0
                     for y in 0..<bitmap.pixelsHigh {
                         for x in 0..<bitmap.pixelsWide {
@@ -286,6 +323,24 @@ final class SideTabLabelRenderingTests: XCTestCase {
                     } else {
                         XCTAssertEqual(foregroundPixels, 0, "Narrow edges must contain no letters or ellipsis")
                     }
+                    // Independent native rendering of the SAME label verifies
+                    // that opacity/clipping does not leave actual foreground.
+                    let fixture = NativeRenderingFixture(label.environment(\.colorScheme, .light), size: CGSize(width: expanded ? fullWidth : 10, height: SideTabGeometry.height))
+                    fixture.window.isOpaque = false; fixture.window.backgroundColor = .clear
+                    let native = try await fixture.capture(scale: fixture.window.backingScaleFactor)
+                    var nativePixels = 0
+                    for y in 0..<native.pixelsHigh { for x in 0..<native.pixelsWide {
+                        if (native.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.2 { nativePixels += 1 }
+                    }}
+                    if expanded {
+                        XCTAssertGreaterThan(nativePixels, 10, "Native capture must actually draw visible expanded labels")
+                    } else {
+                        XCTAssertEqual(nativePixels, 0, "Native collapsed foreground must be absent too")
+                        XCTAssertEqual(nativePixels, foregroundPixels, "Cleared direct rendering and the native view must agree")
+                    }
+                    print("LABEL NATIVE \(language), inward=\(inward), expanded=\(expanded), alphaPixels=\(nativePixels), canonicalPixels=\(foregroundPixels), legacyPixels=\(legacyPixels), windowVisible=\(fixture.window.isVisible)")
+                    XCTAssertFalse(fixture.window.isVisible)
+                    fixture.close()
                 }
             }
         }

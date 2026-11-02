@@ -40,7 +40,7 @@ enum DotistDesign {
 
     static func materialOpacity(_ opacity: UInt8, dark: Bool, highContrast: Bool) -> Double {
         let requested = Double(opacity) / 100
-        return highContrast ? max(requested, 0.96) : dark ? 0.82 + requested * 0.16 : requested
+        return highContrast ? max(requested, 0.96) : requested
     }
 
     private static func rgb(_ hex: Int) -> NSColor {
@@ -165,19 +165,8 @@ struct FloatingMaterial: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: compact ? 24 : DotistDesign.windowCornerRadius, style: .continuous)
-        Group {
-            if reduceTransparency || contrast == .increased {
-                DotistDesign.paper
-            } else {
-                Color.clear
-                    // Keep the material and interaction graph alive across all shapes;
-                    // switching clear → regular.interactive on the first collapse is cold.
-                    .glassEffect(color == .none ? .regular.interactive() : .regular.tint(DotistTheme.tint(color, scheme)).interactive(), in: shape)
-                    .overlay(DotistDesign.paper.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: contrast == .increased)))
-                    .overlay(DotistDesign.paper.opacity(Double(frost) / 100 * 0.12))
-            }
-        }.clipShape(shape)
+        FloatingPanelSurface(opacity: opacity, frost: frost, compact: compact, color: color,
+                             solid: reduceTransparency || contrast == .increased, scheme: scheme)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: color)
     }
 }

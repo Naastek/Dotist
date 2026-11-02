@@ -556,7 +556,7 @@ struct FloatingSurface: View, Animatable {
     }
 }
 
-/// Keep the color wash above paper/frost so user opacity never erases the tint.
+/// Glass, paper and color share one background alpha; content stays opaque.
 /// Shared by the expanded panel, circle and hover strip.
 struct FloatingPanelMaterial: View {
     let opacity: UInt8
@@ -598,6 +598,9 @@ struct FloatingPanelSurface: View {
             }
         }
         .overlay(DotistTheme.swatch(color).opacity(solid ? 0.08 : (scheme == .dark ? 0.18 : 0.16)))
+        // Native regular glass has its own alpha floor. Scale the complete
+        // composed backdrop, including tint, rather than only its paper wash.
+        .opacity(solid ? 1 : DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false))
         .clipShape(shape)
     }
 

@@ -160,12 +160,12 @@ struct SettingsWindow: View {
                     }), options: [("standard", model.text("标准")), ("clear", model.text("透明玻璃")), ("ultra", model.text("极致通透"))],
                         label: model.text("玻璃预设"), language: model.language).frame(width: 244)
                 }
-                settingRow("透明程度") {
-                    Slider(value: Binding(get: { transparency }, set: { value in update { $0.opacity = UInt8((95 - 91 * pow(value / 100, 1.5)).rounded()) } }), in: 0...100).frame(width: 110).modifier(DotistFocusRing())
+                settingRow("主表面透明度") {
+                    Slider(value: Binding(get: { transparency }, set: { value in update { $0.opacity = DotistTransparency.opacity(value: value) } }), in: 0...100).frame(width: 110).modifier(DotistFocusRing())
                     numericValue("\(Int(transparency.rounded()))%")
                 }
                 numberRow("磨砂程度", value: Double(model.settings.frost), range: 0...100, unit: "%") { $0.frost = UInt8($1.rounded()) }
-                numberRow("分组便签不透明度", value: Double(model.settings.sideTabOpacity), range: 10...100, unit: "%") { $0.sideTabOpacity = UInt8($1.rounded()) }
+                numberRow("分组便签背景透明度", value: DotistTransparency.value(opacity: model.settings.sideTabOpacity), range: 0...100, unit: "%") { $0.sideTabOpacity = DotistTransparency.opacity(value: $1) }
             }
             settingsGroup("字体") {
                 ForEach(DotistFontRole.allCases, id: \.rawValue) { role in fontRow(role) }
@@ -193,7 +193,7 @@ struct SettingsWindow: View {
                 boolRow("失焦淡出", value: model.settings.idleFade) { $0.idleFade = $1 }
                 numberRow("淡出前等待", value: Double(model.settings.idleDelaySecs), range: 1...60) { $0.idleDelaySecs = UInt8($1.rounded()) }
                 numberRow("淡出用时", value: Double(model.settings.idleFadeSecs), range: 1...10) { $0.idleFadeSecs = UInt8($1.rounded()) }
-                numberRow("淡出后的不透明度", value: Double(model.settings.idleOpacity), range: 20...95, unit: "%") { $0.idleOpacity = UInt8($1.rounded()) }
+                numberRow("失焦后整窗透明度", value: DotistTransparency.value(opacity: model.settings.idleOpacity), range: 0...80, unit: "%") { $0.idleOpacity = DotistTransparency.opacity(value: $1) }
             }
         }
     }
@@ -415,7 +415,7 @@ struct SettingsWindow: View {
         default: return ""
         }
     }
-    private var transparency: Double { 100 * pow(min(1, max(0, (95 - Double(model.settings.opacity)) / 91)), 1 / 1.5) }
+    private var transparency: Double { DotistTransparency.value(opacity: model.settings.opacity) }
     private func rowID(_ title: String) -> String { SettingsSearchEntry.rowID(active, title) }
     private func settingsGroup<Content: View>(_ title: String, footer: String = "", @ViewBuilder content: @escaping () -> Content) -> some View {
         SettingsGroup(model.text(title), footer: footer.isEmpty ? "" : model.text(footer), language: model.language, emphasized: emphasized == rowID(title), content: content)
@@ -429,13 +429,14 @@ struct SettingsWindow: View {
     }
     private func fontRow(_ role: DotistFontRole) -> some View {
         settingRow(role.title) {
-            Picker(model.text(role.title), selection: Binding(get: { role.value(in: model.settings) }, set: { value in update { role.set(value, in: &$0) } })) {
-                ForEach(role.choices, id: \.self) { value in Text(model.text(role.label(value))).tag(value) }
-            }.pickerStyle(.menu).labelsHidden().frame(width: 190).modifier(DotistFocusRing())
-                .accessibilityIdentifier("settings-font-" + role.rawValue)
             OpticalText(title: model.text(DotistFontRole.previewText), size: 13, serif: role.isSerif,
                         language: role == .serifCjk && role.value(in: model.settings) == "chiron-sung-hk" ? "zh-HK" : model.language)
-                .lineLimit(1).frame(width: 110, alignment: .leading)
+                .lineLimit(1).frame(width: SettingsFontPicker.previewWidth, alignment: .leading)
+                .accessibilityIdentifier("settings-font-preview-" + role.rawValue)
+            SettingsFontPicker(selection: Binding(get: { role.value(in: model.settings) }, set: { value in update { role.set(value, in: &$0) } }),
+                               options: role.choices.map { ($0, model.text(role.label($0))) }, label: model.text(role.title))
+                .frame(width: SettingsFontPicker.columnWidth, height: 28).modifier(DotistFocusRing())
+                .accessibilityIdentifier("settings-font-" + role.rawValue)
         }
     }
     private func settingMenu(_ label: String, value: String, options: [(String, String)], choose: @escaping (String) -> Void) -> some View {

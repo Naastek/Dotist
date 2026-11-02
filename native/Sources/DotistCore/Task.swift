@@ -88,6 +88,15 @@ public struct DotistFontPreferences: Equatable, Sendable {
     public var cacheKey: String { [serifLatin, sansLatin, serifCjk, sansCjk].joined(separator: "|") }
 }
 
+/// UI values always increase toward transparency. Persisted *_opacity keys
+/// keep their historical meaning; loading an old file never inverts its values.
+public enum DotistTransparency {
+    public static func value(opacity: UInt8) -> Double { 100 - Double(min(100, opacity)) }
+    public static func opacity(value: Double) -> UInt8 {
+        UInt8((100 - min(100, max(0, value.isFinite ? value : 0))).rounded())
+    }
+}
+
 /// Native preferences persisted next to the task database.
 public struct DotistSettings: Codable, Equatable, Sendable {
     public var theme: String
@@ -100,7 +109,7 @@ public struct DotistSettings: Codable, Equatable, Sendable {
         DotistFontPreferences(serifLatin: fontSerifLatin, sansLatin: fontSansLatin, serifCjk: fontSerifCjk, sansCjk: fontSansCjk)
     }
     public var opacity: UInt8
-    /// Background opacity of side tabs, independent of panel opacity (10...100).
+    /// Background opacity of side tabs, independent of panel opacity (0...100).
     public var sideTabOpacity: UInt8 = 85
     public var frost: UInt8
     public var toggleShortcut: String

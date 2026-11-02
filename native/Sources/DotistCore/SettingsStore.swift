@@ -136,10 +136,10 @@ final class SettingsStore: @unchecked Sendable {
         guard filterIDs.contains(next.defaultFilter), filterIDs.contains(next.trayFilter) else { throw TaskStoreError("无效的筛选器") }
         let shortcuts = [next.toggleShortcut, next.quickAddShortcut, next.settingsShortcut, next.viewsShortcut].filter { !$0.isEmpty }
         guard Set(shortcuts).count == shortcuts.count else { throw TaskStoreError("不同的动作不能使用同一个快捷键") }
-        next.opacity = min(max(next.opacity, 4), 95)
-        next.sideTabOpacity = min(max(next.sideTabOpacity, 10), 100)
+        next.opacity = min(next.opacity, 100)
+        next.sideTabOpacity = min(next.sideTabOpacity, 100)
         next.frost = min(next.frost, 100)
-        next.idleOpacity = min(max(next.idleOpacity, 20), 95)
+        next.idleOpacity = min(max(next.idleOpacity, 20), 100)
         next.idleDelaySecs = min(max(next.idleDelaySecs, 1), 60)
         next.idleFadeSecs = min(max(next.idleFadeSecs, 1), 10)
         next.autoCollapseSecs = min(max(next.autoCollapseSecs, 1), 600)

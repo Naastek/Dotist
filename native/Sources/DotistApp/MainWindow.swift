@@ -809,7 +809,7 @@ struct MainWindow: View {
             if showsHeader {
                 groupHeader(group, empty: roots.isEmpty, after: open.last)
             }
-            if state.showsGroupContents(group.id, hasHeader: showsHeader) {
+            CollapsibleTaskSection(expanded: state.showsGroupContents(group.id, hasHeader: showsHeader)) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(open.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? open[index - 1].id : nil, next: index + 1 < open.count ? open[index + 1].id : nil, result: openResult) }
                     emptyGroupGhost(group.id, region: group.id)
@@ -830,9 +830,9 @@ struct MainWindow: View {
                         }.buttonStyle(.plain).modifier(DotistFocusRing())
                         if state.folded.contains(group.id) { ForEach(Array(completed.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? completed[index - 1].id : nil, next: index + 1 < completed.count ? completed[index + 1].id : nil, result: completedResult) } }
                     }
-                }.transition(.opacity)
+                }
             }
-        }.animation(groupCollapseAnimation, value: state.collapsedGroups.contains(group.id))
+        }
             .padding(.top, firstSection ? 6 : 20).id(group.id).contentShape(Rectangle())
             .background(groupGeometry(group.id, region: group.id))
     }
@@ -969,7 +969,7 @@ struct MainWindow: View {
             if groupID != DotistGroup.inboxID, let group = model.groups.first(where: { $0.id == groupID }) {
                 groupHeader(group, empty: false, after: heads.last, region: region)
             }
-            if state.showsGroupContents(groupID, hasHeader: groupID != DotistGroup.inboxID) {
+            CollapsibleTaskSection(expanded: state.showsGroupContents(groupID, hasHeader: groupID != DotistGroup.inboxID)) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(outlined.enumerated()), id: \.element.id) { index, task in
                         taskRow(task, children: model.children(of: task), sub: task.parentId != nil, allTasks: true, previous: index > 0 ? outlined[index - 1].id : nil, next: index + 1 < outlined.count ? outlined[index + 1].id : nil, hideDue: hideDue)
@@ -979,9 +979,9 @@ struct MainWindow: View {
 
                     }
                     emptyGroupGhost(groupID, region: region)
-                }.transition(.opacity)
+                }
             }
-        }.animation(groupCollapseAnimation, value: state.collapsedGroups.contains(groupID))
+        }
             .background(groupGeometry(groupID, region: region))
     }
 
@@ -1369,6 +1369,9 @@ struct MainWindow: View {
                 }
 
         }.padding(.leading, 16).padding(.trailing, 11).frame(height: ComposerMetrics.barHeight).onHover { composerHovered = $0 }.overlay(alignment: .top) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5) }
+            #if DEBUG
+            .background(ComposerBarLayoutAnchor().allowsHitTesting(false).accessibilityHidden(true))
+            #endif
     }
 
     private var groupShelf: some View {
@@ -1502,17 +1505,27 @@ struct GroupCollapseHeader: View {
     let hovered: Bool
     var empty = false
     let toggle: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var motion: DisclosureMotion
+    init(title: String, language: String, collapsed: Bool, hovered: Bool, empty: Bool = false, toggle: @escaping () -> Void) {
+        self.title = title; self.language = language; self.collapsed = collapsed
+        self.hovered = hovered; self.empty = empty; self.toggle = toggle
+        _motion = StateObject(wrappedValue: DisclosureMotion(expanded: !collapsed))
+    }
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: 6) {
                 GroupHeaderInkLabel(title: title, language: language, collapsed: collapsed,
-                                    showsChevron: collapsed || hovered, empty: empty)
-                    // Row insertion/removal still animates in the section. The
-                    // native title switches glyphs without interpolating bounds.
+                                    showsChevron: collapsed || hovered || motion.fraction < 1, empty: empty, disclosureProgress: motion.fraction)
+                    // The clock rotates only the disclosure; title bounds stay fixed.
                     .transaction { $0.animation = nil }
                 Spacer(minLength: 26)
             }.frame(height: 30).contentShape(Rectangle())
         }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(title))
+            .onAppear { motion.setExpanded(!collapsed, reduceMotion: true) }
+            .onChange(of: collapsed) { value in motion.setExpanded(!value, reduceMotion: reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) }
+            .onChange(of: reduceMotion) { value in if value { motion.setExpanded(!collapsed, reduceMotion: true) } }
+            .onDisappear { motion.stop() }
     }
 }
 
@@ -1538,3 +1551,20 @@ private struct HeaderMenuEscape: NSViewRepresentable {
         var monitor: Any?
     }
 }
+
+
+#if DEBUG
+/// A transparent layout anchor lets panel fixtures read the actual bar box;
+/// AX encloses accessible content rather than this bar's complete padding.
+struct ComposerBarLayoutAnchor: NSViewRepresentable {
+    final class Box: NSView {
+        override var isOpaque: Bool { false }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+    func makeNSView(context: Context) -> Box { Box() }
+    func updateNSView(_ view: Box, context: Context) {}
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: Box, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
+    }
+}
+#endif

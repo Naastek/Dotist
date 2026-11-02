@@ -147,25 +147,63 @@ final class PanelFeedbackRevisionTests: XCTestCase {
         state.folded.insert(group.id)
         var rows: [TaskListRowFrame] = []
         var groups: [TaskListGroupFrame] = []
+        let began = ProcessInfo.processInfo.systemUptime
+        var timeline = ["ms,event,fraction,target,animating,rows"]
+        var activeMotions: Set<ObjectIdentifier> = []
+        var completedMotions: [DisclosureMotion.Sample] = []
+        let previousTrace = DisclosureMotion.trace
+        DisclosureMotion.trace = { sample in
+            if sample.animating { activeMotions.insert(sample.id) } else {
+                activeMotions.remove(sample.id)
+                if sample.event == "snap" || sample.event == "finish" { completedMotions.append(sample) }
+            }
+            timeline.append("\((sample.uptime-began)*1000),\(sample.event),\(sample.fraction),\(sample.target),\(sample.animating),\(rows.count)")
+        }
+        defer {
+            DisclosureMotion.trace = previousTrace
+            let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".cache/feedback-collapse-final")
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try? timeline.joined(separator: "\n").write(to: directory.appendingPathComponent("timeline-green.csv"), atomically: true, encoding: .utf8)
+        }
         let host = NSHostingView(rootView: MainWindow(model: model, state: state, showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, collapse: {}, primary: false)
             .onPreferenceChange(TaskListRowFrame.Key.self) { rows = $0 }
             .onPreferenceChange(TaskListGroupFrame.Key.self) { groups = $0 }
             .frame(width: 364, height: 620))
-        try await settle(host)
+        func waitForPresentation(_ expected: Set<String>, phase: String, target: CGFloat? = nil, since: TimeInterval = 0) async throws {
+            let deadline = ProcessInfo.processInfo.systemUptime + 2
+            repeat {
+                host.layoutSubtreeIfNeeded()
+                await Task.yield()
+                host.layoutSubtreeIfNeeded()
+                let deliveredCompletion = target.map { target in
+                    completedMotions.contains { $0.uptime >= since && $0.target == target && $0.fraction == target }
+                } ?? true
+                if deliveredCompletion && activeMotions.isEmpty && Set(rows.map(\.task.id)) == expected {
+                    timeline.append("\((ProcessInfo.processInfo.systemUptime-began)*1000),\(phase)-complete,,,false,\(rows.count)")
+                    return
+                }
+                try await Task.sleep(for: .milliseconds(5))
+            } while ProcessInfo.processInfo.systemUptime < deadline
+            XCTFail("Bounded presentation wait expired: \(phase), active=\(activeMotions.count), rows=\(rows.map(\.task.title))")
+        }
+        try await waitForPresentation([root.id, child.id, completed.id, inbox.id], phase: "initial")
         XCTAssertEqual(Set(rows.map(\.task.id)), [root.id, child.id, completed.id, inbox.id])
         let expandedHeight = try XCTUnwrap(groups.first { $0.id == group.id }).frame.height
+        timeline.append("\((ProcessInfo.processInfo.systemUptime-began)*1000),collapse-command,,,false,\(rows.count)")
+        let closingRequested = ProcessInfo.processInfo.systemUptime
         state.setGroupCollapsed(true, id: group.id)
-        try await settle(host)
+        try await waitForPresentation([inbox.id], phase: "collapse", target: 0, since: closingRequested)
         XCTAssertEqual(rows.map(\.task.id), [inbox.id])
         let collapsedHeight = try XCTUnwrap(groups.first { $0.id == group.id }).frame.height
         XCTAssertLessThan(collapsedHeight, expandedHeight)
         XCTAssertGreaterThanOrEqual(collapsedHeight, 30, "Header must remain available for expansion")
         state.scope = "today"; state.activeTag = "focus"
-        try await settle(host)
+        try await waitForPresentation([inbox.id], phase: "date-tag")
         XCTAssertEqual(rows.map(\.task.id), [inbox.id])
         XCTAssertEqual(Set(model.todayTaskSections(tag: "focus").today.matches.map(\.id)), [root.id, child.id, inbox.id], "Collapse changes presentation, never the query or business data")
+        let openingRequested = ProcessInfo.processInfo.systemUptime
         state.setGroupCollapsed(false, id: group.id)
-        try await settle(host)
+        try await waitForPresentation([root.id, child.id, inbox.id], phase: "expand", target: 1, since: openingRequested)
         XCTAssertEqual(Set(rows.map(\.task.id)), [root.id, child.id, inbox.id])
         XCTAssertTrue(state.expanded.isEmpty, "Parent tasks continue to show their descendants")
     }
