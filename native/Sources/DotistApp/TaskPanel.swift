@@ -32,6 +32,9 @@ final class TaskPanelState: ObservableObject {
     @Published var groupID: String?
     @Published var scope: String
     @Published var activeTag: String?
+    /// A calendar-picked range; it overrides the preset scope while set.
+    @Published var customStart: String?
+    @Published var customEnd: String?
     @Published private(set) var collapsedGroups: Set<String> = []
     private let collapseStore: TaskGroupCollapseStore
     private var collapseObservation: AnyCancellable?
@@ -42,6 +45,40 @@ final class TaskPanelState: ObservableObject {
     // Legacy navigation bookkeeping only; descendants always render expanded.
     @Published var expanded: Set<String> = []
     @Published var folded: Set<String> = []
+    static func scopeLabel(_ id: String) -> String {
+        switch id {
+        case "today": "今天"
+        case "tomorrow": "明天"
+        case "week": "本周"
+        case "nextweek": "下周"
+        case "next7": "未来 7 天"
+        case "overdue": "已逾期"
+        case "undated": "无日期"
+        case "done": "已完成"
+        default: "全部"
+        }
+    }
+
+    var dateFilterActive: Bool { customStart != nil || scope != "all" }
+
+    /// Panel header line and floating bubble share this wording. nil means "All".
+    func filterSummary(in model: AppModel, includeGroup: Bool = true) -> String? {
+        let parts = filterParts(in: model, includeGroup: includeGroup)
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// One entry per active condition, in group, date, tag order.
+    func filterParts(in model: AppModel, includeGroup: Bool = true) -> [String] {
+        var parts: [String] = []
+        if includeGroup, let groupID { parts.append(model.groupDisplayName(groupID)) }
+        if let start = customStart {
+            let end = customEnd ?? start
+            parts.append(start == end ? model.dueLabel(start) : model.dueLabel(start) + " – " + model.dueLabel(end))
+        } else if scope != "all" { parts.append(model.text(Self.scopeLabel(scope))) }
+        if let activeTag { parts.append("#" + activeTag) }
+        return parts
+    }
+
     func selectedColor(in model: AppModel) -> DotistGroupColor {
         guard let groupID, let group = model.groups.first(where: { $0.id == groupID }) else {
             return DotistGroupColor(rawValue: model.settings.allColor)
@@ -79,7 +116,7 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
 
     var groupName: String { state.groupID.map { model.groupDisplayName($0) } ?? model.text("全部") }
     var tasks: [DotistTask] { model.topLevelTasks.filter { state.groupID == nil || $0.category == state.groupID } }
-    var bubbleContent: BubbleContent { BubbleContent(model: model, groupID: state.groupID, fallbackTitle: groupName) }
+    var bubbleContent: BubbleContent { BubbleContent(model: model, groupID: state.groupID, fallbackTitle: groupName, state: state) }
     var remaining: Int { bubbleContent.remaining }
     var bubbleTitle: String { bubbleContent.title }
 

@@ -345,6 +345,9 @@ struct SettingsWindow: View {
     }
     private func toolbarTitle(_ item: ToolbarItem) -> String {
         switch item {
+        case .filter: return "日期筛选"
+        case .completion: return "只看未完成"
+        case .calendar: return "日历"
         case .views: return "任务视图"
         case .pin: return "置顶窗口"
         case .lock: return "固定窗口"

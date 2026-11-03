@@ -14,12 +14,21 @@ struct BubbleContent {
     let remaining: Int
     var subtitle: String { [group, due].compactMap { $0 }.joined(separator: " · ") }
 
-    init(model: AppModel, groupID: String? = nil, fallbackTitle: String? = nil) {
-        let open = model.topLevelTasks.filter { $0.parentId == nil && !$0.completed && (groupID == nil || $0.category == groupID) }
-        let next = groupID == nil ? model.nextTask : model.ordered(open).first
+    init(model: AppModel, groupID: String? = nil, fallbackTitle: String? = nil, state: TaskPanelState? = nil) {
+        var open = model.topLevelTasks.filter { $0.parentId == nil && !$0.completed && (groupID == nil || $0.category == groupID) }
+        var next = groupID == nil ? model.nextTask : model.ordered(open).first
+        var filteredEmpty = false
+        // The bubble counts what the panel shows when a date or tag filter is active.
+        if let state, state.scope != "done", state.dateFilterActive || state.activeTag != nil {
+            let range = state.customStart.map { TaskDateRange($0, state.customEnd ?? $0) }
+            let matches = model.ordered(model.filteredTasks(scope: state.scope, groupID: groupID, tag: state.activeTag, customRange: range).matches)
+            open = matches
+            next = matches.first
+            filteredEmpty = matches.isEmpty
+        }
         task = next
         remaining = open.count
-        title = Self.clean(next?.title) ?? (next == nil ? Self.clean(fallbackTitle) ?? model.bubbleTitle : model.text("未命名任务"))
+        title = filteredEmpty ? model.text("没有符合筛选的任务") : Self.clean(next?.title) ?? (next == nil ? Self.clean(fallbackTitle) ?? model.bubbleTitle : model.text("未命名任务"))
         group = next.flatMap { model.group(for: $0) }.flatMap { Self.clean($0.name) }
         due = next?.dueDate.flatMap(Self.clean).flatMap { Self.clean(model.dueLabel($0)) }
     }
@@ -66,6 +75,16 @@ final class PanelMotion: ObservableObject {
     @Published private(set) var bubble = false
     @Published private(set) var hovering = false
     @Published var bubbleOnRight = true
+    /// Active-filter wording shown beside the collapsed ball (nil for "All").
+    var filterLines: [String] = []
+    weak var filterState: TaskPanelState?
+    var filterExtra: CGFloat {
+        guard !filterLines.isEmpty else { return 0 }
+        let font = DotistDesign.nativeFont(12, language: model.language)
+        let widest = filterLines.map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        return 16 + min(150, ceil(widest))
+    }
+    var baseWidth: CGFloat { 48 + filterExtra }
     @Published private(set) var animationInProgress = false
     var expandedSize: NSSize
     private(set) var transitionSize: NSSize
@@ -147,10 +166,11 @@ final class PanelMotion: ObservableObject {
             hoverRequiresExit = true
             expandedSize = old.size
             transitionSize = old.size
-            let x = min(max(old.maxX - 46, area.minX), area.maxX - 48)
+            let ballX = min(max(old.maxX - 46, area.minX), area.maxX - 48)
             let y = min(max(old.maxY - 46, area.minY), area.maxY - 48)
-            target = NSRect(x: x, y: y, width: 48, height: 48)
-            bubbleOnRight = target.midX > area.midX
+            bubbleOnRight = ballX + 24 > area.midX
+            let w = baseWidth
+            target = NSRect(x: bubbleOnRight ? ballX + 48 - w : ballX, y: y, width: w, height: 48)
             panel.minSize = NSSize(width: 48, height: 48)
             panel.styleMask.remove(.resizable)
             bubble = true
@@ -243,8 +263,8 @@ final class PanelMotion: ObservableObject {
         guard hovering != active else { return }
         hoverAnimating = true
         let frame = panel.frame
-        let details = bubbleContent?() ?? BubbleContent(model: model, fallbackTitle: title())
-        let width: CGFloat = active ? min(ceil(78 + details.textWidth(language: model.language)), max(48, min(440, area.width / 2))) : 48
+        let details = bubbleContent?() ?? BubbleContent(model: model, groupID: filterState?.groupID, fallbackTitle: title(), state: filterState)
+        let width: CGFloat = active ? min(ceil(78 + details.textWidth(language: model.language)) + filterExtra, max(baseWidth, min(440, area.width / 2))) : baseWidth
         let coreX = bubbleOnRight ? frame.maxX - 24 : frame.minX + 24
         let target = NSRect(x: bubbleOnRight ? coreX + 24 - width : coreX - 24, y: frame.minY, width: width, height: 48)
         // Resize the coordinate space without animation; only the glass surface morphs.
@@ -265,7 +285,7 @@ final class PanelMotion: ObservableObject {
         if !active {
             let frame = panel.frame
             let coreX = bubbleOnRight ? frame.maxX - 24 : frame.minX + 24
-            panel.setFrame(NSRect(x: coreX - 24, y: frame.minY, width: 48, height: 48), display: true)
+            panel.setFrame(NSRect(x: bubbleOnRight ? coreX + 24 - baseWidth : coreX - 24, y: frame.minY, width: baseWidth, height: 48), display: true)
             if let area = environment.visibleFrame(panel) { bubbleOnRight = coreX > area.midX }
         }
         hoverAnimating = false
@@ -282,6 +302,23 @@ final class PanelMotion: ObservableObject {
         }
     }
 
+    /// The filter changed while collapsed: grow or shrink the strip, ball fixed.
+    func refreshBaseWidth() {
+        guard !stopped, bubble, !animationInProgress, !hovering, !hoverAnimating else { return }
+        let frame = panel.frame
+        let w = baseWidth
+        guard abs(frame.width - w) > 0.5 else { return }
+        let target = NSRect(x: bubbleOnRight ? frame.maxX - w : frame.minX, y: frame.minY, width: w, height: 48)
+        if panel.isVisible, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.2
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                panel.animator().setFrame(target, display: true)
+            }
+        } else { panel.setFrame(target, display: true) }
+        refreshShadow()
+    }
+
     func beginBubbleDrag() {
         guard !stopped, bubble, !animationInProgress else { return }
         hoverClose?.cancel(); hoverClose = nil
@@ -294,7 +331,7 @@ final class PanelMotion: ObservableObject {
         let x = min(max(frame.minX, area.minX), max(area.minX, area.maxX - frame.width))
         let y = min(max(frame.minY, area.minY), max(area.minY, area.maxY - frame.height))
         if x != frame.minX || y != frame.minY { panel.setFrameOrigin(NSPoint(x: x, y: y)) }
-        if !hovering && !hoverAnimating && frame.width <= 49 { bubbleOnRight = x + frame.width / 2 > area.midX }
+        if !hovering && !hoverAnimating && frame.width <= baseWidth + 1 { bubbleOnRight = x + frame.width / 2 > area.midX }
         let width = min(expandedSize.width, area.width)
         let height = min(expandedSize.height, area.height)
         let center = bubbleOnRight ? x + frame.width - 24 : x + 24
@@ -452,12 +489,13 @@ struct FloatingPanelShape: Shape {
     let transitioning: Bool
     let onRight: Bool
     var reveal: CGFloat
+    var base: CGFloat = 48
     var animatableData: CGFloat {
         get { reveal }
         set { reveal = newValue }
     }
     func path(in rect: CGRect) -> Path {
-        let width = compact && !transitioning ? 48 + (rect.width - 48) * min(1, max(0, reveal)) : rect.width
+        let width = compact && !transitioning ? base + (rect.width - base) * min(1, max(0, reveal)) : rect.width
         let surface = CGRect(x: rect.minX + (onRight ? rect.width - width : 0), y: rect.minY, width: width, height: rect.height)
         return RoundedRectangle(cornerRadius: compact ? 24 : DotistDesign.windowCornerRadius, style: .continuous).path(in: surface)
     }
@@ -474,6 +512,7 @@ struct FloatingPanelView<Content: View>: View {
     let contextMenu: (NSEvent, NSView) -> Void
     let content: Content
     @State private var hoverReveal: CGFloat = 0
+    private var filter: [String] { colorState.filterParts(in: model, includeGroup: groupName == nil) }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
@@ -483,6 +522,7 @@ struct FloatingPanelView<Content: View>: View {
             let fixed = motion.bubble || motion.animationInProgress
             let width = fixed ? motion.transitionSize.width : geometry.size.width
             let height = fixed ? motion.transitionSize.height : geometry.size.height
+            let extra = motion.animationInProgress ? 0 : motion.filterExtra
             ZStack(alignment: .topTrailing) {
                 content
                     .frame(width: width, height: height)
@@ -493,8 +533,9 @@ struct FloatingPanelView<Content: View>: View {
                 // Keep text, font cascade and SwiftUI metadata warm before the first
                 // collapse. The circle's content never lays out at intermediate widths.
                 FloatingBubble(model: model, motion: motion,
-                    details: BubbleContent(model: model, groupID: groupName == nil ? nil : colorState.groupID, fallbackTitle: title),
-                    groupName: groupName, contextMenu: contextMenu, width: motion.bubble && !motion.animationInProgress ? geometry.size.width : 48, reveal: hoverReveal)
+                    details: BubbleContent(model: model, groupID: groupName == nil ? nil : colorState.groupID, fallbackTitle: title, state: colorState),
+                    groupName: groupName, contextMenu: contextMenu, width: motion.bubble && !motion.animationInProgress ? geometry.size.width : 48, reveal: hoverReveal,
+                    extra: extra, filter: filter)
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: motion.animationInProgress || motion.bubbleOnRight ? .topTrailing : .topLeading)
                     .opacity(motion.bubble ? 1 : 0)
                     .allowsHitTesting(motion.bubble && !motion.animationInProgress)
@@ -503,12 +544,13 @@ struct FloatingPanelView<Content: View>: View {
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topTrailing)
             .background(FloatingSurface(opacity: model.settings.opacity, frost: model.settings.frost,
                 compact: motion.bubble, transitioning: motion.animationInProgress, onRight: motion.bubbleOnRight,
-                size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID)))
+                size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID), base: 48 + extra))
             .clipShape(FloatingPanelShape(compact: motion.bubble, transitioning: motion.animationInProgress,
-                onRight: motion.bubbleOnRight, reveal: hoverReveal))
+                onRight: motion.bubbleOnRight, reveal: hoverReveal, base: 48 + extra))
             .background(WindowShadowInvalidation())
         }
-        .onAppear { motion.refreshShadow() }
+        .onAppear { motion.refreshShadow(); motion.filterState = colorState; motion.filterLines = filter }
+        .onChange(of: filter) { motion.filterLines = filter; motion.refreshBaseWidth() }
         .onChange(of: model.settings) { motion.refreshShadow() }
         .onChange(of: model.groups) { motion.refreshShadow() }
         .onChange(of: colorState.groupID) { motion.refreshShadow() }
@@ -543,6 +585,7 @@ struct FloatingSurface: View, Animatable {
     let size: CGSize
     var reveal: CGFloat
     let color: DotistGroupColor
+    var base: CGFloat = 48
     var animatableData: CGFloat {
         get { reveal }
         set { reveal = newValue }
@@ -550,9 +593,9 @@ struct FloatingSurface: View, Animatable {
 
     var body: some View {
         FloatingPanelMaterial(opacity: opacity, frost: frost, compact: compact, color: color)
-            .frame(width: compact && !transitioning ? 48 + (size.width - 48) * min(1, max(0, reveal)) : size.width, height: size.height)
+            .frame(width: compact && !transitioning ? base + (size.width - base) * min(1, max(0, reveal)) : size.width, height: size.height)
             .frame(width: size.width, height: size.height, alignment: onRight ? .topTrailing : .topLeading)
-            .clipShape(FloatingPanelShape(compact: compact, transitioning: transitioning, onRight: onRight, reveal: reveal))
+            .clipShape(FloatingPanelShape(compact: compact, transitioning: transitioning, onRight: onRight, reveal: reveal, base: base))
     }
 }
 
@@ -669,6 +712,8 @@ struct FloatingBubble: View {
     let contextMenu: (NSEvent, NSView) -> Void
     let width: CGFloat
     let reveal: CGFloat
+    var extra: CGFloat = 0
+    var filter: [String] = []
 
     private func label(_ text: String, size: CGFloat, weight: NSFont.Weight = .regular, serif: Bool = false, color: Color) -> NSAttributedString {
         NSAttributedString(string: text, attributes: [
@@ -691,15 +736,23 @@ struct FloatingBubble: View {
         Button(action: motion.toggleBubble) {
             ZStack(alignment: motion.bubbleOnRight ? .trailing : .leading) {
                 BubbleText(lines: textLines)
-                    .frame(width: max(0, width - 78), height: 48, alignment: .leading)
+                    .frame(width: max(0, width - 78 - extra), height: 48, alignment: .leading)
                     .padding(motion.bubbleOnRight ? .leading : .trailing, 12)
-                    .padding(motion.bubbleOnRight ? .trailing : .leading, 18)
+                    .padding(motion.bubbleOnRight ? .trailing : .leading, 18 + extra)
                     .offset(x: (1 - reveal) * max(0, width - 48) * (motion.bubbleOnRight ? 1 : -1))
                     .frame(width: max(0, width - 48), height: 48)
                     .clipped()
                     .opacity(Double(reveal))
                     .frame(width: width, height: 48, alignment: motion.bubbleOnRight ? .leading : .trailing)
                     .accessibilityHidden(true)
+                if !filter.isEmpty, extra > 0 {
+                    // One line per condition, the block centered on the ball's axis.
+                    BubbleText(lines: filter.map { label($0, size: 12, color: DotistDesign.muted) })
+                        .frame(width: max(0, extra - 16), height: 48, alignment: .leading)
+                        .padding(motion.bubbleOnRight ? .trailing : .leading, 52)
+                        .transition(.opacity)
+                        .accessibilityHidden(true)
+                }
                 ZStack {
                     BubbleText(lines: [label("\(details.remaining)", size: 20, weight: .semibold, color: DotistDesign.ink)], centered: true)
                 }.frame(width: 48, height: 48).contentShape(Circle())

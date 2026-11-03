@@ -6,6 +6,14 @@ enum ComposerMetrics {
     static let barHeight: CGFloat = 52
     static let fontSize: CGFloat = 13
     static let calendarSize: CGFloat = 13
+    /// One text-independent reference run per script. Group label and input share
+    /// it, so descenders in the typed text never move the baseline.
+    static func baselineSample(containing text: String) -> String {
+        text.unicodeScalars.contains { (0x3040...0x30FF).contains($0.value) || (0x3400...0x9FFF).contains($0.value) } ? "中文任务" : "Hx"
+    }
+    static func baselineSample(language: String) -> String {
+        ["zh", "ja"].contains { language.hasPrefix($0) } ? "中文任务" : "Hx"
+    }
     static func textOpticalOffset(font: NSFont?) -> CGFloat {
         guard let font else { return 0 }
         return TextLineGeometry(font: font, in: CGRect(x: 0, y: 0, width: 100, height: rowHeight)).lineRect.midY - rowHeight / 2
@@ -21,6 +29,8 @@ struct ComposerGroupLabel: View {
     @Environment(\.colorScheme) private var scheme
     let title: String
     let language: String
+    /// The input's reference run (its placeholder), so both share one baseline.
+    var sample = "中文任务"
     private static let images: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
         cache.countLimit = 128
@@ -29,20 +39,15 @@ struct ComposerGroupLabel: View {
 
     private func image(font: NSFont) -> NSImage {
         let scale = max(1, displayScale)
-        let key = "\(DotistDesign.fontCacheKey)|\(font.fontDescriptor)|\(title)|\(scale)|\(scheme)" as NSString
+        let key = "\(sample)|\(DotistDesign.fontCacheKey)|\(font.fontDescriptor)|\(title)|\(scale)|\(scheme)" as NSString
         if let image = Self.images.object(forKey: key) { return image }
         let text = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: NSColor(DotistDesign.muted)])
-        // The template keeps native alpha coverage, but its optical rectangle
-        // must be measured in the final menu tint and appearance. Black-mask
-        // edges do not describe faint/muted antialiasing on the live surface.
-        var measured: GroupHeaderInkView.InkRaster?
-        NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance {
-            measured = GroupHeaderInkView.inkImage(size: text.size(), scale: scale) { text.draw(at: $0) }
-        }
-        guard let raster = measured else {
-            return NSImage(size: CGSize(width: 1, height: ComposerMetrics.rowHeight))
-        }
-        let size = CGSize(width: raster.size.width, height: ComposerMetrics.rowHeight)
+        // The group name and the typed task share one text baseline, taken from
+        // the input's own line geometry; ink-centering would let the bold serif
+        // sit off the regular face beside it.
+        let inputFont = DotistDesign.nativeFont(ComposerMetrics.fontSize, language: language)
+        let baseline = TextLineGeometry(font: inputFont, in: CGRect(x: 0, y: 0, width: 100, height: ComposerMetrics.rowHeight), sample: "Hx").baseline
+        let size = CGSize(width: max(1, ceil(text.size().width)), height: ComposerMetrics.rowHeight)
         guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: max(1, Int(ceil(size.width * scale))),
             pixelsHigh: Int(size.height * scale), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
             isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
@@ -51,10 +56,9 @@ struct ComposerGroupLabel: View {
         NSGraphicsContext.current = graphics
         graphics.cgContext.clear(CGRect(x: 0, y: 0, width: bitmap.pixelsWide, height: bitmap.pixelsHigh))
         graphics.cgContext.scaleBy(x: scale, y: scale)
-        // The image is padded, rather than relying on NSImage.alignmentRect:
-        // the native popup's image cell does not preserve that optical rect.
-        let y = ((size.height / 2 - raster.alignmentRect.midY) * scale).rounded() / scale
-        NSImage(cgImage: raster.image, size: raster.size).draw(at: CGPoint(x: 0, y: y), from: .zero, operation: .sourceOver, fraction: 1)
+        // Bitmap contexts are y-up; the line box's bottom sits |descender| below its baseline.
+        let y = ((size.height - baseline + font.descender) * scale).rounded() / scale
+        NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance { text.draw(at: CGPoint(x: 0, y: y)) }
         NSGraphicsContext.restoreGraphicsState()
         let image = bitmap.cgImage.map { NSImage(cgImage: $0, size: size) } ?? NSImage(size: size)
         image.isTemplate = true
@@ -240,7 +244,10 @@ final class ComposerTextField: NSTextField {
     func configure(font: NSFont, reference: String) {
         guard referenceFont != font else { return }
         if let cell = cell as? ComposerTextFieldCell {
-            cell.opticalSample = reference.components(separatedBy: .newlines).first.flatMap { $0.isEmpty ? nil : $0 } ?? "中文任务"
+            // A fixed sample: the baseline must not depend on whether the
+            // placeholder or typed text has descenders, or the group label drifts.
+            // One Latin reference run for every language: CJK glyphs hang below it by design.
+            cell.opticalSample = "Hx"
         }
         referenceFont = font
         self.font = font

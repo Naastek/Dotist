@@ -37,9 +37,10 @@ struct RangeCalendar: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 ForEach(quick, id: \.0) { label, from, to in
                     Button(model.text(label)) { anchor = nil; hover = nil; choose(from, to) }.buttonStyle(.plain).modifier(DotistFocusRing())
+                        .lineLimit(1).fixedSize()
                         .font(font(12, start == from && end == to ? .medium : .regular)).foregroundColor(start == from && end == to ? DotistDesign.ink : DotistDesign.faint)
                 }
                 if let clear, !start.isEmpty { Button(model.text("清除"), action: clear).buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted) }
@@ -104,7 +105,7 @@ struct RangeCalendar: View {
                 Text(model.text(anchor == nil ? "点一天，再点另一天可选范围；按住 Shift 点击也能延伸。" : "再点一天，选出结束日期。")).font(font(11)).foregroundColor(DotistDesign.muted)
                 HStack { Spacer(); Button(model.text("完成"), action: close).buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.accent) }
             }
-        }.padding(12).frame(width: 300).background(DotistDesign.paper)
+        }.padding(12).frame(width: 344).background(DotistDesign.paper)
             .onAppear { month = Date.dotistDay(start) ?? Date() }
             .onExitCommand { if anchor != nil { anchor = nil; hover = nil } else { close() } }
     }

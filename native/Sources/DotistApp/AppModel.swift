@@ -8,7 +8,9 @@ import ServiceManagement
 @MainActor
 final class AppModel: ObservableObject {
     struct UndoEntry { let id: String; let title: String; let group: Bool }
-    @Published private(set) var tasks: [DotistTask]
+    @Published private(set) var tasks: [DotistTask] { didSet { filterCache.removeAll(keepingCapacity: true) } }
+    /// Rendering asks for the same per-group filters on every frame of a drag.
+    private var filterCache: [String: TaskFilterResult] = [:]
     @Published private(set) var groups: [DotistGroup]
     @Published private(set) var settings: DotistSettings {
         didSet { DotistDesign.fontPreferences = settings.fontPreferences }
@@ -167,8 +169,14 @@ final class AppModel: ObservableObject {
     func filteredTasks(scope: String, groupID: String? = nil, tag: String? = nil,
                        customRange: TaskDateRange? = nil, completed: Bool = false,
                        now: Date = Date(), calendar: Calendar = .current) -> TaskFilterResult {
-        TaskFiltering(tasks, now: now, calendar: calendar).filter(scope: scope, groupID: groupID, tag: tag,
+        // Only the default clock and calendar are cacheable; the key carries the day.
+        let key = "\(scope)|\(groupID ?? "-")|\(tag ?? "-")|\(customRange.map { "\($0.start)-\($0.end)" } ?? "-")|\(completed)|\(Int(now.timeIntervalSinceReferenceDate / 60))|\(calendar.identifier)|\(calendar.firstWeekday)"
+        if let hit = filterCache[key] { return hit }
+        let result = TaskFiltering(tasks, now: now, calendar: calendar).filter(scope: scope, groupID: groupID, tag: tag,
                                                                customRange: customRange, completed: completed)
+        if filterCache.count > 64 { filterCache.removeAll(keepingCapacity: true) }
+        filterCache[key] = result
+        return result
     }
 
     func todayTaskSections(groupID: String? = nil, tag: String? = nil,

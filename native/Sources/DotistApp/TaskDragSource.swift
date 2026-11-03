@@ -20,9 +20,9 @@ enum TaskRowMetrics {
 
 /// Action hit boxes share a fixed right edge, independent of metadata length.
 enum TaskRowActionMetrics {
-    static let reservedMetadataWidth: CGFloat = 88
+    /// Actions sit against metadata when there is some, otherwise at the row edge.
     static func rightInset(metadataWidth: CGFloat) -> CGFloat {
-        metadataWidth > reservedMetadataWidth ? metadataWidth + 8 : reservedMetadataWidth
+        metadataWidth > 0 ? metadataWidth + 8 : 0
     }
     static func width(count: Int) -> CGFloat { CGFloat(count * 22 + max(0, count - 1)) }
     static func frame(row: CGRect, metadataWidth: CGFloat, actionWidth: CGFloat) -> CGRect {
@@ -252,6 +252,9 @@ struct TaskCheckmark: View {
                 }
             }
         }.frame(width: TaskRowMetrics.diameter(depth), height: TaskRowMetrics.diameter(depth))
+            // A ring has no fill to hit-test; without this the tap falls through to row editing.
+            .contentShape(Circle())
+            .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.18), value: completed)
     }
 }
 
@@ -521,6 +524,7 @@ struct TaskReorderInteractionGuard: NSViewRepresentable {
         private var monitor: Any?
         private weak var guardedWindow: NSWindow?
         private var originalBackgroundMovement: Bool?
+        private var originalMovable: Bool?
         override var isFlipped: Bool { true }
         override var mouseDownCanMoveWindow: Bool { false }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -557,7 +561,10 @@ struct TaskReorderInteractionGuard: NSViewRepresentable {
                     restoreWindowMovement()
                     guardedWindow = window
                     originalBackgroundMovement = window?.isMovableByWindowBackground
+                    originalMovable = window?.isMovable
                     window?.isMovableByWindowBackground = false
+                    // ⌘-drag otherwise moves the whole window before SwiftUI sees it.
+                    if event.modifierFlags.contains(.command) { window?.isMovable = false }
                     TaskDragDiagnostics.record("native.disable-background-movement")
                 }
                 return event
@@ -566,6 +573,8 @@ struct TaskReorderInteractionGuard: NSViewRepresentable {
         }
         private func restoreWindowMovement() {
             if let originalBackgroundMovement { guardedWindow?.isMovableByWindowBackground = originalBackgroundMovement }
+            if let originalMovable { guardedWindow?.isMovable = originalMovable }
+            originalMovable = nil
             originalBackgroundMovement = nil
             guardedWindow = nil
         }

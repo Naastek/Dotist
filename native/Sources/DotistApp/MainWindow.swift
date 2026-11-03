@@ -48,12 +48,21 @@ struct MainWindow: View {
     @State private var manageGroups = false
     @State private var manageTags = false
     @State private var showCalendar = false
+    @State private var filtersOpen = false
+    @State private var hideCompleted = false
+    @State private var filterCloseWork: DispatchWorkItem?
     @State private var showDuePicker = false
     @State private var pickingTask: String?
     @State private var hoveredTask: String?
     @State private var hoveredGroup: String?
-    @State private var customStart: String?
-    @State private var customEnd: String?
+    private var customStart: String? {
+        get { state.customStart }
+        nonmutating set { state.customStart = newValue }
+    }
+    private var customEnd: String? {
+        get { state.customEnd }
+        nonmutating set { state.customEnd = newValue }
+    }
     @State private var upcomingOpen = false
     @State private var todayDoneOpen = false
     private static let listSpace = "dotist-task-list"
@@ -98,7 +107,10 @@ struct MainWindow: View {
                 GroupManager(model: model, close: { manageGroups = false }, tags: { manageGroups = false; manageTags = true })
             } else {
                 header
-                dateFilters
+                    .overlay(alignment: .bottomTrailing) {
+                        if filtersOpen { filterStrip.offset(y: TaskDateFilterMetrics.rowHeight - 4).transition(.opacity) }
+                    }.zIndex(1)
+                activeFilterLine
                 if model.tagCounts.contains(where: { $0.open > 0 }) { tagBar }
                 taskList
             }
@@ -668,9 +680,9 @@ struct MainWindow: View {
         HStack(spacing: 4) {
             Spacer(minLength: 4)
             ForEach(sortableToolbarItems, id: \.self) { item in
-                toolbarItem(item)
-                    .opacity(toolbarConfig.visibility(of: item) == .always || panelHovered || toolbarDrag != nil ? 1 : 0)
-                    .allowsHitTesting(toolbarConfig.visibility(of: item) == .always || panelHovered)
+                headerControl(item)
+                    .opacity(toolbarConfig.visibility(of: item) == .always || panelHovered || toolbarDrag != nil || isActive(item) ? 1 : 0)
+                    .allowsHitTesting(toolbarConfig.visibility(of: item) == .always || panelHovered || isActive(item))
                     .accessibilityHidden(toolbarConfig.visibility(of: item) == .hover && !panelHovered)
                     .offset(x: toolbarDrag?.offset(for: item) ?? 0)
                     .zIndex(toolbarDrag?.item == item ? 1 : 0)
@@ -681,6 +693,33 @@ struct MainWindow: View {
             if !primary, let close { toolbarButton("xmark", label: model.text("关闭面板"), action: close) }
             toolbarItem(.collapse)
         }.padding(.leading, 16).padding(.trailing, 10).frame(height: 44).background(WindowDragArea())
+    }
+
+    /// A control whose state differs from the default stays visible even when hover-only.
+    private func isActive(_ item: ToolbarItem) -> Bool {
+        switch item {
+        // Filter and calendar state is named by the line under the header, so their
+        // visibility follows the user setting; only an open popover or the completion toggle pins.
+        case .filter: filtersOpen
+        case .completion: hideCompleted
+        case .calendar: showCalendar
+        default: false
+        }
+    }
+
+    @ViewBuilder private func headerControl(_ item: ToolbarItem) -> some View {
+        switch item {
+        case .filter: filterButton.background(frameReporter(item))
+        case .completion: completionToggle.background(frameReporter(item))
+        case .calendar: calendarButton.background(frameReporter(item))
+        default: toolbarItem(item)
+        }
+    }
+
+    private func frameReporter(_ item: ToolbarItem) -> some View {
+        GeometryReader { geometry in
+            Color.clear.preference(key: ToolbarFrameKey.self, value: [item: geometry.frame(in: .named(Self.listSpace))])
+        }
     }
 
     private func toolbarReorderGesture(_ item: ToolbarItem) -> some Gesture {
@@ -708,6 +747,7 @@ struct MainWindow: View {
 
     private func toolbarItem(_ item: ToolbarItem) -> some View {
         let symbol: String = switch item {
+        case .filter, .completion, .calendar: ""
         case .views: "rectangle.split.2x1"
         case .pin: model.settings.alwaysOnTop ? "pin.fill" : "pin"
         case .lock: model.settings.locked ? "lock.fill" : "lock.open"
@@ -715,6 +755,7 @@ struct MainWindow: View {
         case .collapse: "arrow.down.right.and.arrow.up.left"
         }
         let labelKey: String = switch item {
+        case .filter, .completion, .calendar: ""
         case .views: "任务视图"
         case .pin: "置顶窗口"
         case .lock: "固定窗口"
@@ -725,6 +766,7 @@ struct MainWindow: View {
         return Button {
             guard toolbarDrag == nil else { return }
             switch item {
+            case .filter, .completion, .calendar: break
             case .views: showViews()
             case .color: showColorPicker.toggle()
             case .collapse: collapse()
@@ -801,28 +843,100 @@ struct MainWindow: View {
         }
     }
 
-    private var dateFilters: some View {
-        HStack(spacing: 8) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 16) {
-                    ForEach(model.settings.filters, id: \.self) { id in
-                        DraggableFilterButton(title: model.text(filterLabel(id)), selected: customStart == nil && state.scope == id, language: model.language,
-                                              distance: TaskDateFilterMetrics.distance(of: id, selected: customStart == nil ? state.scope : nil, in: model.settings.filters)) {
-                            state.scope = id; customStart = nil; customEnd = nil
-                        }.accessibilityIdentifier("date-filter:\(id)")
-                    }
-                }
+    /// The header names the active scope; the full strip only appears while the
+    /// pointer rests on that name or on the strip itself.
+    private var currentScopeLabel: String {
+        if let start = customStart {
+            let end = customEnd ?? start
+            return start == end ? model.dueLabel(start) : model.dueLabel(start) + " – " + model.dueLabel(end)
+        }
+        return model.text(filterLabel(state.scope))
+    }
+
+    private func filterHover(_ inside: Bool) {
+        filterCloseWork?.cancel()
+        let animation: Animation? = reduceMotion ? nil : .easeOut(duration: 0.14)
+        if inside { withAnimation(animation) { filtersOpen = true }; return }
+        let work = DispatchWorkItem { withAnimation(animation) { filtersOpen = false } }
+        filterCloseWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+    }
+
+    private var dateFilterActive: Bool { state.dateFilterActive }
+
+    private var filterButton: some View {
+        Button { filterHover(!filtersOpen) } label: {
+            OpticalSymbol(name: "line.3.horizontal.decrease", size: 14).frame(width: 28, height: 28).contentShape(Rectangle())
+        }.buttonStyle(.plain).modifier(DotistFocusRing())
+            .foregroundColor(dateFilterActive || filtersOpen ? DotistDesign.accent : DotistDesign.muted)
+            .onHover { filterHover($0) }
+            .help(model.text("日期筛选")).accessibilityLabel(Text(model.text("日期筛选")))
+            .accessibilityValue(Text(currentScopeLabel))
+            .accessibilityIdentifier("date-filter-current")
+    }
+
+    /// One quiet line naming whatever narrows the list. Nothing shows for "All".
+    @ViewBuilder private var activeFilterLine: some View {
+        let summary = state.filterSummary(in: model)
+        let parts = [summary].compactMap { $0 }
+        Group {
+            if !parts.isEmpty {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    Text(summary ?? "").font(DotistDesign.textFont(12, language: model.language))
+                        .foregroundStyle(DotistDesign.faint).lineLimit(1)
+                }.padding(.horizontal, 16).frame(height: 22)
+                    .transition(.opacity)
+                    .accessibilityIdentifier("active-filter-line")
             }
-            Button { showCalendar.toggle() } label: { OpticalSymbol(name: "calendar", size: 13).frame(width: 24, height: 24).contentShape(Rectangle()).foregroundColor(customStart == nil ? DotistDesign.muted : DotistDesign.accent) }
-                .buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("日历")))
-                .popover(isPresented: $showCalendar) {
-                    RangeCalendar(model: model, start: customStart ?? Date().dotistDay, end: customEnd ?? Date().dotistDay, choose: { start, end in
-                        state.scope = "today"
-                        customStart = start
-                        customEnd = end
-                    }, close: { showCalendar = false })
+        }.animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: parts)
+    }
+
+    private var filterStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 16) {
+                ForEach(model.settings.filters, id: \.self) { id in
+                    DraggableFilterButton(title: model.text(filterLabel(id)), selected: customStart == nil && state.scope == id, language: model.language,
+                                          distance: TaskDateFilterMetrics.distance(of: id, selected: customStart == nil ? state.scope : nil, in: model.settings.filters)) {
+                        state.scope = id; customStart = nil; customEnd = nil
+                        filterHover(false)
+                    }.accessibilityIdentifier("date-filter:\(id)")
                 }
-        }.padding(.leading, 16).padding(.trailing, 11).frame(height: TaskDateFilterMetrics.rowHeight).background(WindowDragArea())
+            }.padding(.horizontal, 12)
+        }.frame(height: TaskDateFilterMetrics.rowHeight)
+            .glassEffect(.regular, in: .rect(cornerRadius: 12))
+            .padding(.horizontal, 8)
+            .onHover { filterHover($0) }
+    }
+
+    private var completionToggle: some View {
+        let label = model.text(hideCompleted ? "显示已完成任务" : "只看未完成")
+        return Button {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { hideCompleted.toggle() }
+        } label: {
+            OpticalSymbol(name: hideCompleted ? "checkmark.circle.badge.xmark" : "checkmark.circle", size: 14).frame(width: 28, height: 28).contentShape(Rectangle())
+        }.buttonStyle(.plain).modifier(DotistFocusRing())
+            .foregroundColor(hideCompleted ? DotistDesign.accent : DotistDesign.muted)
+            .opacity(hideCompleted || panelHovered ? 1 : 0)
+            .allowsHitTesting(hideCompleted || panelHovered)
+            .help(label).accessibilityLabel(Text(label))
+            .accessibilityValue(Text(model.text(hideCompleted ? "已隐藏已完成" : "显示全部")))
+            .accessibilityIdentifier("completion-filter")
+            .animation(toolbarAnimation, value: panelHovered)
+    }
+
+    private var calendarButton: some View {
+        Button { showCalendar.toggle() } label: { OpticalSymbol(name: "calendar", size: 14).frame(width: 28, height: 28).contentShape(Rectangle()) }
+            .buttonStyle(.plain).modifier(DotistFocusRing())
+            .foregroundColor(customStart == nil ? DotistDesign.muted : DotistDesign.accent)
+            .help(model.text("日历")).accessibilityLabel(Text(model.text("日历")))
+            .popover(isPresented: $showCalendar) {
+                RangeCalendar(model: model, start: customStart ?? Date().dotistDay, end: customEnd ?? Date().dotistDay, choose: { start, end in
+                    state.scope = "today"
+                    customStart = start
+                    customEnd = end
+                }, close: { showCalendar = false })
+            }
     }
 
     private func toolbarButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
@@ -902,13 +1016,9 @@ struct MainWindow: View {
                         }
 
                     }
-                    if !completed.isEmpty {
-                        Button {
-                            if state.folded.contains(group.id) { state.folded.remove(group.id) } else { state.folded.insert(group.id) }
-                        } label: {
-                            DisclosureRow(title: model.text("已完成"), expanded: state.folded.contains(group.id), language: model.language)
-                        }.buttonStyle(.plain).modifier(DotistFocusRing())
-                        if state.folded.contains(group.id) { ForEach(Array(completed.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? completed[index - 1].id : nil, next: index + 1 < completed.count ? completed[index + 1].id : nil, result: completedResult) } }
+                    // Completed tasks stay in place, checked and struck through.
+                    if !hideCompleted {
+                        ForEach(Array(completed.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? completed[index - 1].id : nil, next: index + 1 < completed.count ? completed[index + 1].id : nil, result: completedResult).transition(.opacity) }
                     }
                 }
             }
@@ -1154,6 +1264,8 @@ struct MainWindow: View {
                 HStack(alignment: .opticalCenter, spacing: 4) {
                     OpticalText(title: titleParts?.tags.isEmpty == false ? (titleParts?.text ?? task.title) : task.title, size: 13, weight: selected ? .medium : .regular, language: model.language).lineLimit(1).truncationMode(.tail)
                         .foregroundColor(task.completed ? DotistDesign.faint : focused ? DotistDesign.accent : DotistDesign.ink)
+                        .strikethrough(task.completed, color: DotistDesign.faint)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: task.completed)
                         .fixedSize(horizontal: false, vertical: true)
                     ForEach(titleParts?.tags ?? [], id: \.self) { tag in
                         Button {
@@ -1417,9 +1529,9 @@ struct MainWindow: View {
                 Button(model.text("管理分组…")) { manageGroups = true }
             } label: {
                 HStack(spacing: 4) {
-                    ComposerGroupLabel(title: selectedName, language: model.language)
+                    ComposerGroupLabel(title: selectedName, language: model.language, sample: composer.isEmpty ? model.text("写下一件小事") : composer.components(separatedBy: .newlines).first ?? "")
                 }.foregroundColor(DotistDesign.muted).frame(height: ComposerMetrics.rowHeight)
-            }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().frame(height: ComposerMetrics.rowHeight).help(model.text("分组")).accessibilityLabel(Text(model.text("分组"))).accessibilityValue(Text(selectedName)).accessibilityIdentifier("composer-group")
+            }.menuStyle(.borderlessButton).menuIndicator(.hidden).focusEffectDisabled().fixedSize().frame(height: ComposerMetrics.rowHeight).help(model.text("分组")).accessibilityLabel(Text(model.text("分组"))).accessibilityValue(Text(selectedName)).accessibilityIdentifier("composer-group")
             ZStack(alignment: .leading) {
                 ComposerInput(text: $composer, focused: $composerFocused, placeholder: model.text("写下一件小事"), label: model.text("新任务"), font: DotistDesign.nativeFont(ComposerMetrics.fontSize, language: model.language), commit: addTask, navigate: { direction in
                     let values = tagSuggestions
@@ -1470,12 +1582,6 @@ struct MainWindow: View {
                         Color.clear.preference(key: TaskShelfFrameKey.self, value: [id: geometry.frame(in: .named(Self.listSpace))])
                     })
             }
-            Button { manageGroups = true } label: {
-                IconTextRow(spacing: 4) {
-                    OpticalSymbol(name: "plus", size: 11)
-                    OpticalText(title: model.text("新分组"), size: 14, language: model.language)
-                }.frame(height: 48)
-            }.buttonStyle(.plain).foregroundColor(DotistDesign.faint)
         }.padding(.horizontal, 16).frame(height: 48)
         }.frame(height: ComposerMetrics.barHeight)
     }
