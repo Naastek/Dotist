@@ -161,7 +161,8 @@ final class SettingsStore: @unchecked Sendable {
         var seenTags: Set<String> = []
         next.tagOrder = next.tagOrder.filter { !$0.isEmpty && seenTags.insert($0).inserted }
         guard ["system", "light", "dark"].contains(next.theme) else { throw TaskStoreError("无效的主题") }
-        guard ["system", "zh-CN", "zh-TW", "en", "ja"].contains(next.language) else { throw TaskStoreError("无效的语言") }
+        if next.language == "ja" { next.language = "system" } // Japanese was retired
+        guard ["system", "zh-CN", "zh-TW", "en", "fr", "de"].contains(next.language) else { throw TaskStoreError("无效的语言") }
         guard ["icon", "count", "next", "next_date", "rotate"].contains(next.trayMode) else { throw TaskStoreError("无效的菜单栏显示方式") }
         let actions = ["toggle", "bubble", "quick", "settings", "show", "menu", "none"]
         guard actions.contains(next.trayLeftClick), actions.contains(next.trayRightClick) else { throw TaskStoreError("无效的点击操作") }

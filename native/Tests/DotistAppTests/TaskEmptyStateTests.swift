@@ -78,7 +78,7 @@ final class TaskEmptyStateTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
         let group = try store.addGroup(name: "Project")
-        for language in ["zh-CN", "en", "ja", "zh-TW"] {
+        for language in ["zh-CN", "en", "fr", "de", "zh-TW"] {
             var patch = DotistSettingsPatch()
             patch.language = language
             _ = try store.updateSettings(patch)
@@ -344,7 +344,7 @@ final class TaskEmptyStateTests: XCTestCase {
         let samples = [
             ("zh-CN", "这个日期范围内没有任务", "写下一件小事，或在下方输入栏添加。"),
             ("en", "No tasks in this date range", "Write down one small thing, or use the input below."),
-            ("ja", "この期間のタスクはありません", "小さなことを書き留めるか、下の入力欄から追加してください。"),
+            ("fr", "Aucune tâche dans cette période", "Notez une petite chose, ou utilisez le champ ci-dessous."),
             ("zh-Hant", "這個日期範圍內沒有任務", "寫下一件小事，或在下方輸入欄新增。"),
         ]
         _ = NSApplication.shared

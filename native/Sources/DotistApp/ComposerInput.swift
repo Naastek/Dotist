@@ -12,7 +12,7 @@ enum ComposerMetrics {
         text.unicodeScalars.contains { (0x3040...0x30FF).contains($0.value) || (0x3400...0x9FFF).contains($0.value) } ? "中文任务" : "Hx"
     }
     static func baselineSample(language: String) -> String {
-        ["zh", "ja"].contains { language.hasPrefix($0) } ? "中文任务" : "Hx"
+        ["zh"].contains { language.hasPrefix($0) } ? "中文任务" : "Hx"
     }
     static func textOpticalOffset(font: NSFont?) -> CGFloat {
         guard let font else { return 0 }

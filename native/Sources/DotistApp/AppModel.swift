@@ -99,7 +99,8 @@ final class AppModel: ObservableObject {
         if lower.hasPrefix("zh") {
             return lower.contains("hant") || lower.contains("-tw") || lower.contains("-hk") || lower.contains("-mo") ? "zh-TW" : "zh-CN"
         }
-        return lower.hasPrefix("ja") ? "ja" : "en"
+        if lower.hasPrefix("fr") { return "fr" }
+        return lower.hasPrefix("de") ? "de" : "en"
     }
 
     func text(_ source: String) -> String { dictionary[language]?[source] ?? source }

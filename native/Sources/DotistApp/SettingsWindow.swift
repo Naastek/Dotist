@@ -211,7 +211,7 @@ struct SettingsWindow: View {
         VStack(alignment: .leading, spacing: 22) {
             settingsGroup("通用") {
                 settingRow("语言") {
-                    settingMenu("语言", value: model.settings.language, options: [("system", model.text("跟随系统")), ("zh-CN", "简体中文"), ("zh-TW", "繁體中文"), ("en", "English"), ("ja", "日本語")]) { value in update { $0.language = value } }
+                    settingMenu("语言", value: model.settings.language, options: [("system", model.text("跟随系统")), ("zh-CN", "简体中文"), ("zh-TW", "繁體中文"), ("en", "English"), ("fr", "Français"), ("de", "Deutsch")]) { value in update { $0.language = value } }
                 }
                 boolRow("显示在 Dock", value: model.settings.showDock) { $0.showDock = $1 }
                 boolRow("显示在菜单栏", value: model.settings.showMenubar) { $0.showMenubar = $1 }

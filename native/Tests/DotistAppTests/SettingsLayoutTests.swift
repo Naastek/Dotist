@@ -12,7 +12,7 @@ final class SettingsLayoutTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
         _ = try store.addGroup(name: "工作 Projects")
-        for language in ["zh-CN", "en", "ja", "zh-TW"] {
+        for language in ["zh-CN", "en", "fr", "de", "zh-TW"] {
             for theme in ["light", "dark"] {
                 var patch = DotistSettingsPatch(); patch.language = language; patch.theme = theme
                 _ = try store.updateSettings(patch)

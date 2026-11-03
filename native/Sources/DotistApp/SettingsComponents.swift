@@ -102,7 +102,7 @@ enum SettingsSearchIndex {
         case "恢复默认字体": return ["Restore default fonts フォントを初期設定に戻す 恢復預設字體"]
         case "全部": return ["默认颜色 預設顏色 デフォルトカラー All default color colour 全部 颜色主题 顏色主題 カラーテーマ"]
         case "颜色": return ["Color Colour カラー 顏色"]
-        case "语言": return ["language locale 言語 語言 English 日本語 简体中文 繁體中文 跟随系统 跟隨系統"]
+        case "语言": return ["language locale 言語 語言 English Français Deutsch 简体中文 繁體中文 跟随系统 跟隨系統"]
         case "主题": return ["system light dark 浅色 深色 ライト ダーク 淺色 跟随系统"]
         case "筛选器": return ["today tomorrow week next overdue undated done 今天 明天 本周 已逾期 无日期 已完成 今日 明日 今週 期限切れ 日付なし 完了 今天 明天 本週 已逾期 無日期 已完成"]
         default: return []

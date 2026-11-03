@@ -51,14 +51,16 @@ final class LocalizationPunctuationTests: XCTestCase {
         }
     }
 
-    func testEnglishAndJapaneseUseTheirOwnPunctuation() throws {
+    func testEnglishFrenchAndGermanUseTheirOwnPunctuation() throws {
         let locales = try dictionary("native-locales")
         for value in try XCTUnwrap(locales["en"]).values {
             XCTAssertFalse(try matches("[，。：；！？（）]", in: value), value)
             XCTAssertFalse(value.contains("..."), value)
         }
-        for value in try XCTUnwrap(locales["ja"]).values {
-            XCTAssertFalse(try hasHalfwidthProsePunctuation(value), value)
+        for language in ["fr", "de"] {
+            for value in try XCTUnwrap(locales[language]).values {
+                XCTAssertFalse(try matches("[，。：；！？（）]", in: value), value)
+            }
         }
     }
 
@@ -75,7 +77,7 @@ final class LocalizationPunctuationTests: XCTestCase {
     func testNativeLanguagesHaveIdenticalKeysAndLiteralTranslationsRemainCovered() throws {
         let locales = try dictionary("native-locales")
         let englishKeys = Set(try XCTUnwrap(locales["en"]).keys)
-        for language in ["ja", "zh-TW"] {
+        for language in ["fr", "de", "zh-TW"] {
             XCTAssertEqual(Set(try XCTUnwrap(locales[language]).keys), englishKeys, language)
         }
         let inheritedEnglishKeys = Set(try XCTUnwrap(dictionary("locales")["en"]).keys)

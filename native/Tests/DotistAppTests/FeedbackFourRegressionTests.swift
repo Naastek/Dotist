@@ -70,7 +70,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
         let backingSource = nativeScale == nil ? "simulated" : "native"
         var measures = ["system,language,value,focused,bitmapScale,backingScale,backingSource,groupCenter,inputCenter,groupTopMargin,groupBottomMargin,inputTopMargin,inputBottomMargin"]
         for system in [false, true] {
-            for language in ["zh-CN", "en", "ja", "zh-TW"] {
+            for language in ["zh-CN", "en", "fr", "de", "zh-TW"] {
                 let model = try model(language: language, system: system)
                 let fixture = NativeRenderingFixture(main(model, try state(), material: true).environment(\.displayScale, nativeScale ?? 2), size: CGSize(width: 364, height: 620), simulatedBackingScale: nativeScale == nil ? 2 : nil)
                 defer { fixture.close() }
@@ -516,7 +516,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
         XCTAssertEqual(motion.fraction, 1, "Reduced motion cancels an in-flight clock")
     }
     func testFontPickerNativeFramesShareColumnsAtMinimumWidth() async throws {
-        for language in ["zh-CN", "en", "ja", "zh-TW"] {
+        for language in ["zh-CN", "en", "fr", "de", "zh-TW"] {
             let model = try model(language: language)
             for size in [CGSize(width: 800, height: 540), CGSize(width: 800, height: 900), CGSize(width: 880, height: 660)] {
                 let height = size.height

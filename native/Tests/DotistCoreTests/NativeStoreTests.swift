@@ -22,7 +22,7 @@ final class NativeStoreTests: XCTestCase {
             try ["tasks", "task_groups", "sync_outbox"].map { try Row.fetchAll(db, sql: "SELECT * FROM \($0) ORDER BY 1").map(\.description) }
         }
         let path = try store.databasePath()
-        var patch = DotistSettingsPatch(); patch.language = "ja"
+        var patch = DotistSettingsPatch(); patch.language = "fr"
         _ = try store.updateSettings(patch)
         let settingsURL = URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("settings.json")
         let settings = try Data(contentsOf: settingsURL)
@@ -70,7 +70,7 @@ final class NativeStoreTests: XCTestCase {
         try store.database.write {
             try $0.execute(sql: "UPDATE tasks SET remote_revision='preserved-remote' WHERE id=?", arguments: [parent.id])
         }
-        var patch = DotistSettingsPatch(); patch.language = "ja"; patch.mcpEnabled = true
+        var patch = DotistSettingsPatch(); patch.language = "fr"; patch.mcpEnabled = true
         _ = try store.updateSettings(patch)
         let path = try store.databasePath()
         let settingsURL = URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("settings.json")
