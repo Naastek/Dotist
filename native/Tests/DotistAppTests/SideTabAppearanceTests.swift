@@ -172,10 +172,16 @@ final class SideTabAppearanceTests: XCTestCase {
     private func visibleDifference(_ a: NSColor, _ b: NSColor) -> CGFloat {
         let lhs = [a.redComponent, a.greenComponent, a.blueComponent]
         let rhs = [b.redComponent, b.greenComponent, b.blueComponent]
-        return [CGFloat(0), 1].flatMap { backdrop in
-            zip(lhs, rhs).map { abs(($0 * a.alphaComponent + backdrop * (1 - a.alphaComponent))
-                                 - ($1 * b.alphaComponent + backdrop * (1 - b.alphaComponent))) }
-        }.max() ?? 0
+        var maximum: CGFloat = 0
+        for backdrop: CGFloat in [0, 1] {
+            for index in lhs.indices {
+                let left: CGFloat = lhs[index] * a.alphaComponent + backdrop * (1 - a.alphaComponent)
+                let right: CGFloat = rhs[index] * b.alphaComponent + backdrop * (1 - b.alphaComponent)
+                let difference: CGFloat = abs(left - right)
+                maximum = max(maximum, difference)
+            }
+        }
+        return maximum
     }
 
     func testVisibleColorComparisonRetainsLegacyStrokeCounterexample() throws {
