@@ -685,6 +685,10 @@ struct PausableToastLifetime {
     private var resumedAt: TimeInterval?
     private var hovered = false
 
+    init(duration: TimeInterval) {
+        self.duration = duration
+    }
+
     mutating func restart(at now: TimeInterval) {
         remaining = duration
         resumedAt = hovered ? nil : now
