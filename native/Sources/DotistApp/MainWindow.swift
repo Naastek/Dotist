@@ -123,7 +123,7 @@ struct MainWindow: View {
         .overlay(alignment: .topLeading) {
             ghostConnector
             if let drag {
-                TaskLiftedBlock(drag: drag, motion: dragMotion) { row in
+                TaskLiftedBlock(drag: drag, motion: dragMotion, slotFrame: ghostFrame, viewport: listViewport) { row in
                     rowContent(row.task, children: model.children(of: row.task), sub: row.sub, allTasks: row.allTasks, previous: nil,
                                hideDue: row.hideDue, titleParts: model.tags(for: row.task), actionsVisible: false)
                 }

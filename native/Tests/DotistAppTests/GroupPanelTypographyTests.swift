@@ -18,7 +18,7 @@ final class GroupPanelTypographyTests: XCTestCase {
         // Exercise registration after a token was cached by a preview/test host.
         _ = DotistDesign.nativeFont(13, language: "en")
         DotistDesign.registerFonts(in: directory)
-        for (language, region) in [("en", "SC"), ("zh-CN", "SC"), ("zh-TW", "TC"), ("zh-Hant", "TC"), ("ja", "JP")] {
+        for (language, region) in [("en", "SC"), ("zh-CN", "SC"), ("zh-TW", "TC"), ("zh-Hant", "TC")] {
             for serif in [false, true] {
                 for weight in [NSFont.Weight.regular, .semibold] {
                     let font = DotistDesign.nativeFont(13, weight: weight, serif: serif, language: language)

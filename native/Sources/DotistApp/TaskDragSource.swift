@@ -831,13 +831,23 @@ enum TaskDragPreview {
 struct TaskLiftedBlock<Content: View>: View {
     let drag: TaskListDrag
     @ObservedObject var motion: TaskDragMotion
+    /// Open insertion gap, in list coordinates; the block rides it instead of the pointer.
+    var slotFrame: CGRect = .zero
+    var viewport: CGRect = .zero
     @ViewBuilder let content: (TaskListRowFrame) -> Content
+    /// Horizontal motion only changes level; vertical follows the actual slot.
+    private var snappedY: CGFloat {
+        if !slotFrame.isEmpty { return slotFrame.minY }
+        let free = drag.startFrame.minY + motion.location.y - drag.startLocation.y
+        guard !viewport.isEmpty else { return free }
+        return min(max(free, viewport.minY), max(viewport.minY, viewport.maxY - drag.startFrame.height))
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(drag.visibleBlock, id: \.task.id) { row in content(row).frame(height: row.frame.height) }
         }.frame(width: drag.startFrame.width, height: drag.startFrame.height, alignment: .topLeading)
-            .offset(x: drag.startFrame.minX + motion.location.x - drag.startLocation.x,
-                    y: drag.startFrame.minY + motion.location.y - drag.startLocation.y)
+            .offset(x: drag.startFrame.minX + CGFloat((drag.target?.level ?? drag.sourceDepth) - drag.sourceDepth) * 22,
+                    y: snappedY)
             .shadow(color: .black.opacity(0.12), radius: 3, y: 2)
             .allowsHitTesting(false).accessibilityHidden(true)
             // Pointer positions are direct input, including in a transaction

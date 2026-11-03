@@ -127,7 +127,8 @@ final class TaskInteractionTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         host.layoutSubtreeIfNeeded()
         XCTAssertTrue(rows.contains { $0.task.id == child.id })
-        XCTAssertFalse(rows.contains { $0.task.id == completedRoot.id })
+        // Completed tasks stay in place now; there is no folded section.
+        XCTAssertTrue(rows.contains { $0.task.id == completedRoot.id })
         state.folded.insert("work")
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(100))

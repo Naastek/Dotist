@@ -174,16 +174,16 @@ final class SideTabGeometryTests: XCTestCase {
 @MainActor
 final class SideTabLabelRenderingTests: XCTestCase {
     func testCompleteTabTreeRendersNamesAndSixPointGapsInBothAppearances() throws {
-        let names = ["工作計畫", "Work projects", "仕事の計画"]
+        let names = ["工作計畫", "Work projects", "Projets de travail"]
         for scheme in [ColorScheme.light, .dark] {
             for inward in [false, true] {
-                let expanded = try XCTUnwrap(SideTabsSnapshot.render(names: names, language: "ja", scheme: scheme,
+                let expanded = try XCTUnwrap(SideTabsSnapshot.render(names: names, language: "fr", scheme: scheme,
                     inward: inward, expanded: true))
-                let background = try XCTUnwrap(SideTabsSnapshot.render(names: names, language: "ja", scheme: scheme,
+                let background = try XCTUnwrap(SideTabsSnapshot.render(names: names, language: "fr", scheme: scheme,
                     inward: inward, expanded: true, showLabels: false))
-                let collapsed = try XCTUnwrap(SideTabsSnapshot.render(names: names, language: "ja", scheme: scheme,
+                let collapsed = try XCTUnwrap(SideTabsSnapshot.render(names: names, language: "fr", scheme: scheme,
                     inward: inward, expanded: false))
-                let collapsedBackground = try XCTUnwrap(SideTabsSnapshot.render(names: names, language: "ja", scheme: scheme,
+                let collapsedBackground = try XCTUnwrap(SideTabsSnapshot.render(names: names, language: "fr", scheme: scheme,
                     inward: inward, expanded: false, showLabels: false))
                 let pixels = NSBitmapImageRep(cgImage: expanded.image)
                 let paper = NSBitmapImageRep(cgImage: background.image)
@@ -276,7 +276,7 @@ final class SideTabLabelRenderingTests: XCTestCase {
     }
 
     func testExpandedNamesRenderAndCollapsedNamesAreFullyTransparent() async throws {
-        for (language, name) in [("zh-CN", "全部"), ("en", "Work projects"), ("ja", "仕事の計画"), ("zh-Hant", "工作與生活")] {
+        for (language, name) in [("zh-CN", "全部"), ("en", "Work projects"), ("fr", "Projets de travail"), ("zh-Hant", "工作與生活")] {
             let text = name as NSString
             let fullWidth = SideTabGeometry.expandedWidth(textWidth: max(
                 text.size(withAttributes: [.font: DotistDesign.nativeFont(13, serif: true, language: language)]).width,

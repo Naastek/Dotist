@@ -389,7 +389,7 @@ final class TaskReorderPresentationTests: XCTestCase {
                 }
             }
             print("POINTER point=\(point) paintedOrigin=\(x0),\(y0)")
-            XCTAssertEqual(CGFloat(x0), frame.minX + point.x - start.x, accuracy: 0.5)
+            XCTAssertEqual(CGFloat(x0), frame.minX, accuracy: 0.5)
             XCTAssertEqual(CGFloat(y0), frame.minY + point.y - start.y, accuracy: 0.5)
         }
     }

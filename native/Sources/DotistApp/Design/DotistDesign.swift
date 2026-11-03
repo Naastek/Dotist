@@ -81,7 +81,7 @@ enum DotistDesign {
     }
     static func nativeFont(_ size: CGFloat, weight: NSFont.Weight = .regular, serif: Bool = false, language: String, preferences: DotistFontPreferences? = nil) -> NSFont {
         let preferences = preferences ?? fontPreferences
-        let region = language.hasPrefix("ja") ? "JP" : ["zh-HK", "zh-Hant-HK"].contains(where: { language.hasPrefix($0) }) ? "HK" : ["zh-TW", "zh-Hant"].contains(where: { language.hasPrefix($0) }) ? "TC" : "SC"
+        let region = ["zh-HK", "zh-Hant-HK"].contains(where: { language.hasPrefix($0) }) ? "HK" : ["zh-TW", "zh-Hant"].contains(where: { language.hasPrefix($0) }) ? "TC" : "SC"
         let key = "\(preferences.cacheKey)|\(size)|\(weight.rawValue)|\(serif)|\(region)" as NSString
         if let cached = fonts.object(forKey: key) { return cached }
         let latin = serif ? preferences.serifLatin : preferences.sansLatin

@@ -191,7 +191,7 @@ final class GroupHeaderRenderingTests: XCTestCase {
             // In-memory typography only; never write application settings.
             DotistDesign.fontPreferences = .init(serifLatin: serif)
             for (title, language) in [("life", "en"), ("work", "en"), ("All", "en"), ("Life gyp", "en"),
-                                      ("生活", "zh-CN"), ("工作 Work", "zh-CN"), ("全部", "zh-TW"), ("仕事", "ja")] {
+                                      ("生活", "zh-CN"), ("工作 Work", "zh-CN"), ("全部", "zh-TW")] {
                 for collapsed in [false, true] {
                     for hovered in [false, true] {
                         let header = GroupCollapseHeader(title: title, language: language, collapsed: collapsed,
@@ -244,7 +244,7 @@ final class GroupHeaderRenderingTests: XCTestCase {
         for (profileIndex, colorSpace) in [NSColorSpace.sRGB, .displayP3].enumerated() {
             for serif in ["newsreader", "source-serif-4", "system"] {
                 DotistDesign.fontPreferences = .init(serifLatin: serif)
-                for (title, language) in [("life", "en"), ("work", "en"), ("All", "en"), ("生活", "zh-CN"), ("仕事", "ja"), ("工作 Work", "zh-CN")] {
+                for (title, language) in [("life", "en"), ("work", "en"), ("All", "en"), ("生活", "zh-CN"), ("工作 Work", "zh-CN")] {
                     for collapsed in [false, true] {
                         let fixture = NativeRenderingFixture(
                             GroupCollapseHeader(title: title, language: language, collapsed: collapsed, hovered: true, toggle: {})
@@ -282,7 +282,7 @@ final class GroupHeaderRenderingTests: XCTestCase {
     }
 
     func testLongMixedTitleRemainsSingleLineAndKeepsDisclosureVisible() async throws {
-        let header = GroupCollapseHeader(title: "生活と仕事 Projects gyp — a deliberately long group title", language: "ja",
+        let header = GroupCollapseHeader(title: "Vie et travail Projects gyp — a deliberately long group title", language: "fr",
                                          collapsed: true, hovered: true, toggle: {})
             .background(Color.white).environment(\.colorScheme, .light)
         let fixture = NativeRenderingFixture(header, size: CGSize(width: 160, height: 30))

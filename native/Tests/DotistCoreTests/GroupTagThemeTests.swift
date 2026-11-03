@@ -124,7 +124,7 @@ final class GroupTagThemeTests: XCTestCase {
         let store = try store()
         let path = try store.databasePath()
         let settingsURL = URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("settings.json")
-        let data = Data(#"{"language":"ja","group_colors":"dots"}"#.utf8)
+        let data = Data(#"{"language":"fr","group_colors":"dots"}"#.utf8)
         try data.write(to: settingsURL)
         let reopened = try TaskStore(databasePath: path)
         XCTAssertEqual(try reopened.settings().tagOrder, [])

@@ -127,15 +127,15 @@ struct DotistMCPTools: Sendable {
                 await focus(task)
             default: throw TaskStoreError("未知工具")
             }
-            return CallTool.Result(content: [.text("ok")])
+            return CallTool.Result(content: [.text(text: "ok", annotations: nil, _meta: nil)])
         } catch {
-            return CallTool.Result(content: [.text(error.localizedDescription)], isError: true)
+            return CallTool.Result(content: [.text(text: error.localizedDescription, annotations: nil, _meta: nil)], isError: true)
         }
     }
 
     private func result<T: Encodable>(_ value: T) throws -> CallTool.Result {
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
-        return CallTool.Result(content: [.text(String(decoding: try encoder.encode(value), as: UTF8.self))])
+        return CallTool.Result(content: [.text(text: String(decoding: try encoder.encode(value), as: UTF8.self), annotations: nil, _meta: nil)])
     }
 }

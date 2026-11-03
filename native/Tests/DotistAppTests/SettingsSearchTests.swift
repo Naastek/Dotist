@@ -18,13 +18,13 @@ final class SettingsSearchTests: XCTestCase {
         }
     }
     func testTitlesMatchInAllFourLanguagesWithoutChangingInterfaceLanguage() {
-        for query in ["开机启动", "Launch at login", "ログイン", "開機啟動"] {
+        for query in ["开机启动", "Launch at login", "開機啟動"] {
             XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.title == "开机启动" }, query)
         }
-        for query in ["全部", "All", "すべて", "default color"] {
+        for query in ["全部", "All", "Tout", "default color"] {
             XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.target == "appearance.全部" && $0.title == "全部" }, query)
         }
-        for query in ["分组便签背景透明度", "Group tab background transparency", "グループタブ背景の透明度", "群組便籤背景透明度"] {
+        for query in ["分组便签背景透明度", "Group tab background transparency", "群組便籤背景透明度"] {
             XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.target == "appearance.分组便签背景透明度" }, query)
         }
     }
@@ -39,11 +39,11 @@ final class SettingsSearchTests: XCTestCase {
         XCTAssertEqual(SettingsSearchIndex.matches("General 分组").map(\.target), ["general.分组"])
     }
     func testDynamicGroupsReflectAddRenameAndDeleteWithoutCachedResults() {
-        let work = SettingsSearchIndex.groupEntry(id: "work", name: "仕事")
+        let work = SettingsSearchIndex.groupEntry(id: "work", name: "工作")
         let home = SettingsSearchIndex.groupEntry(id: "home", name: "家事")
-        XCTAssertEqual(SettingsSearchIndex.matches("仕事", in: [work, home]).map(\.target), ["appearance.color-work"])
+        XCTAssertEqual(SettingsSearchIndex.matches("工作", in: [work, home]).map(\.target), ["appearance.color-work"])
         let renamed = SettingsSearchIndex.groupEntry(id: "work", name: "Projects")
-        XCTAssertTrue(SettingsSearchIndex.matches("仕事", in: [renamed, home]).isEmpty)
+        XCTAssertTrue(SettingsSearchIndex.matches("工作", in: [renamed, home]).isEmpty)
         XCTAssertEqual(SettingsSearchIndex.matches("group color Projects", in: [renamed, home]).map(\.id), [renamed.id])
         XCTAssertTrue(SettingsSearchIndex.matches("Projects", in: [home]).isEmpty)
     }

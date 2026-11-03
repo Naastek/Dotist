@@ -42,7 +42,7 @@ final class ComposerAlignmentTests: XCTestCase {
         defer { DotistDesign.fontPreferences = saved }
         for serif in ["newsreader", "source-serif-4", "system"] {
             DotistDesign.fontPreferences = .init(serifLatin: serif)
-            for (title, placeholder, language) in [("All", "Jot something down", "en"), ("生活", "写下一件小事", "zh-CN"), ("仕事", "メモを書く", "ja")] {
+            for (title, placeholder, language) in [("All", "Jot something down", "en"), ("生活", "写下一件小事", "zh-CN"), ("Travail", "Notez quelque chose", "fr")] {
                 let content = ComposerLayout {
                     Menu {} label: { ComposerGroupLabel(title: title, language: language) }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().frame(height: 24)

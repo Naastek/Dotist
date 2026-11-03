@@ -46,7 +46,7 @@ final class PanelFeedbackRevisionTests: XCTestCase {
                         if color.redComponent > 0.9 && color.greenComponent < 0.1 { xs.append(CGFloat(x) / 2) }
                     }
                 }
-                let expectedRight = 348 - (metadataWidth <= 88 ? 88 : metadataWidth + 8)
+                let expectedRight = 348 - (metadataWidth > 0 ? metadataWidth + 8 : 0)
                 XCTAssertEqual(try XCTUnwrap(xs.max()) + 0.5, expectedRight, accuracy: 0.5)
                 XCTAssertEqual(try XCTUnwrap(xs.min()), expectedRight - actionWidth, accuracy: 0.5)
                 XCTAssertLessThanOrEqual(expectedRight, 348 - metadataWidth)
@@ -60,7 +60,7 @@ final class PanelFeedbackRevisionTests: XCTestCase {
         XCTAssertEqual(TaskDateFilterMetrics.size(selected: false), 14)
         XCTAssertEqual(TaskDateFilterMetrics.weight(selected: true), .medium)
         XCTAssertEqual(TaskDateFilterMetrics.weight(selected: false), .regular)
-        for (language, title) in [("zh-CN", "已逾期"), ("en", "Tomorrow"), ("ja", "すべて"), ("zh-Hant", "今天")] {
+        for (language, title) in [("zh-CN", "已逾期"), ("en", "Tomorrow"), ("fr", "Tout"), ("zh-Hant", "今天")] {
             let expected = ceil((title as NSString).size(withAttributes: [.font: DotistDesign.nativeFont(17, weight: .medium, language: language)]).width)
             XCTAssertEqual(TaskDateFilterMetrics.slotWidth(title: title, language: language), expected)
             var widths: [CGFloat] = []
@@ -248,7 +248,7 @@ final class PanelFeedbackRevisionTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(last, first)
             return CGFloat(first + last + 1) / 4
         }
-        for (language, title) in [("zh-CN", "工作"), ("en", "Work"), ("ja", "仕事"), ("zh-Hant", "工作")] {
+        for (language, title) in [("zh-CN", "工作"), ("en", "Work"), ("de", "Arbeit"), ("zh-Hant", "工作")] {
             for selected in [false, true] {
                 let rep = try render(DraggableFilterButton(title: title, selected: selected, language: language, choose: {}), width: 100, height: 34)
                 XCTAssertEqual(try center(rep, xRange: 0..<100), 17, accuracy: 0.5)
@@ -291,7 +291,8 @@ final class PanelFeedbackRevisionTests: XCTestCase {
                     if color.redComponent > 0.9 && color.greenComponent < 0.1 { minX = min(minX, x); minY = min(minY, y) }
                 }
             }
-            XCTAssertEqual(CGFloat(minX), 16 + point.x - 80, accuracy: 0.5)
+            // Horizontal travel is level-only: without a drop target the block keeps its column.
+            XCTAssertEqual(CGFloat(minX), 16, accuracy: 0.5)
             XCTAssertEqual(CGFloat(minY), 100 + point.y - 110, accuracy: 0.5)
         }
     }
