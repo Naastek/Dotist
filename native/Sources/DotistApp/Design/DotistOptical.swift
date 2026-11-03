@@ -207,7 +207,12 @@ final class GroupHeaderInkView: NSView {
     }
     override var intrinsicContentSize: NSSize {
         prepareRasters()
-        return NSSize(width: (titleImage?.size.width ?? 0) + 6 + symbolSlotWidth, height: 30)
+        // Cropped ink can be narrower at the window backing scale than in a
+        // later drawing context. Reserve the complete line advance, rounded to
+        // points, so a short title never enters truncation during that change.
+        let advance = (title as NSString).size(withAttributes: [.font: titleFont]).width
+        let titleWidth = ceil(max(advance, titleImage?.size.width ?? 0))
+        return NSSize(width: titleWidth + 6 + symbolSlotWidth, height: 30)
     }
     private func prepareRasters(scale requestedScale: CGFloat? = nil) {
         let scale = requestedScale ?? window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1

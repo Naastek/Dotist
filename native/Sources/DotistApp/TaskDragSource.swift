@@ -309,6 +309,42 @@ struct TaskShelfFrameKey: PreferenceKey {
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) { value.merge(nextValue()) { _, new in new } }
 }
 
+/// Explicit, QA-only diagnostics. The queued writer avoids file IO on the
+/// gesture path, and no task titles or document contents are recorded.
+enum TaskDragDiagnostics {
+    private static let queue = DispatchQueue(label: "dotist.qa.drag-trace")
+    static var enabled: Bool {
+        Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa"
+            && ProcessInfo.processInfo.environment["DOTIST_DRAG_TRACE"] == "1"
+    }
+    static func destination(bundleID: String?, bundleURL: URL, flag: String?, dataDirectory: String?) -> URL? {
+        guard bundleID == "dev.codex.dotist-native-qa", flag == "1", let dataDirectory else { return nil }
+        let directory = URL(fileURLWithPath: dataDirectory).standardizedFileURL
+        let expected = bundleURL.deletingLastPathComponent().appendingPathComponent("data", isDirectory: true).standardizedFileURL
+        guard directory.path == expected.path else { return nil }
+        return directory.appendingPathComponent("drag-trace.ndjson")
+    }
+    static func record(_ event: String, fields: [String: String] = [:]) {
+        guard let url = destination(bundleID: Bundle.main.bundleIdentifier, bundleURL: Bundle.main.bundleURL,
+            flag: ProcessInfo.processInfo.environment["DOTIST_DRAG_TRACE"],
+            dataDirectory: ProcessInfo.processInfo.environment["DOTIST_DATA_DIR"]) else { return }
+        let entry: [String: Any] = ["time": Date().timeIntervalSince1970,
+            "uptime": ProcessInfo.processInfo.systemUptime, "pid": ProcessInfo.processInfo.processIdentifier,
+            "event": event, "fields": fields]
+        guard var data = try? JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys]) else { return }
+        data.append(10)
+        let line = data
+        queue.async {
+            if !FileManager.default.fileExists(atPath: url.path) { _ = FileManager.default.createFile(atPath: url.path, contents: nil) }
+            guard let handle = try? FileHandle(forWritingTo: url) else { return }
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: line)
+        }
+    }
+    static func flush() { queue.sync {} }
+}
+
 struct TaskListDrag {
     let taskID: String
     let blockIDs: Set<String>
@@ -333,6 +369,12 @@ struct TaskListDrag {
 
 @MainActor
 final class TaskReorderRuntime: ObservableObject {
+    let insertionMotion = TaskInsertionMotion()
+    enum Input {
+        case begin(String, CGPoint), move(String, CGPoint), end(String, CGPoint), cancel
+    }
+    var handleInput: ((Input) -> Void)?
+    func send(_ input: Input) { handleInput?(input) }
     @Published var drag: TaskListDrag?
     weak var scrollView: NSScrollView?
     var scrollOriginY: CGFloat { scrollView?.contentView.bounds.minY ?? 0 }
@@ -347,6 +389,89 @@ final class TaskReorderRuntime: ObservableObject {
         clip.scroll(to: NSPoint(x: old.x, y: y))
         scrollView.reflectScrolledClipView(clip)
         return true
+    }
+}
+
+enum TaskInsertionSlot: Hashable {
+    case before(String), after(String), empty(String)
+}
+
+/// Animate layout itself, without a SwiftUI presentation transform. Native
+/// heading surfaces and SwiftUI rows therefore receive the same frame each tick.
+@MainActor
+final class TaskInsertionMotion: ObservableObject {
+    static let duration: TimeInterval = 0.12
+    @Published private(set) var heights: [TaskInsertionSlot: CGFloat] = [:]
+    private var destination: [TaskInsertionSlot: CGFloat] = [:]
+    private var timer: Timer?
+
+    func retarget(slot: TaskInsertionSlot?, height: CGFloat, reduceMotion: Bool) {
+        let target = slot.map { [$0: height] } ?? [:]
+        guard target != destination || reduceMotion else { return }
+        destination = target
+        timer?.invalidate(); timer = nil
+        guard !reduceMotion, heights != target else { publish(target); return }
+        let start = heights
+        let keys = Set(start.keys).union(target.keys)
+        let began = ProcessInfo.processInfo.systemUptime
+        let clock = Timer(timeInterval: 1 / 60, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self else { timer.invalidate(); return }
+                let t = min(1, (ProcessInfo.processInfo.systemUptime - began) / Self.duration)
+                let eased = CGFloat(1 - pow(1 - t, 3))
+                self.publish(t >= 1 ? target : Dictionary(uniqueKeysWithValues: keys.map { key in
+                    let from = start[key, default: 0], to = target[key, default: 0]
+                    return (key, from + (to - from) * eased)
+                }))
+                if t >= 1 { timer.invalidate(); self.timer = nil }
+            }
+        }
+        timer = clock
+        RunLoop.main.add(clock, forMode: .common)
+    }
+
+    private func publish(_ value: [TaskInsertionSlot: CGFloat]) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        // AppKit rounds hosted heading origins to whole points. Use that same
+        // grid for layout, so fractional gap heights cannot cause edge overlap.
+        withTransaction(transaction) { heights = value.mapValues { $0.rounded() } }
+    }
+    func reset() { timer?.invalidate(); timer = nil; destination = [:]; publish([:]) }
+    deinit { timer?.invalidate() }
+}
+
+struct TaskInsertionFramesKey: PreferenceKey {
+    static let defaultValue: [TaskInsertionSlot: CGRect] = [:]
+    static func reduce(value: inout [TaskInsertionSlot: CGRect], nextValue: () -> [TaskInsertionSlot: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+
+    static func pointerY(_ y: CGFloat, frames: [TaskInsertionSlot: CGRect]) -> CGFloat {
+        y - frames.values.reduce(CGFloat.zero) { $0 + min($1.height, max(0, y - $1.minY)) }
+    }
+
+    /// Destination metadata in the gap-free baseline. Pointer projection above
+    /// separately strips all presented spaces, including a slot still closing.
+    static func logicalFrame(slot: TaskInsertionSlot?, height: CGFloat, frames: [TaskInsertionSlot: CGRect]) -> CGRect {
+        guard let slot, let frame = frames[slot] else { return .zero }
+        let preceding = frames.filter { $0.key != slot && $0.value.maxY <= frame.minY + 0.001 }
+            .values.reduce(CGFloat.zero) { $0 + $1.height }
+        return CGRect(x: frame.minX, y: frame.minY - preceding, width: frame.width, height: height)
+    }
+}
+
+struct TaskInsertionSpace: View {
+    @ObservedObject var motion: TaskInsertionMotion
+    let slot: TaskInsertionSlot
+    let coordinateSpace: String
+    var body: some View {
+        Color.clear.frame(height: motion.heights[slot, default: 0])
+            .allowsHitTesting(false).accessibilityHidden(true)
+            .background(GeometryReader { geometry in
+                Color.clear.preference(key: TaskInsertionFramesKey.self,
+                    value: [slot: geometry.frame(in: .named(coordinateSpace))])
+            })
     }
 }
 
@@ -403,14 +528,27 @@ struct TaskReorderInteractionGuard: NSViewRepresentable {
             super.viewDidMoveToWindow()
             stop()
             guard window != nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .keyDown]) { [weak self] event in
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .keyDown]) { [weak self] event in
                 guard let self else { return event }
+                if TaskDragDiagnostics.enabled, event.window === window,
+                   [.leftMouseDown, .leftMouseDragged, .leftMouseUp].contains(event.type) {
+                    let point = self.convert(event.locationInWindow, from: nil)
+                    let content = window?.contentView
+                    let hit = content.flatMap { $0.hitTest($0.convert(event.locationInWindow, from: nil)) }
+                    TaskDragDiagnostics.record("native.\(event.type)", fields: [
+                        "windowNumber": "\(event.windowNumber)", "windowPoint": "\(event.locationInWindow)",
+                        "guardPoint": "\(point)", "guardFrame": "\(frame)", "windowFrame": "\(String(describing: window?.frame))",
+                        "rowHits": "\(rowFrames.filter { $0.contains(point) }.count)", "rowCount": "\(rowFrames.count)",
+                        "hitClass": hit.map { String(describing: type(of: $0)) } ?? "nil",
+                        "dragging": "\(dragging)", "movableByBackground": "\(window?.isMovableByWindowBackground == true)"])
+                }
                 if event.type == .leftMouseUp { restoreWindowMovement(); return event }
                 guard event.window === window else { return event }
                 if let redo = TaskPanelUndoShortcut.redo(for: event, responder: window?.firstResponder), undoRedo(redo) {
                     return nil
                 }
                 if event.type == .keyDown, event.keyCode == 53, dragging {
+                    TaskDragDiagnostics.record("native.escape-cancel")
                     cancel()
                     restoreWindowMovement()
                     return nil
@@ -420,9 +558,11 @@ struct TaskReorderInteractionGuard: NSViewRepresentable {
                     guardedWindow = window
                     originalBackgroundMovement = window?.isMovableByWindowBackground
                     window?.isMovableByWindowBackground = false
+                    TaskDragDiagnostics.record("native.disable-background-movement")
                 }
                 return event
             }
+            TaskDragDiagnostics.record("native.guard-installed", fields: ["windowNumber": "\(window?.windowNumber ?? -1)"])
         }
         private func restoreWindowMovement() {
             if let originalBackgroundMovement { guardedWindow?.isMovableByWindowBackground = originalBackgroundMovement }
@@ -430,6 +570,7 @@ struct TaskReorderInteractionGuard: NSViewRepresentable {
             guardedWindow = nil
         }
         func stop() {
+            if monitor != nil { TaskDragDiagnostics.record("native.guard-stopped") }
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
             restoreWindowMovement()
@@ -640,7 +781,8 @@ struct TaskTitleFade: View {
     }
 }
 
-/// Convert the pointer to the frozen outline by removing the one live gap.
+/// Map live coordinates into the gap-free baseline. The baseline retains the
+/// original source slot, so remove only the additional insertion gap.
 /// A pointer inside the placeholder keeps the same insertion boundary.
 enum TaskDragGeometry {
     static func pointerY(_ y: CGFloat, excludingGhost frame: CGRect) -> CGFloat {
@@ -681,9 +823,13 @@ struct TaskLiftedBlock<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(drag.visibleBlock, id: \.task.id) { row in content(row).frame(height: row.frame.height) }
         }.frame(width: drag.startFrame.width, height: drag.startFrame.height, alignment: .topLeading)
-            .offset(x: drag.startFrame.minX, y: drag.startFrame.minY + motion.location.y - drag.startLocation.y)
+            .offset(x: drag.startFrame.minX + motion.location.x - drag.startLocation.x,
+                    y: drag.startFrame.minY + motion.location.y - drag.startLocation.y)
             .shadow(color: .black.opacity(0.12), radius: 3, y: 2)
             .allowsHitTesting(false).accessibilityHidden(true)
+            // Pointer positions are direct input, including in a transaction
+            // that animates other parts of the outline.
+            .transaction { $0.animation = nil; $0.disablesAnimations = true }
     }
 }
 

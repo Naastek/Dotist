@@ -45,6 +45,34 @@ final class SettingsLayoutTests: XCTestCase {
             }
         }
     }
+    func testShortcutSettingsPageShowsScopesAndRecorders() async throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-shortcuts-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
+        for theme in ["light", "dark"] {
+            var patch = DotistSettingsPatch(); patch.language = "zh-CN"; patch.theme = theme
+            _ = try store.updateSettings(patch)
+            let model = try AppModel(store: store)
+            let root = SettingsWindow(model: model, updater: NativeUpdater(model: model), beginShortcutCapture: {}, endShortcutCapture: { _, _ in }, resetWindowSize: {}, initialModule: .shortcuts)
+                .frame(width: 800, height: 640)
+            let host = NSHostingView(rootView: root)
+            host.frame = NSRect(x: 0, y: 0, width: 800, height: 640)
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(120))
+            host.layoutSubtreeIfNeeded()
+            let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: rep)
+            let png = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+            XCTAssertGreaterThan(png.count, 1000)
+            try png.write(to: URL(fileURLWithPath: "/private/tmp/dotist-shortcuts-\(theme).png"))
+            window.close()
+        }
+    }
+
     func testGroupedRowKeepsColorPaletteAndSwitchInsideMinimumContentWidth() {
         _ = NSApplication.shared
         let content = SettingsGroup("Color theme", language: "en") {

@@ -4,6 +4,7 @@ import DotistCore
 import SwiftUI
 
 struct MainWindow: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: AppModel
     @ObservedObject var state: TaskPanelState
     let showViews: () -> Void
@@ -17,6 +18,8 @@ struct MainWindow: View {
     @State private var panelHovered = false
     @State private var composerHovered = false
     @State private var composerFocused = false
+    @State private var composerCueVisible = false
+    @State private var composerCueGeneration = UUID()
     @State private var toolbarDrag: ToolbarDragSession?
     @GestureState private var toolbarGestureActive = false
     @State private var toolbarFrames: [ToolbarItem: CGRect] = [:]
@@ -68,6 +71,7 @@ struct MainWindow: View {
     @State private var undoToastLifetime = PausableToastLifetime(duration: 7)
     @State private var undoToastVisible = false
     @State private var ghostFrame = CGRect.zero
+    @State private var insertionFrames: [TaskInsertionSlot: CGRect] = [:]
 
     private var drag: TaskListDrag? {
         get { reorderRuntime.drag }
@@ -121,11 +125,19 @@ struct MainWindow: View {
         .background(TaskReorderInteractionGuard(rowFrames: rowFrames.map(\.frame) + Array(toolbarFrames.values), dragging: drag != nil, cancel: cancelReorder, undoRedo: handleUndoShortcut))
         .onPreferenceChange(TaskListRowFrame.Key.self) { if rowFrames != $0 { rowFrames = $0 } }
         .onPreferenceChange(TaskListGroupFrame.Key.self) { if groupFrames != $0 { groupFrames = $0 } }
-        .onPreferenceChange(TaskGhostFrameKey.self) { if ghostFrame != $0 { ghostFrame = $0 } }
+        .onPreferenceChange(TaskInsertionFramesKey.self) { frames in
+            insertionFrames = frames
+            let frame = TaskInsertionFramesKey.logicalFrame(slot: insertionSlot, height: drag?.startFrame.height ?? 0, frames: frames)
+            if ghostFrame != frame { ghostFrame = frame }
+        }
+        .preference(key: TaskGhostFrameKey.self, value: ghostFrame)
+        .onChange(of: insertionSlot) { _ in updateInsertionMotion() }
+        .onChange(of: reduceMotion) { _ in updateInsertionMotion() }
         .onPreferenceChange(ToolbarFrameKey.self) { toolbarFrames = $0 }
         .onChange(of: toolbarGestureActive) { active in if !active { toolbarDrag = nil } }
         .onPreferenceChange(TaskShelfFrameKey.self) { shelfFrames = $0 }
         .onChange(of: reorderGestureActive) { active in
+            traceReorder("swiftui.active-change", fields: ["newActive": "\(active)"])
             if !active {
                 if drag?.committing == false { cancelReorder() }
                 dragCancelled = false
@@ -141,10 +153,10 @@ struct MainWindow: View {
             if undoToastVisible && !undoToastLifetime.isVisible(at: now) { undoToastVisible = false }
             if notice != nil && !noticeLifetime.isVisible(at: now) { notice = nil }
         }
-        .onDisappear { cancelReorder(); leaveInputs(); selection.update { $0.clear() } }
+        .onDisappear { traceReorder("lifecycle.disappear"); cancelReorder(); reorderRuntime.handleInput = nil; leaveInputs(); selection.update { $0.clear() } }
         .onHover { panelHovered = $0 }
         .foregroundColor(textColor)
-        .onAppear { category = state.groupID ?? DotistGroup.inboxID }
+        .onAppear { category = state.groupID ?? DotistGroup.inboxID; reorderRuntime.handleInput = handleReorderInput }
         .onChange(of: state.groupID) { id in
             cancelReorder()
             category = id ?? DotistGroup.inboxID
@@ -291,6 +303,26 @@ struct MainWindow: View {
         category = context.groupID
         dueDate = context.dueDate.flatMap { Date.dotistDay($0) }
         composerFocused = true
+        let generation = UUID()
+        composerCueGeneration = generation
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { composerCueVisible = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            guard composerCueGeneration == generation else { return }
+            if reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                composerCueVisible = false
+            } else {
+                withAnimation(.easeOut(duration: 0.2)) { composerCueVisible = false }
+            }
+        }
+    }
+
+    private func dismissComposerCue() {
+        composerCueGeneration = UUID()
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { composerCueVisible = false }
     }
 
     @ViewBuilder private var listMenu: some View {
@@ -353,38 +385,30 @@ struct MainWindow: View {
         return drag.target != drag.initialTarget
     }
 
-    private var ghostBeforeID: String? { showsInsertionGhost ? drag?.ghostBeforeID : nil }
-    private var ghostAfterID: String? { showsInsertionGhost ? drag?.ghostAfterID : nil }
-
-    @ViewBuilder private func emptyGroupGhost(_ id: String, region: String) -> some View {
-        if let drag, showsInsertionGhost, drag.target?.groupID == id, drag.region == region, drag.targetIsEmpty {
-            taskGhost(compensatingIndent: 0)
-        }
+    private var insertionSlot: TaskInsertionSlot? {
+        guard showsInsertionGhost, let drag else { return nil }
+        if let id = drag.ghostBeforeID { return .before(id) }
+        if let id = drag.ghostAfterID { return .after(id) }
+        if drag.targetIsEmpty, let region = drag.region { return .empty(region) }
+        return nil
     }
 
-    @ViewBuilder private func taskGhost(compensatingIndent: CGFloat) -> some View {
-        if let drag, let target = drag.target {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(drag.visibleBlock, id: \.task.id) { row in
-                    let depth = ghostDepth(row, drag: drag, target: target)
-                    TaskRowLayout(depth: depth) {
-                        TaskCheckmark(depth: depth, completed: false, children: [], emphasized: false)
-                        Text(row.task.title).font(font(13)).foregroundStyle(DotistDesign.ink).lineLimit(1).fixedSize(horizontal: false, vertical: true)
-                        Color.clear.frame(width: 0, height: 0)
-                    }.frame(height: row.frame.height)
-                }
-            }.opacity(0.35).allowsHitTesting(false).accessibilityHidden(true)
-                .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.12), value: target.level)
-                .background(GeometryReader { geometry in
-                    Color.clear.preference(key: TaskGhostFrameKey.self, value: geometry.frame(in: .named(Self.listSpace)))
-                })
-        }
+    private func updateInsertionMotion() {
+        let slot = insertionSlot
+        // Publish logical destination geometry immediately, even if another
+        // slot is still closing or the pointer reverses before the next tick.
+        ghostFrame = TaskInsertionFramesKey.logicalFrame(slot: slot, height: drag?.startFrame.height ?? 0, frames: insertionFrames)
+        guard drag != nil else { reorderRuntime.insertionMotion.reset(); return }
+        reorderRuntime.insertionMotion.retarget(slot: slot, height: drag?.startFrame.height ?? 0,
+            reduceMotion: reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
     }
 
-    private func ghostDepth(_ row: TaskListRowFrame, drag: TaskListDrag, target: TaskReorderEngine.Target) -> Int {
-        let hierarchy = TaskHierarchy(model.tasks)
-        let root = ([row.task] + hierarchy.ancestors(of: row.task.id)).first { drag.rootIDs.contains($0.id) }
-        return min(4, target.level + model.depth(of: row.task) - (root.map { model.depth(of: $0) } ?? drag.sourceDepth))
+    private func emptyGroupGhost(_ id: String, region: String) -> some View {
+        insertionSpace(.empty(region))
+    }
+
+    private func insertionSpace(_ slot: TaskInsertionSlot) -> some View {
+        TaskInsertionSpace(motion: reorderRuntime.insertionMotion, slot: slot, coordinateSpace: Self.listSpace)
     }
 
     @ViewBuilder private var ghostConnector: some View {
@@ -410,33 +434,71 @@ struct MainWindow: View {
         }
     }
 
+    private func traceReorder(_ event: String, taskID: String? = nil, point: CGPoint? = nil, fields: [String: String] = [:]) {
+        guard TaskDragDiagnostics.enabled else { return }
+        var context = fields
+        context["taskID"] = taskID ?? drag?.taskID ?? "nil"
+        context["point"] = "\(point ?? dragMotion.location)"
+        context["gestureActive"] = "\(reorderGestureActive)"
+        context["dragCancelled"] = "\(dragCancelled)"
+        context["hasDrag"] = "\(drag != nil)"
+        context["committing"] = "\(drag?.committing == true)"
+        context["editing"] = "\(editing != nil)"
+        context["draft"] = "\(draftAfter != nil)"
+        context["inputBound"] = "\(reorderRuntime.handleInput != nil)"
+        context["rowCount"] = "\(rowFrames.count)"
+        context["target"] = String(describing: drag?.target)
+        context["viewport"] = "\(listViewport)"
+        TaskDragDiagnostics.record(event, fields: context)
+    }
+
     private func reorderGesture(_ task: DotistTask) -> some Gesture {
         DragGesture(minimumDistance: 6, coordinateSpace: .named(Self.listSpace))
-            .updating($reorderGestureActive) { _, active, _ in active = true }
+            .updating($reorderGestureActive) { value, active, _ in
+                traceReorder("swiftui.updating", taskID: task.id, point: value.location, fields: ["start": "\(value.startLocation)"])
+                active = true
+            }
             .onChanged { value in
-                guard !dragCancelled, editing == nil, draftAfter == nil else { return }
-                if drag == nil { beginReorder(task, at: value.startLocation) }
-                guard drag?.taskID == task.id, drag?.committing == false else { return }
-                dragMotion.location = value.location
-                retargetReorder()
+                traceReorder("swiftui.changed", taskID: task.id, point: value.location, fields: ["start": "\(value.startLocation)"])
+                if drag == nil { reorderRuntime.send(.begin(task.id, value.startLocation)) }
+                reorderRuntime.send(.move(task.id, value.location))
             }
             .onEnded { value in
-                guard !dragCancelled, drag?.taskID == task.id, drag?.committing == false else { return }
-                dragMotion.location = value.location
-                retargetReorder()
-                finishReorder()
+                traceReorder("swiftui.ended", taskID: task.id, point: value.location)
+                reorderRuntime.send(.end(task.id, value.location))
             }
     }
 
+    // Native gestures and other input adapters share the same mounted state.
+    private func handleReorderInput(_ input: TaskReorderRuntime.Input) {
+        switch input {
+        case .begin(let id, let point):
+            traceReorder("input.begin", taskID: id, point: point)
+            guard !dragCancelled, editing == nil, draftAfter == nil, drag == nil,
+                  let task = model.tasks.first(where: { $0.id == id }) else { traceReorder("input.begin-rejected", taskID: id); return }
+            beginReorder(task, at: point)
+        case .move(let id, let point), .end(let id, let point):
+            if case .move = input { traceReorder("input.move", taskID: id, point: point) }
+            else { traceReorder("input.end", taskID: id, point: point) }
+            if case .move = input { guard editing == nil, draftAfter == nil else { traceReorder("input.move-rejected-editor", taskID: id); return } }
+            guard !dragCancelled, drag?.taskID == id, drag?.committing == false else { traceReorder("input.move-or-end-rejected", taskID: id); return }
+            dragMotion.location = point
+            retargetReorder()
+            if case .end = input { finishReorder() }
+        case .cancel: traceReorder("input.cancel"); cancelReorder()
+        }
+    }
+
     private func beginReorder(_ task: DotistTask, at start: CGPoint) {
-        guard let head = rowFrames.first(where: { $0.task.id == task.id }) else { return }
+        guard let head = rowFrames.first(where: { $0.task.id == task.id }) else { traceReorder("begin.missing-row", taskID: task.id, point: start); return }
         let hierarchy = TaskHierarchy(model.tasks)
         let selectedIDs = selection.value.ids.contains(task.id) ? Array(selection.value.ids) : [task.id]
         let roots = hierarchy.selectionRoots(ids: selectedIDs, groupIDs: model.groups.map(\.id))
             .sorted { a, b in (displayOrder.firstIndex(of: a.id) ?? 0) < (displayOrder.firstIndex(of: b.id) ?? 0) }
         let ids = Set(roots.flatMap { [$0.id] + model.descendants(of: $0).map(\.id) })
         let block = rowFrames.filter { ids.contains($0.task.id) && $0.frame.height > 0 }.sorted { $0.frame.minY < $1.frame.minY }
-        guard let first = block.first else { return }
+        guard let first = block.first else { traceReorder("begin.empty-block", taskID: task.id); return }
+        traceReorder("begin.accepted", taskID: task.id, point: start, fields: ["sourceFrame": "\(head.frame)", "roots": "\(roots.map(\.id))"])
         dragMotion.location = start
         ghostFrame = .zero
         drag = TaskListDrag(taskID: task.id, blockIDs: ids, visibleBlock: block, startFrame: CGRect(x: head.frame.minX, y: first.frame.minY, width: head.frame.width, height: block.reduce(0) { $0 + $1.frame.height }), startLocation: start,
@@ -449,7 +511,6 @@ struct MainWindow: View {
         model.beginDrag(task.id, scope: "list:\(state.scope)")
         model.focusId = task.id
         retargetReorder()
-        drag?.initialTarget = drag?.target
     }
 
     private func retargetReorder() {
@@ -494,19 +555,20 @@ struct MainWindow: View {
             }
             // Rebase once after leaving the expanded group. Strip the live
             // placeholder so that it cannot feed back into pointer projection.
-            let gap = showsInsertionGhost ? ghostFrame : .zero
             next.baselineRows = rowFrames.map { row in
                 var row = row
-                row.frame = TaskCollapsedGroupDrop.removingGap(row.frame, gap: gap)
+                row.frame = removingInsertionSpaces(row.frame)
                 return row
             }
             next.baselineGroups = groupFrames.map { group in
-                TaskListGroupFrame(id: group.id, region: group.region, frame: TaskCollapsedGroupDrop.removingGap(group.frame, gap: gap))
+                TaskListGroupFrame(id: group.id, region: group.region, frame: removingInsertionSpaces(group.frame))
             }
             next.scrollOriginY = reorderRuntime.scrollOriginY
             next.expandedDropGroup = nil
         }
-        let logicalY = showsInsertionGhost ? TaskDragGeometry.pointerY(location.y, excludingGhost: ghostFrame) : location.y
+        // Project through every actual layout gap: a previous slot can still
+        // be closing during a reversal. The pre-drag baseline stays frozen.
+        let logicalY = TaskInsertionFramesKey.pointerY(location.y, frames: insertionFrames)
         let scrollDelta = reorderRuntime.scrollOriginY - next.scrollOriginY
         let groups = next.baselineGroups.sorted { $0.frame.minY < $1.frame.minY }
         let engineGroups = groups.map { TaskReorderEngine.Group(id: $0.id, minY: $0.frame.minY - scrollDelta, maxY: $0.frame.maxY - scrollDelta) }
@@ -514,6 +576,11 @@ struct MainWindow: View {
             TaskReorderEngine.Row(id: row.task.id, depth: model.depth(of: row.task), groupID: row.task.category, parentID: row.task.parentId, midY: row.frame.midY - scrollDelta)
         }
         let target = TaskReorderEngine.target(rows: rows, groups: engineGroups, draggedID: next.rootIDs.first ?? next.taskID, blockIDs: next.blockIDs, startY: next.startLocation.y, offsetY: logicalY - next.startLocation.y, offsetX: location.x - next.startLocation.x, indentStep: 22, subtreeHeight: next.subtreeHeight)
+        if TaskDragDiagnostics.enabled {
+            traceReorder("target.resolved", point: location, fields: ["resolved": String(describing: target),
+                "logicalY": "\(logicalY)", "ghost": "\(ghostFrame)", "scrollDelta": "\(scrollDelta)",
+                "groups": groups.map { "\($0.id):\($0.frame)" }.joined(separator: ";")])
+        }
         let region = groups.first { $0.id == target?.groupID && logicalY >= $0.frame.minY - scrollDelta && logicalY < $0.frame.maxY - scrollDelta }
             ?? groups.filter { $0.id == target?.groupID }.min { abs($0.frame.midY - scrollDelta - logicalY) < abs($1.frame.midY - scrollDelta - logicalY) }
         // Frozen pre-drag geometry prevents a newly inserted gap from
@@ -526,41 +593,54 @@ struct MainWindow: View {
         next.ghostAfterID = slot >= rest.count ? rest.last?.id : nil
         next.targetIsEmpty = rest.isEmpty
         next.region = region?.region
-        if drag?.initialTarget == nil {
-            var transaction = Transaction(); transaction.disablesAnimations = true
-            withTransaction(transaction) { drag = next }
-        } else {
-            withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.12)) { drag = next }
-        }
+        if next.initialTarget == nil { next.initialTarget = target }
+        // Layout ticks animate insertion heights; keep native and SwiftUI
+        // frames immediate within each tick, without a second animation.
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { drag = next }
+        updateInsertionMotion()
+    }
+
+    private func removingInsertionSpaces(_ frame: CGRect) -> CGRect {
+        let minY = TaskInsertionFramesKey.pointerY(frame.minY, frames: insertionFrames)
+        let maxY = TaskInsertionFramesKey.pointerY(frame.maxY, frames: insertionFrames)
+        return CGRect(x: frame.minX, y: minY, width: frame.width, height: maxY - minY)
     }
 
     private func finishReorder() {
-        guard let drag, !drag.committing else { return }
-        guard let target = drag.target, listViewport.contains(dragMotion.location) || shelfTarget != nil else { cancelReorder(); return }
+        traceReorder("finish.request")
+        guard let drag, !drag.committing else { traceReorder("finish.rejected-no-drag"); return }
+        guard let target = drag.target, listViewport.contains(dragMotion.location) || shelfTarget != nil else { traceReorder("finish.rejected-target-or-viewport"); cancelReorder(); return }
+        traceReorder("commit.request", fields: ["roots": "\(drag.rootIDs)"])
         self.drag?.committing = true
-        let complete = { clearReorder() }
+        let complete = { traceReorder("commit.callback-success"); clearReorder() }
         if drag.rootIDs.count == 1 {
-            model.commitReorder(taskID: drag.rootIDs[0], to: target, completed: complete, failed: { clearReorder() })
+            model.commitReorder(taskID: drag.rootIDs[0], to: target, completed: complete, failed: { traceReorder("commit.callback-failure"); clearReorder() })
         } else {
             // Preflight every root before applying the gesture. Core owns
             // each subtree move and the model freezes observation until done.
-            model.change(completed: complete, failed: { clearReorder() }) { store in
+            model.change(completed: complete, failed: { traceReorder("commit.callback-failure"); clearReorder() }) { store in
                 try TaskDragBatch.commit(ids: drag.rootIDs, target: target, store: store)
             }
         }
     }
 
     private func cancelReorder() {
+        traceReorder("cancel.request")
         guard drag != nil, drag?.committing == false else { return }
         dragCancelled = reorderGestureActive
         clearReorder()
     }
 
     private func clearReorder() {
+        traceReorder("clear.begin")
         drag = nil
+        reorderRuntime.insertionMotion.reset()
         ghostFrame = .zero
         shelfTarget = nil
         model.endDrag()
+        traceReorder("clear.finished")
     }
 
     private func autoScrollReorder() {
@@ -833,7 +913,7 @@ struct MainWindow: View {
                 }
             }
         }
-            .padding(.top, firstSection ? 6 : 20).id(group.id).contentShape(Rectangle())
+            .padding(.top, firstSection ? 6 : 8).id(group.id).contentShape(Rectangle())
             .background(groupGeometry(group.id, region: group.id))
     }
 
@@ -989,9 +1069,9 @@ struct MainWindow: View {
         let titleParts = model.tags(for: task)
         let actionsVisible = drag == nil && model.dragId == nil && (hoveredTask == task.id || pickingTask == task.id)
         return VStack(alignment: .leading, spacing: 0) {
-            if ghostBeforeID == task.id { taskGhost(compensatingIndent: 0) }
+            insertionSpace(.before(task.id))
             interactiveTaskRow(task, children: children, sub: sub, allTasks: allTasks, previous: previous, next: next, hideDue: hideDue, titleParts: titleParts, actionsVisible: actionsVisible)
-            if ghostAfterID == task.id { taskGhost(compensatingIndent: 0) }
+            insertionSpace(.after(task.id))
         }
     }
 
@@ -1024,7 +1104,7 @@ struct MainWindow: View {
         .contextMenu { rowMenu(task, sub: sub, allTasks: allTasks, previous: previous, next: next) }
         .accessibilityElement(children: .contain)
         // Preserve the full source geometry and the live gesture throughout.
-        .opacity(carried ? 0.35 : 1)
+        .opacity(carried ? 0 : 1)
         .background(rowGeometry(task, sub: sub, allTasks: allTasks, hideDue: hideDue))
         .accessibilityIdentifier("task-row:\(task.id)")
     }
@@ -1147,6 +1227,7 @@ struct MainWindow: View {
     }
 
     private func clickRow(_ task: DotistTask, edit: Bool = true) {
+        traceReorder("row.click", taskID: task.id, fields: ["edit": "\(edit)"])
         let flags = NSEvent.modifierFlags
         selection.update { $0.click(task.id, order: displayOrder, shift: flags.contains(.shift), command: flags.contains(.command)) }
         selection.row(task.id).focusRequest.send()
@@ -1345,7 +1426,9 @@ struct MainWindow: View {
                     guard !values.isEmpty else { return false }
                     selectedSuggestion = (selectedSuggestion + direction + values.count) % values.count
                     return true
-                }, complete: { force in chooseSuggestion(force: force) }).tint(DotistDesign.accent).frame(height: ComposerMetrics.rowHeight).accessibilityIdentifier("composer-input")
+                }, complete: { force in chooseSuggestion(force: force) }).tint(DotistDesign.accent).frame(height: ComposerMetrics.rowHeight)
+                    .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(DotistDesign.accent.opacity(composerCueVisible ? 0.5 : 0), lineWidth: 1).allowsHitTesting(false) }
+                    .accessibilityIdentifier("composer-input")
                 if !tagSuggestions.isEmpty {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(tagSuggestions.enumerated()), id: \.element) { index, tag in
@@ -1354,7 +1437,9 @@ struct MainWindow: View {
                         }
                     }.glassEffect(.regular, in: .rect(cornerRadius: 12)).offset(y: -CGFloat(tagSuggestions.count * 28 + 6)).zIndex(1)
                 }
-            }.frame(maxWidth: .infinity).frame(height: ComposerMetrics.rowHeight).onChange(of: composer) { _ in selectedSuggestion = -1 }
+            }.frame(maxWidth: .infinity).frame(height: ComposerMetrics.rowHeight)
+                .onChange(of: composer) { _ in selectedSuggestion = -1; dismissComposerCue() }
+                .onChange(of: composerFocused) { focused in if !focused { dismissComposerCue() } }
             Button { showDuePicker.toggle() } label: {
                 IconTextRow(spacing: 4) {
                     if let shownDue { OpticalText(title: model.dueLabel(shownDue), size: 12, language: model.language).lineLimit(1) }

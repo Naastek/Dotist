@@ -14,6 +14,7 @@ struct ShortcutRecorder: NSViewRepresentable {
         button.cell = OpticalShortcutCell(textCell: "")
         button.isBordered = false
         button.focusRingType = .none
+        button.alignment = .right
         button.setButtonType(.momentaryChange)
         button.target = button
         button.action = #selector(ShortcutButton.startRecording(_:))
@@ -28,6 +29,7 @@ struct ShortcutRecorder: NSViewRepresentable {
         button.begin = begin
         button.finish = finish
         button.recordingText = recordingText
+        button.showsPlaceholder = value.isEmpty
         button.normalTitle = value.isEmpty ? empty : value.replacingOccurrences(of: "CommandOrControl", with: "⌘").replacingOccurrences(of: "Command", with: "⌘").replacingOccurrences(of: "Control", with: "⌃").replacingOccurrences(of: "Alt", with: "⌥").replacingOccurrences(of: "Shift", with: "⇧").replacingOccurrences(of: "+", with: " ")
         if !button.recording { button.title = button.normalTitle }
     }
@@ -39,6 +41,7 @@ final class ShortcutButton: NSButton {
     var recordingText = ""
     var normalTitle = ""
     var recording = false
+    var showsPlaceholder = false
     private var resignObserver: NSObjectProtocol?
     override var acceptsFirstResponder: Bool { true }
     override func becomeFirstResponder() -> Bool {
@@ -47,7 +50,7 @@ final class ShortcutButton: NSButton {
         return accepted
     }
     override func draw(_ dirtyRect: NSRect) {
-        contentTintColor = window?.firstResponder === self ? NSColor(DotistDesign.accent) : NSColor(DotistDesign.ink)
+        contentTintColor = window?.firstResponder === self ? NSColor(DotistDesign.accent) : NSColor(showsPlaceholder ? DotistDesign.faint : DotistDesign.ink)
         super.draw(dirtyRect)
     }
     override func viewDidMoveToWindow() {

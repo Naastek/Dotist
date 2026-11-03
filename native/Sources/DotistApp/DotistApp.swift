@@ -3,6 +3,20 @@ import Combine
 import DotistCore
 import SwiftUI
 
+// Opt-in QA diagnostics record event routing without task text or user data.
+func shortcutTrace(_ message: String) {
+    guard Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa",
+          ProcessInfo.processInfo.environment["DOTIST_SHORTCUT_TRACE"] == "1",
+          let directory = ProcessInfo.processInfo.environment["DOTIST_DATA_DIR"] else { return }
+    let url = URL(fileURLWithPath: directory).appendingPathComponent("shortcut-trace.log")
+    let line = "\(Date().timeIntervalSince1970) \(message) active=\(NSApp.isActive) key=\(NSApp.keyWindow?.title ?? "nil") front=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil")\n"
+    if !FileManager.default.fileExists(atPath: url.path) { _ = FileManager.default.createFile(atPath: url.path, contents: nil) }
+    guard let handle = try? FileHandle(forWritingTo: url) else { return }
+    defer { try? handle.close() }
+    _ = try? handle.seekToEnd()
+    try? handle.write(contentsOf: Data(line.utf8))
+}
+
 @main
 struct DotistApplication {
     static func main() {
@@ -52,6 +66,17 @@ struct WindowDragArea: View {
 
 @MainActor
 final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableObject {
+    private struct ShortcutSignature: Equatable {
+        let language: String
+        let scopes: [String: String]
+        let values: [String]
+
+        init(_ settings: DotistSettings) {
+            language = settings.language
+            scopes = settings.shortcutScopes
+            values = [settings.toggleShortcut, settings.quickAddShortcut, settings.settingsShortcut, settings.viewsShortcut, settings.searchShortcut]
+        }
+    }
     private(set) var motion: PanelMotion!
     var bubble: Bool { motion?.bubble ?? false }
     var animationInProgress: Bool { motion?.animationInProgress ?? false }
@@ -67,9 +92,13 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     private var groupPanels: [GroupPanelController] = []
     private var menuBar: MenuBarController?
     private var shortcuts: GlobalShortcuts?
+    private var shortcutCaptureActive = false
+    private var localShortcutMonitor: Any?
+    private var qaPointerMonitor: Any?
     private var suspendedShortcuts: [UInt32: String] = [:]
     private var settingsObserver: AnyCancellable?
     private var appliedLanguage: String?
+    private var appliedShortcutSignature: ShortcutSignature?
     private(set) var expandedSize = NSSize(width: 364, height: 620)
     private var idleTimer: Timer?
     private var moveCheck: DispatchWorkItem?
@@ -96,6 +125,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         }
         panel = DotistPanel(contentRect: NSRect(origin: .zero, size: expandedSize), styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Dotist"
+        panel.identifier = NSUserInterfaceItemIdentifier("dotist.main")
         panel.minSize = NSSize(width: 320, height: 440)
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -119,16 +149,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         appliedLanguage = model.settings.language
         menuBar = MenuBarController(model: model) { [weak self] action in self?.performMenuAction(action) }
         do {
-            let manager = try GlobalShortcuts { [weak self] id in
-                switch id {
-                case 1: self?.performMenuAction("toggle")
-                case 2: self?.showQuick()
-                case 3: self?.showSettings()
-                case 4: self?.showViews()
-                case 5: self?.showSearch()
-                default: break
-                }
-            }
+            let manager = try GlobalShortcuts { [weak self] id in self?.performShortcut(id) }
             shortcuts = manager
             var registered: [UInt32: String] = [:]
             for (id, value) in shortcutValues().sorted(by: { $0.key < $1.key }) {
@@ -138,10 +159,42 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
                 catch { model.error = error.localizedDescription }
             }
         } catch { model.error = error.localizedDescription }
+        shortcutTrace("configured search=\(model.settings.searchShortcut) scope=\(model.settings.shortcutScopes["search"] ?? "nil")")
+        appliedShortcutSignature = ShortcutSignature(model.settings)
+        localShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if !event.modifierFlags.intersection([.command, .control]).isEmpty || event.keyCode == 53 {
+                shortcutTrace("keyDown code=\(event.keyCode) flags=\(event.modifierFlags.rawValue)")
+            }
+            guard let self, !self.shortcutCaptureActive else { return event }
+            for (id, key, value) in self.allShortcutValues() where self.model.settings.shortcutScopes[key] == "app" {
+                // Menu key equivalents and this monitor both see the event; let exactly one of them act.
+                guard !self.menuHandles(key: key, value: value) else { continue }
+                if GlobalShortcuts.matches(value, event: event) { self.performShortcut(id); return nil }
+            }
+            return event
+        }
+        if TaskDragDiagnostics.enabled {
+            qaPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { event in
+                TaskDragDiagnostics.record("application.mouse", fields: ["type": "\(event.type)",
+                    "windowNumber": "\(event.windowNumber)", "point": "\(event.locationInWindow)",
+                    "windowID": event.window?.identifier?.rawValue ?? "nil", "active": "\(NSApp.isActive)",
+                    "front": NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"])
+                return event
+            }
+            TaskDragDiagnostics.record("application.pointer-monitor-installed")
+        }
         NSApp.setActivationPolicy(model.settings.showDock ? .regular : .accessory)
         settingsObserver = model.$settings.dropFirst().sink { [weak self] settings in
             guard let self else { return }
             self.updater.apply(settings)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.shortcutCaptureActive else { return }
+                let signature = ShortcutSignature(self.model.settings)
+                guard signature != self.appliedShortcutSignature else { return }
+                do { try self.shortcuts?.apply(self.shortcutValues()) } catch { self.model.error = error.localizedDescription }
+                self.installMenu()
+                self.appliedShortcutSignature = signature
+            }
             let appearance: NSAppearance? = settings.theme == "light" ? NSAppearance(named: .aqua) : settings.theme == "dark" ? NSAppearance(named: .darkAqua) : nil
             self.panel.appearance = appearance
             self.panel.level = settings.alwaysOnTop ? .floating : .normal
@@ -155,7 +208,6 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
                 self.appliedLanguage = settings.language
                 self.viewsWindow?.title = self.model.text("任务视图")
                 self.settingsWindow?.title = self.model.text("Dotist 设置")
-                self.installMenu()
             }
             NSApp.setActivationPolicy(settings.showDock || self.viewsWindow?.isVisible == true ? .regular : .accessory)
         }
@@ -201,7 +253,14 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         return .terminateNow
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) { shortcutTrace("application became active") }
+    func applicationDidResignActive(_ notification: Notification) { shortcutTrace("application resigned active") }
+
     func applicationWillTerminate(_ notification: Notification) {
+        TaskDragDiagnostics.record("application.terminate")
+        TaskDragDiagnostics.flush()
+        if let qaPointerMonitor { NSEvent.removeMonitor(qaPointerMonitor) }
+        if let localShortcutMonitor { NSEvent.removeMonitor(localShortcutMonitor) }
         sideTabs?.stop()
         motion?.stop()
         groupPanels.forEach { $0.motion.stop() }
@@ -222,7 +281,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         UserDefaults.standard.set(panel.frame.minY, forKey: "dotist.native.window.y")
     }
     func windowDidResignKey(_ notification: Notification) {
-        if let window = notification.object as? NSWindow, window === quickWindow || window === searchWindow { window.orderOut(nil) }
+        if let window = notification.object as? NSWindow, window === quickWindow || window === searchWindow { shortcutTrace("resign quick/search"); window.orderOut(nil) }
     }
     func windowWillClose(_ notification: Notification) {
         if let window = notification.object as? NSWindow, window === viewsWindow {
@@ -290,6 +349,8 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         let application = NSMenuItem()
         menu.addItem(application)
         let appMenu = NSMenu()
+        // ⌘, is the conventional settings shortcut and stays available even when
+        // the configurable shortcut is cleared or switched to another combination.
         let settings = NSMenuItem(title: model.text("设置…"), action: #selector(openSettingsFromMenu), keyEquivalent: ",")
         settings.target = self
         appMenu.addItem(settings)
@@ -309,33 +370,68 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         editMenu.addItem(withTitle: model.text("粘贴"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: model.text("全选"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenu.addItem(.separator())
-        let search = NSMenuItem(title: model.text("搜索"), action: #selector(openSearchFromMenu), keyEquivalent: "k")
+        let search = NSMenuItem(title: model.text("搜索"), action: #selector(openSearchFromMenu), keyEquivalent: "")
+        configureMenuShortcut(search, key: "search", value: model.settings.searchShortcut)
         search.target = self
         editMenu.addItem(search)
         editItem.submenu = editMenu
         NSApp.mainMenu = menu
     }
-    @objc private func openSettingsFromMenu() { showSettings() }
+    @objc private func openSettingsFromMenu() { shortcutTrace("settings menu action"); showSettings() }
     @objc private func openQuickFromMenu() { showQuick() }
-    @objc private func openSearchFromMenu() { showSearch() }
+    @objc private func openSearchFromMenu() { shortcutTrace("search menu action"); showSearch() }
 
+    /// Whether an app-scoped shortcut is already carried by a menu key equivalent.
+    private func menuHandles(key: String, value: String) -> Bool {
+        guard model.settings.shortcutScopes[key] == "app", GlobalShortcuts.menuEquivalent(value) != nil else { return false }
+        // The settings item always carries ⌘,; any other app shortcut belongs to the monitor.
+        if key == "settings" { return value == "Command+Comma" }
+        return key == "search"
+    }
+    private func configureMenuShortcut(_ item: NSMenuItem, key: String, value: String) {
+        if model.settings.shortcutScopes[key] == "app", let (equivalent, flags) = GlobalShortcuts.menuEquivalent(value) {
+            item.keyEquivalent = equivalent
+            item.keyEquivalentModifierMask = flags
+        }
+    }
+    private func allShortcutValues() -> [(UInt32, String, String)] {
+        let s = model.settings
+        return [(1, "toggle", s.toggleShortcut), (2, "quickAdd", s.quickAddShortcut), (3, "settings", s.settingsShortcut), (4, "views", s.viewsShortcut), (5, "search", s.searchShortcut)]
+    }
     private func shortcutValues() -> [UInt32: String] {
-        [1: model.settings.toggleShortcut, 2: model.settings.quickAddShortcut, 3: model.settings.settingsShortcut, 4: model.settings.viewsShortcut, 5: "Command+K"]
+        Dictionary(uniqueKeysWithValues: allShortcutValues().filter { model.settings.shortcutScopes[$0.1] == "global" }.map { ($0.0, $0.2) })
+    }
+    private func performShortcut(_ id: UInt32) {
+        switch id {
+        case 1: performMenuAction("toggle")
+        case 2: showQuick()
+        case 3: showSettings()
+        case 4: showViews()
+        case 5: showSearch()
+        default: break
+        }
     }
     func beginShortcutCapture() {
+        shortcutTrace("begin recording")
+        shortcutCaptureActive = true
         suspendedShortcuts = shortcuts?.values ?? [:]
         shortcuts?.suspend()
         menuStates = NSApp.mainMenu?.items.flatMap { $0.submenu?.items ?? [] }.map { ($0, $0.isEnabled) } ?? []
         for (item, _) in menuStates { item.isEnabled = false }
     }
     func endShortcutCapture(id: UInt32, value: String?) {
+        shortcutTrace("end recording id=\(id) cancelled=\(value == nil)")
         for (item, enabled) in menuStates { item.isEnabled = enabled }
         menuStates.removeAll()
+        shortcutCaptureActive = false
         guard let shortcuts else { return }
         let previous = suspendedShortcuts
         var next = previous
-        if let value { next[id] = value }
         do {
+            if let value {
+                try GlobalShortcuts.validate(value, id: id)
+                if previous[id] != nil { next[id] = value }
+            }
             try shortcuts.apply(next)
             guard let value else { return }
             var patch = DotistSettingsPatch()
@@ -344,6 +440,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             case 2: patch.quickAddShortcut = value
             case 3: patch.settingsShortcut = value
             case 4: patch.viewsShortcut = value
+            case 5: patch.searchShortcut = value
             default: return
             }
             model.updateSettings(patch) { [weak self] success in
@@ -354,6 +451,25 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             model.error = error.localizedDescription
             do { try shortcuts.apply(previous) } catch { model.error = error.localizedDescription }
         }
+    }
+    func changeShortcutScope(key: String, scope: String) {
+        guard let shortcuts else { return }
+        let previous = shortcuts.values
+        var scopes = model.settings.shortcutScopes
+        scopes[key] = scope
+        var next = shortcutValues()
+        if let (id, _, value) = allShortcutValues().first(where: { $0.1 == key }) {
+            if scope == "global" { next[id] = value } else { next.removeValue(forKey: id) }
+        }
+        do {
+            try shortcuts.apply(next)
+            var patch = DotistSettingsPatch()
+            patch.shortcutScopes = scopes
+            model.updateSettings(patch) { [weak self] success in
+                guard !success else { return }
+                do { try shortcuts.apply(previous) } catch { self?.model.error = error.localizedDescription }
+            }
+        } catch { model.error = error.localizedDescription }
     }
 
     private func performMenuAction(_ action: String) {
@@ -473,7 +589,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             window.level = .floating
             window.isReleasedWhenClosed = false
             window.appearance = panel.appearance
-            installContent(SettingsWindow(model: model, updater: updater, beginShortcutCapture: beginShortcutCapture, endShortcutCapture: endShortcutCapture, resetWindowSize: resetWindowSize).ignoresSafeArea(), in: window)
+            installContent(SettingsWindow(model: model, updater: updater, beginShortcutCapture: beginShortcutCapture, endShortcutCapture: endShortcutCapture, changeShortcutScope: changeShortcutScope, resetWindowSize: resetWindowSize).ignoresSafeArea(), in: window)
             window.minSize = NSSize(width: 800, height: 540)
             window.center()
             settingsWindow = window
@@ -531,12 +647,13 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     }
 
     func showSearch() {
+        shortcutTrace("showSearch visible=\(searchWindow?.isVisible == true)")
         if CommandPaletteVisibility.action(isVisible: searchWindow?.isVisible == true) == .hide {
             searchWindow?.orderOut(nil)
             return
         }
         if searchWindow == nil {
-            let window = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 600, height: 372), styleMask: [.borderless], backing: .buffered, defer: false)
+            let window = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 440), styleMask: [.borderless], backing: .buffered, defer: false)
             window.isOpaque = false
             window.backgroundColor = .clear
             window.hasShadow = true
@@ -550,9 +667,19 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         }
         guard let window = searchWindow else { return }
         window.title = model.text("搜索")
-        installContent(CommandPalette(model: model, close: { [weak window] in window?.orderOut(nil) }, reveal: revealTask, revealGroup: revealGroup, showViews: showViews), in: window)
+        installContent(CommandPalette(model: model, close: { [weak window] in window?.orderOut(nil) }, reveal: revealTask, revealGroup: revealGroup, showViews: showViews, resize: { [weak window] height in
+            guard let window else { return }
+            var frame = window.frame
+            guard abs(frame.height - height) > 0.5 else { return }
+            let top = frame.maxY
+            shortcutTrace("resize search to \(height)")
+            frame.size.height = height
+            frame.origin.y = top - height
+            window.setFrame(frame, display: true)
+        }), in: window)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        shortcutTrace("search shown visible=\(window.isVisible)")
     }
 
     private func revealGroup(_ group: DotistGroup) {

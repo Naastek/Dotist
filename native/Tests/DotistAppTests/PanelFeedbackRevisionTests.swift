@@ -272,7 +272,7 @@ final class PanelFeedbackRevisionTests: XCTestCase {
         }
     }
 
-    func testLiftedBlockFollowsVerticalMotionAndKeepsItsHorizontalColumn() throws {
+    func testLiftedBlockFollowsBothPointerAxes() throws {
         let task = try store().addTask(title: "lifted", category: DotistGroup.inboxID)
         let frame = CGRect(x: 16, y: 100, width: 332, height: 32)
         let row = TaskListRowFrame(task: task, frame: frame)
@@ -291,7 +291,7 @@ final class PanelFeedbackRevisionTests: XCTestCase {
                     if color.redComponent > 0.9 && color.greenComponent < 0.1 { minX = min(minX, x); minY = min(minY, y) }
                 }
             }
-            XCTAssertEqual(minX, 16)
+            XCTAssertEqual(CGFloat(minX), 16 + point.x - 80, accuracy: 0.5)
             XCTAssertEqual(CGFloat(minY), 100 + point.y - 110, accuracy: 0.5)
         }
     }

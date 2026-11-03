@@ -2,12 +2,71 @@ import AppKit
 import Foundation
 import XCTest
 
+/// Read-only owner sampling continues while XCTest's synchronous keyboard
+/// synthesis waits. Titles are omitted; PID/path/geometry identify receivers.
+private final class ShortcutWindowProbe {
+    private let queue = DispatchQueue(label: "dotist.qa.window-owners")
+    private var timer: DispatchSourceTimer?
+    private var samples: [String] = []
+    func start() {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        self.timer = timer
+        timer.schedule(deadline: .now(), repeating: .milliseconds(250))
+        timer.setEventHandler { [weak self] in self?.sample() }
+        timer.resume()
+    }
+    func stop() -> String {
+        timer?.cancel(); timer = nil
+        return queue.sync { samples.joined(separator: "\n") }
+    }
+    private func sample() {
+        let applications = NSWorkspace.shared.runningApplications.filter {
+            $0.isActive || ($0.localizedName?.localizedCaseInsensitiveContains("dotist") ?? false)
+                || ($0.bundleIdentifier?.localizedCaseInsensitiveContains("dotist") ?? false)
+        }
+        let owners = Set(applications.map(\.processIdentifier))
+        let apps: [[String: Any]] = applications.map {
+            ["pid": $0.processIdentifier, "bundle": $0.bundleIdentifier ?? "", "active": $0.isActive,
+             "executable": $0.executableURL?.path ?? ""]
+        }
+        let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? [])
+            .filter { owners.contains(($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value ?? -1) }
+            .map { info -> [String: Any] in
+                ["pid": info[kCGWindowOwnerPID as String] ?? -1, "number": info[kCGWindowNumber as String] ?? -1,
+                 "layer": info[kCGWindowLayer as String] ?? -1, "bounds": info[kCGWindowBounds as String] ?? [:]]
+            }
+        if let data = try? JSONSerialization.data(withJSONObject: ["time": Date().timeIntervalSince1970, "applications": apps, "windows": windows], options: [.sortedKeys]) {
+            samples.append(String(decoding: data, as: UTF8.self))
+        }
+    }
+}
+
 final class DotistUITests: XCTestCase {
     private var dataDirectory: String { ProcessInfo.processInfo.environment["DOTIST_UI_DATA"]! }
 
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["DOTIST_DATA_DIR"] = dataDirectory
+        app.launchEnvironment["DOTIST_SHORTCUT_TRACE"] = "1"
+        app.launchEnvironment["DOTIST_DRAG_TRACE"] = "1"
+        let dragTraceURL = URL(fileURLWithPath: dataDirectory).appendingPathComponent("drag-trace.ndjson")
+        addTeardownBlock {
+            if let trace = try? String(contentsOf: dragTraceURL, encoding: .utf8) {
+                let attachment = XCTAttachment(string: trace)
+                attachment.name = "physical-drag-routing"
+                attachment.lifetime = .keepAlways
+                self.add(attachment)
+            }
+        }
+        let traceURL = URL(fileURLWithPath: dataDirectory).appendingPathComponent("shortcut-trace.log")
+        addTeardownBlock {
+            if let trace = try? String(contentsOf: traceURL, encoding: .utf8) {
+                let attachment = XCTAttachment(string: trace)
+                attachment.name = "shortcut-event-routing"
+                attachment.lifetime = .keepAlways
+                self.add(attachment)
+            }
+        }
         // Keep the fixture away from notifications in the top-right corner.
         let screen = NSScreen.main!.visibleFrame
         let preferences = UserDefaults(suiteName: "dev.codex.dotist-native-qa")!
@@ -76,10 +135,19 @@ final class DotistUITests: XCTestCase {
     }
 
     private func selectGroup(_ id: String, name: String, in window: XCUIElement, app: XCUIApplication) {
-        if window.label == "Dotist" {
-            let item = app.buttons["side-tab:\(id)"]
-            XCTAssertTrue(item.waitForExistence(timeout: 3), "Missing side tab \(id)")
-            item.click()
+        if window.identifier == "dotist.main" {
+            // Inbox has no sidebar tab; All contains the ungrouped collection.
+            let tabID = id == "inbox" ? "all" : id
+            let sidebar = app.dialogs["dotist.side-tabs"]
+            let item = sidebar.buttons["side-tab:\(tabID)"]
+            XCTAssertTrue(item.waitForExistence(timeout: 3), "Missing side tab \(tabID)")
+            // AX retains the full label width while the native sidebar is a
+            // collapsed 10pt ear. Click the visible intersection, not its label
+            // center outside the actual child window.
+            let visible = sidebar.frame.intersection(item.frame)
+            XCTAssertFalse(visible.isEmpty, "Side tab has no visible native hit region: \(tabID)")
+            sidebar.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: visible.midX - sidebar.frame.minX, dy: visible.midY - sidebar.frame.minY)).click()
         } else {
             window.staticTexts["group-menu"].rightClick()
             let item = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
@@ -253,7 +321,199 @@ final class DotistUITests: XCTestCase {
         XCTAssertFalse(field.exists)
     }
 
-    func testDraggingInboxTaskOntoGroupHeaderClassifiesIt() {
+    func testCommandPaletteSectionsAndShortcutScopes() {
+        let ownerProbe = ShortcutWindowProbe()
+        ownerProbe.start()
+        addTeardownBlock {
+            let attachment = XCTAttachment(string: ownerProbe.stop())
+            attachment.name = "shortcut-window-owners"
+            attachment.lifetime = .keepAlways
+            self.add(attachment)
+        }
+        continueAfterFailure = false
+        let app = launch()
+        let main = app.dialogs["Dotist"]
+        let composer = main.textFields["新任务"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        composer.click()
+        // ASCII synthesis avoids testmanagerd trying to authorize a Chinese input method.
+        // Chinese group titles and palette labels remain visible and asserted below.
+        composer.typeText("QA-palette-one\n")
+        composer.click()
+        composer.typeText("QA-palette-two\n")
+        XCTAssertTrue(main.buttons["完成 QA-palette-one"].waitForExistence(timeout: 5))
+
+        app.typeKey("k", modifierFlags: .command)
+        let field = app.textFields["搜索任务、分组或视图"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        let palette = app.windows["搜索"]
+        XCTAssertTrue(palette.staticTexts["任务"].waitForExistence(timeout: 3))
+        XCTAssertTrue(palette.staticTexts["分组"].exists)
+        XCTAssertTrue(palette.staticTexts["工作"].exists)
+        XCTAssertLessThanOrEqual(palette.frame.height, 520)
+        // The last section must fit above the footer instead of being clipped.
+        XCTAssertTrue(palette.staticTexts["任务视图"].isHittable)
+        let wideHeight = palette.frame.height
+        capture(palette, name: "command-palette-empty")
+
+        field.typeText("QA-palette-one")
+        XCTAssertTrue(palette.staticTexts["QA-palette-one"].waitForExistence(timeout: 3))
+        XCTAssertTrue(field.exists, "Filtering must keep the search panel open")
+        // A single match shrinks the panel instead of leaving empty space.
+        expectation(for: NSPredicate { _, _ in field.exists && palette.frame.height < wideHeight }, evaluatedWith: nil)
+        waitForExpectations(timeout: 3)
+        XCTAssertLessThan(palette.frame.height, wideHeight)
+        capture(palette, name: "command-palette-query")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertFalse(field.exists)
+
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows["Dotist 设置"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.buttons["快捷键"].click()
+        XCTAssertTrue(settings.staticTexts["应用快捷键"].waitForExistence(timeout: 3))
+        XCTAssertTrue(settings.staticTexts["面板内固定按键"].exists)
+        capture(settings, name: "settings-shortcuts-scopes")
+
+        func waitForSetting(_ key: String, scope: Bool = false, equals expected: String) {
+            let url = URL(fileURLWithPath: dataDirectory).appendingPathComponent("settings.json")
+            expectation(for: NSPredicate { _, _ in
+                guard let data = try? Data(contentsOf: url),
+                      let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return false }
+                let value = scope ? (json["shortcut_scopes"] as? [String: String])?[key] : json[key] as? String
+                return value == expected
+            }, evaluatedWith: nil)
+            waitForExpectations(timeout: 5)
+        }
+        func chooseScope(_ key: String, _ title: String, _ value: String) {
+            settings.descendants(matching: .any)["shortcut-scope:" + key].click()
+            app.menuItems[title].click()
+            waitForSetting(key, scope: true, equals: value)
+        }
+        func closeSettings() {
+            settings.buttons[XCUIIdentifierCloseWindow].click()
+            composer.click()
+        }
+        func openSettings() {
+            app.typeKey(",", modifierFlags: .command)
+            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            settings.buttons["快捷键"].click()
+        }
+        // The global scope must exercise the registered hotkey, with no search menu equivalent.
+        chooseScope("search", "全局", "global")
+        closeSettings()
+        app.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertFalse(field.exists)
+        openSettings()
+        chooseScope("search", "不启用", "off")
+        closeSettings()
+        app.typeKey("k", modifierFlags: .command)
+        let unexpectedlyOpened = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in field.exists }, object: nil)
+        unexpectedlyOpened.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [unexpectedlyOpened], timeout: 1), .completed)
+        openSettings()
+        chooseScope("search", "仅 Dotist", "app")
+        let recorder = settings.buttons["打开搜索"]
+        recorder.click()
+        app.typeKey("k", modifierFlags: [.command, .shift])
+        waitForSetting("search_shortcut", equals: "Command+Shift+K")
+        recorder.click()
+        app.typeKey(.escape, modifierFlags: [])
+        waitForSetting("search_shortcut", equals: "Command+Shift+K")
+        closeSettings()
+        app.typeKey("k", modifierFlags: [.command, .shift])
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertFalse(field.exists)
+        openSettings()
+        settings.buttons["shortcut-clear:search"].click()
+        waitForSetting("search_shortcut", equals: "")
+        recorder.click()
+        app.typeKey("k", modifierFlags: .command)
+        waitForSetting("search_shortcut", equals: "Command+K")
+        // Clearing/disabling the configurable settings binding must retain the fixed ⌘, entry.
+        chooseScope("settings", "不启用", "off")
+        waitForSetting("settings_shortcut", equals: "")
+        closeSettings()
+        openSettings()
+        capture(settings, name: "settings-disabled-binding-fixed-command-comma")
+
+    }
+
+    private func performVerifiedTaskDrag(_ app: XCUIApplication, main: XCUIElement, task: XCUIElement,
+                                         taskID: String, end: CGPoint, operation: String) throws {
+        app.activate()
+        let beganAt = Date().timeIntervalSince1970
+        let bundle = URL(fileURLWithPath: dataDirectory).deletingLastPathComponent().appendingPathComponent("Dotist-Native-QA.app").standardizedFileURL
+        let owners = NSWorkspace.shared.runningApplications.filter { $0.bundleURL?.standardizedFileURL == bundle }
+        XCTAssertEqual(owners.count, 1, "Exactly one process must own this isolated QA bundle")
+        let pid = try XCTUnwrap(owners.first).processIdentifier
+        let window = main.frame
+        let start = CGPoint(x: task.frame.midX, y: task.frame.midY)
+        XCTAssertTrue(window.insetBy(dx: 3, dy: 3).contains(start))
+        XCTAssertTrue(window.insetBy(dx: 3, dy: 3).contains(end))
+        if ProcessInfo.processInfo.environment["DOTIST_UI_POINTER_PROBE"] == "1" {
+            let nonce = UUID().uuidString
+            let directory = URL(fileURLWithPath: dataDirectory)
+            let ready = directory.appendingPathComponent("pointer-\(operation)-ready.json")
+            let done = directory.appendingPathComponent("pointer-\(operation)-done.json")
+            let request: [String: Any] = ["version": 1, "nonce": nonce, "operation": operation,
+                "pid": pid, "taskID": taskID, "startedAt": beganAt, "windowID": "dotist.main",
+                "bundlePath": directory.deletingLastPathComponent().appendingPathComponent("Dotist-Native-QA.app").path,
+                "window": ["x": window.minX, "y": window.minY, "width": window.width, "height": window.height],
+                "start": ["x": start.x, "y": start.y], "end": ["x": end.x, "y": end.y]]
+            try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys]).write(to: ready, options: .atomic)
+            let completed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard let bytes = try? Data(contentsOf: done),
+                      let reply = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] else { return false }
+                return reply["nonce"] as? String == nonce
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [completed], timeout: 30), .completed, "Guarded pointer driver did not finish")
+            let reply = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: done)) as? [String: Any])
+            XCTAssertEqual(reply["status"] as? String, "ok", "Pointer driver refused or failed: \(reply)")
+        } else {
+            // Retain XCTest synthesis as a control. Its completion alone is
+            // never accepted as proof that a gesture reached the application.
+            task.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.25,
+                thenDragTo: main.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: end.x - window.minX, dy: end.y - window.minY)))
+        }
+        let traceURL = URL(fileURLWithPath: dataDirectory).appendingPathComponent("drag-trace.ndjson")
+        func events() -> [[String: Any]] {
+            guard let text = try? String(contentsOf: traceURL, encoding: .utf8) else { return [] }
+            return text.split(separator: "\n").compactMap { line in
+                guard let item = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
+                      (item["pid"] as? NSNumber)?.int32Value == pid,
+                      (item["time"] as? Double ?? 0) >= beganAt else { return nil }
+                return item
+            }
+        }
+        func positivelyVerified(_ records: [[String: Any]]) -> Bool {
+            guard let begin = records.firstIndex(where: { ($0["event"] as? String) == "begin.accepted" && ($0["fields"] as? [String: String])?["taskID"] == taskID }) else { return false }
+            let subsequent = Array(records.dropFirst(begin + 1))
+            let delivered = records.contains { ($0["event"] as? String) == "application.mouse" && ($0["fields"] as? [String: String])?["type"] == "NSEventType(rawValue: 6)" }
+            guard delivered else { return false }
+            if operation == "classify" {
+                guard let commit = subsequent.firstIndex(where: { ($0["event"] as? String) == "commit.request" && ($0["fields"] as? [String: String])?["taskID"] == taskID }) else { return false }
+                return subsequent.dropFirst(commit + 1).contains { ($0["event"] as? String) == "commit.callback-success" && ($0["fields"] as? [String: String])?["taskID"] == taskID }
+            }
+            guard !subsequent.contains(where: { ($0["event"] as? String) == "commit.request" }),
+                  let cancel = subsequent.firstIndex(where: { ($0["event"] as? String) == "cancel.request" && ($0["fields"] as? [String: String])?["taskID"] == taskID && ($0["fields"] as? [String: String])?["hasDrag"] == "true" }) else { return false }
+            return subsequent.dropFirst(cancel + 1).contains { ($0["event"] as? String) == "clear.finished" }
+        }
+        let proof = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in positivelyVerified(events()) }, object: nil)
+        let outcome = XCTWaiter.wait(for: [proof], timeout: 5)
+        let records = events()
+        let attachment = XCTAttachment(string: String(decoding: try JSONSerialization.data(withJSONObject: records, options: [.prettyPrinted, .sortedKeys]), as: UTF8.self))
+        attachment.name = "verified-drag-" + operation
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertEqual(outcome, .completed,
+                       "No positive begin/delivered-drag/\(operation == "classify" ? "commit" : "cancel") evidence. XCTest completion or later editing is insufficient. Events: \(records.compactMap { $0["event"] as? String })")
+    }
+
+    func testDraggingInboxTaskOntoGroupHeaderClassifiesIt() throws {
         continueAfterFailure = false
         let app = launch()
         let main = app.dialogs["Dotist"]
@@ -263,8 +523,12 @@ final class DotistUITests: XCTestCase {
         composer.typeText(title + "\n")
         let task = main.staticTexts[title]
         XCTAssertTrue(task.waitForExistence(timeout: 5))
-        let destination = main.staticTexts["工作"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        task.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.25, thenDragTo: destination)
+        let groupHeader = main.buttons["group-header:work"]
+        XCTAssertTrue(groupHeader.waitForExistence(timeout: 5))
+        let taskID = sql("SELECT id FROM tasks WHERE title='\(title)'")
+        XCTAssertFalse(taskID.isEmpty)
+        try performVerifiedTaskDrag(app, main: main, task: task, taskID: taskID,
+            end: CGPoint(x: groupHeader.frame.midX, y: groupHeader.frame.midY), operation: "classify")
         expectation(for: NSPredicate { _, _ in self.sql("SELECT category FROM tasks WHERE title='\(title)'") == "work" }, evaluatedWith: nil)
         waitForExpectations(timeout: 6)
         capture(main, name: "inbox-drag-classification")
@@ -284,8 +548,12 @@ final class DotistUITests: XCTestCase {
         composer.typeText("QA-cancel-drag\n")
         let task = main.staticTexts["QA-cancel-drag"]
         XCTAssertTrue(task.waitForExistence(timeout: 5))
-        task.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.25,
-            thenDragTo: main.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 160, dy: 18)))
+        let taskID = sql("SELECT id FROM tasks WHERE title='QA-cancel-drag'")
+        XCTAssertFalse(taskID.isEmpty)
+        try performVerifiedTaskDrag(app, main: main, task: task, taskID: taskID,
+            end: CGPoint(x: main.frame.minX + 160, y: main.frame.minY + 18), operation: "cancel")
+        XCTAssertEqual(sql("SELECT category FROM tasks WHERE id='\(taskID)'"), "inbox")
+        XCTAssertEqual(sql("SELECT COUNT(*) FROM tasks WHERE title='QA-cancel-drag'"), "1")
         composer.click()
         composer.typeText("QA-after-cancel\n")
         XCTAssertTrue(main.buttons["完成 QA-after-cancel"].waitForExistence(timeout: 5))

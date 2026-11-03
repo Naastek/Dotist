@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import XCTest
+import DotistCore
 @testable import DotistApp
 
 @MainActor
@@ -10,6 +11,86 @@ final class GroupHeaderRenderingTests: XCTestCase {
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
         DotistDesign.registerFonts(in: repo.appendingPathComponent(".cache/native-migration/fonts"))
+    }
+
+    private struct FullWidthInkReference: NSViewRepresentable {
+        let title: String
+        let language: String
+        let empty: Bool
+        func makeNSView(context: Context) -> GroupHeaderInkView { GroupHeaderInkView() }
+        func updateNSView(_ view: GroupHeaderInkView, context: Context) {
+            view.configure(title: title, font: DotistDesign.nativeFont(15, weight: .semibold, serif: true, language: language),
+                           symbol: "chevron.down", showsChevron: false,
+                           titleColor: NSColor(empty ? DotistDesign.faint : DotistDesign.ink))
+        }
+        func sizeThatFits(_ proposal: ProposedViewSize, nsView: GroupHeaderInkView, context: Context) -> CGSize? {
+            CGSize(width: 200, height: 30)
+        }
+    }
+
+    // A 2x intrinsic measurement followed by a 1x draw used to paint 工….
+    // Compare actual pixels, since AX still exposed the complete title.
+    func testShortTitlesPaintWholeGlyphsIn364PointMainList() async throws {
+        let savedFonts = DotistDesign.fontPreferences
+        defer { DotistDesign.fontPreferences = savedFonts }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-header-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
+        _ = try store.addTask(title: "Header fixture", category: "work")
+        var patch = DotistSettingsPatch(); patch.language = "zh-CN"
+        _ = try store.updateSettings(patch)
+        let model = try AppModel(store: store)
+        for cjk in ["noto-serif", "system"] {
+            for latin in ["newsreader", "system"] {
+                DotistDesign.fontPreferences = .init(serifLatin: latin, serifCjk: cjk)
+                let state = TaskPanelState(scope: "all")
+                for backingScale: CGFloat in [1, 2] {
+                    let fixture = NativeRenderingFixture(
+                        MainWindow(model: model, state: state, showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, collapse: {})
+                            .background(Color.white).environment(\.colorScheme, .light),
+                        size: CGSize(width: 364, height: 620), simulatedBackingScale: backingScale)
+                    defer { fixture.close() }
+                    for scale: CGFloat in [1, 2] {
+                        let bitmap = try await fixture.capture(scale: scale)
+                        let headers = fixture.descendants(GroupHeaderInkView.self)
+                        XCTAssertFalse(headers.isEmpty, "Fixture must render the real group list")
+                        XCTAssertEqual(headers.count, model.visibleGroups.count)
+                        for (header, group) in zip(headers, model.visibleGroups) {
+                            let reference = NativeRenderingFixture(
+                                FullWidthInkReference(title: group.name, language: model.language, empty: !model.tasks.contains { $0.category == group.id })
+                                    .background(Color.white).environment(\.colorScheme, .light),
+                                size: CGSize(width: 200, height: 30), simulatedBackingScale: backingScale)
+                            defer { reference.close() }
+                            let expected = try await reference.capture(scale: scale)
+                            let expectedView = try XCTUnwrap(reference.descendants(GroupHeaderInkView.self).first)
+                            let frame = fixture.host.convert(header.bounds, from: header)
+                            let referenceFrame = reference.host.convert(expectedView.bounds, from: expectedView)
+                            let actualInk = try XCTUnwrap(inkBounds(bitmap, x: frame.minX..<(frame.minX + header.titleInkFrame.width), y: frame.minY..<frame.maxY))
+                            let expectedInk = try XCTUnwrap(inkBounds(expected, x: referenceFrame.minX..<(referenceFrame.minX + expectedView.titleInkFrame.width), y: referenceFrame.minY..<referenceFrame.maxY))
+                            let message = "\(group.name), \(latin)/\(cjk), backing=\(backingScale)x, draw=\(scale)x"
+                            print("CONSTRAINED HEADER \(message): bounds=\(header.bounds), ink=\(actualInk), full=\(expectedInk)")
+                            XCTAssertEqual(actualInk.width, expectedInk.width, accuracy: 0.5 / scale, message)
+                            XCTAssertEqual(actualInk.height, expectedInk.height, accuracy: 0.5 / scale, message)
+                            // An ellipsis with a similar bounding box must also fail.
+                            var different = 0
+                            for y in 0..<Int(expectedInk.height * scale) {
+                                for x in 0..<Int(expectedInk.width * scale) {
+                                    func dark(_ image: NSBitmapImageRep, _ rect: CGRect) -> Bool {
+                                        guard let c = image.colorAt(x: Int(rect.minX * scale) + x, y: Int(rect.minY * scale) + y)?.usingColorSpace(.deviceRGB) else { return false }
+                                        return 1 - max(c.redComponent, c.greenComponent, c.blueComponent) > 0.2
+                                    }
+                                    if dark(bitmap, actualInk) != dark(expected, expectedInk) { different += 1 }
+                                }
+                            }
+                            XCTAssertEqual(different, 0, "Rendered glyph mask differs from full title: " + message)
+                        }
+                        if scale == 1 && backingScale == 2 && latin == "newsreader" && cjk == "noto-serif" {
+                            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: "/private/tmp/dotist-header-current.png"))
+                        }
+                    }
+                }
+            }
+        }
     }
 
     func testDisclosureSlotReservesBothDirectionsBeforeAnyAnimatedResize() throws {
@@ -84,10 +165,11 @@ final class GroupHeaderRenderingTests: XCTestCase {
     /// Scan the entire height and separate only by horizontal glyph ranges.
     /// The reference axis is the complete rendered title, not its cap height,
     /// its first word, a script sample, or a standalone ImageRenderer view.
-    private func inkBounds(_ image: NSBitmapImageRep, x: Range<CGFloat>) -> CGRect? {
+    private func inkBounds(_ image: NSBitmapImageRep, x: Range<CGFloat>, y: Range<CGFloat>? = nil) -> CGRect? {
         let scale = CGFloat(image.pixelsWide) / image.size.width
         var left = image.pixelsWide, right = -1, top = image.pixelsHigh, bottom = -1
-        for y in 0..<image.pixelsHigh {
+        let rows = y.map { max(0, Int(($0.lowerBound * scale).rounded(.up)))..<min(image.pixelsHigh, Int(($0.upperBound * scale).rounded(.down))) } ?? 0..<image.pixelsHigh
+        for y in rows {
             for column in max(0, Int((x.lowerBound * scale).rounded(.up)))..<min(image.pixelsWide, Int((x.upperBound * scale).rounded(.down))) {
                 // Use the same visible-ink definition as OpticalAlignment and
                 // PanelFeedbackRevision: RGB < .8 on the white fixture.

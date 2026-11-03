@@ -14,7 +14,7 @@ final class SettingsStore: @unchecked Sendable {
         frost: 35,
         toggleShortcut: "CommandOrControl+Alt+D",
         quickAddShortcut: "CommandOrControl+Alt+N",
-        settingsShortcut: "CommandOrControl+Alt+Comma",
+        settingsShortcut: "Command+Comma",
         viewsShortcut: "",
         trayMode: "icon",
         trayRotateSecs: 4,
@@ -56,7 +56,10 @@ final class SettingsStore: @unchecked Sendable {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         value = try decoder.decode(DotistSettings.self, from: JSONSerialization.data(withJSONObject: defaults.merging(stored) { _, new in new }))
-        value = try Self.normalized(value)
+        // Loading must not turn previously accepted explicit aliases into a
+        // startup failure, or silently change an explicitly stored binding.
+        value = try Self.normalized(value, validateShortcuts: false)
+        value = Self.withoutConflictingDefaults(value, stored: stored)
     }
 
     func current() -> DotistSettings { lock.withLock { value } }
@@ -101,6 +104,8 @@ final class SettingsStore: @unchecked Sendable {
         if let value = patch.quickAddShortcut { next.quickAddShortcut = value }
         if let value = patch.settingsShortcut { next.settingsShortcut = value }
         if let value = patch.viewsShortcut { next.viewsShortcut = value }
+        if let value = patch.searchShortcut { next.searchShortcut = value }
+        if let value = patch.shortcutScopes { next.shortcutScopes = value }
         if let value = patch.autoCheckUpdates { next.autoCheckUpdates = value }
         if let value = patch.autoInstallUpdates { next.autoInstallUpdates = value }
         if let value = patch.skippedUpdateVersion { next.skippedUpdateVersion = value }
@@ -118,7 +123,34 @@ final class SettingsStore: @unchecked Sendable {
         }
     }
 
-    private static func normalized(_ settings: DotistSettings) throws -> DotistSettings {
+    private static func shortcutBindings(_ settings: DotistSettings) -> [(key: String, field: String, value: String)] {
+        [("toggle", "toggle_shortcut", settings.toggleShortcut), ("quickAdd", "quick_add_shortcut", settings.quickAddShortcut),
+         ("settings", "settings_shortcut", settings.settingsShortcut), ("views", "views_shortcut", settings.viewsShortcut),
+         ("search", "search_shortcut", settings.searchShortcut)]
+    }
+
+    private static func withoutConflictingDefaults(_ settings: DotistSettings, stored: [String: Any]) -> DotistSettings {
+        var next = settings
+        let active = shortcutBindings(settings).filter { settings.shortcutScopes[$0.key] != "off" }
+        // Explicit values win. Omitted defaults then reserve keys in action order.
+        // Clear only an injected value, preserving even an explicit scope. This
+        // migration is in memory; initialization never writes the settings file.
+        var used = Set(active.filter { stored[$0.field] != nil }.compactMap { DotistShortcutIdentity($0.value) })
+        for binding in active where stored[binding.field] == nil {
+            guard let identity = DotistShortcutIdentity(binding.value), !used.insert(identity).inserted else { continue }
+            switch binding.key {
+            case "toggle": next.toggleShortcut = ""
+            case "quickAdd": next.quickAddShortcut = ""
+            case "settings": next.settingsShortcut = ""
+            case "views": next.viewsShortcut = ""
+            case "search": next.searchShortcut = ""
+            default: break
+            }
+        }
+        return next
+    }
+
+    private static func normalized(_ settings: DotistSettings, validateShortcuts: Bool = true) throws -> DotistSettings {
         var next = settings
         let fonts = next.fontPreferences
         next.fontSerifLatin = fonts.serifLatin
@@ -134,8 +166,16 @@ final class SettingsStore: @unchecked Sendable {
         let actions = ["toggle", "bubble", "quick", "settings", "show", "menu", "none"]
         guard actions.contains(next.trayLeftClick), actions.contains(next.trayRightClick) else { throw TaskStoreError("无效的点击操作") }
         guard filterIDs.contains(next.defaultFilter), filterIDs.contains(next.trayFilter) else { throw TaskStoreError("无效的筛选器") }
-        let shortcuts = [next.toggleShortcut, next.quickAddShortcut, next.settingsShortcut, next.viewsShortcut].filter { !$0.isEmpty }
-        guard Set(shortcuts).count == shortcuts.count else { throw TaskStoreError("不同的动作不能使用同一个快捷键") }
+        let defaults = Self.defaults.shortcutScopes
+        next.shortcutScopes = defaults
+        for (key, fallback) in defaults {
+            let scope = settings.shortcutScopes[key] ?? fallback
+            next.shortcutScopes[key] = ["global", "app", "off"].contains(scope) ? scope : fallback
+        }
+        let shortcuts = shortcutBindings(next).filter { next.shortcutScopes[$0.key] != "off" }.map(\.value)
+        if validateShortcuts, DotistShortcutIdentity.hasDuplicates(in: shortcuts) {
+            throw TaskStoreError("不同的动作不能使用同一个快捷键")
+        }
         next.opacity = min(next.opacity, 100)
         next.sideTabOpacity = min(next.sideTabOpacity, 100)
         next.frost = min(next.frost, 100)

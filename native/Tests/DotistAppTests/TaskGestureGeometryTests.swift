@@ -26,17 +26,14 @@ final class TaskGestureGeometryTests: XCTestCase {
         let motion = TaskDragMotion()
         var rows: [TaskListRowFrame] = []
         var ghost = CGRect.zero
-        let host = NSHostingView(rootView:
+        let fixture = NativeRenderingFixture(
             MainWindow(model: model, state: state, showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, collapse: {}, reorderRuntime: runtime, dragMotion: motion)
                 .onPreferenceChange(TaskListRowFrame.Key.self) { rows = $0 }
                 .onPreferenceChange(TaskGhostFrameKey.self) { ghost = $0 }
-                .frame(width: 364, height: 620)
+                .frame(width: 364, height: 620), size: CGSize(width: 364, height: 620)
         )
-        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 364, height: 620), styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        defer { window.close() }
-        window.contentView = host
-        window.makeKeyAndOrderFront(nil)
+        let host = fixture.host
+        defer { fixture.close() }
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(200))
         host.layoutSubtreeIfNeeded()
@@ -72,7 +69,7 @@ final class TaskGestureGeometryTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         host.layoutSubtreeIfNeeded()
         XCTAssertEqual(ghost.height, source.frame.height)
-        XCTAssertEqual(rows.first { $0.task.id == source.task.id }?.frame, source.frame, "The faded source remains in its original slot")
+        XCTAssertEqual(rows.first { $0.task.id == source.task.id }?.frame, source.frame, "The transparent source keeps its original gesture slot")
         XCTAssertEqual(scroll.contentView.bounds.origin, offset)
         XCTAssertEqual(Set(model.tasks.map(\.id)), Set(tasks.map(\.id)))
         runtime.drag = nil

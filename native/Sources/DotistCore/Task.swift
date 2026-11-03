@@ -116,6 +116,8 @@ public struct DotistSettings: Codable, Equatable, Sendable {
     public var quickAddShortcut: String
     public var settingsShortcut: String
     public var viewsShortcut: String
+    public var searchShortcut: String = "Command+K"
+    public var shortcutScopes: [String: String] = ["toggle": "global", "quickAdd": "global", "settings": "app", "views": "off", "search": "app"]
     public var trayMode: String
     public var trayRotateSecs: UInt16
     public var trayLeftClick: String
@@ -152,7 +154,7 @@ public struct DotistSettings: Codable, Equatable, Sendable {
 extension DotistSettings {
     private enum CodingKeys: String, CodingKey {
         case theme, language, fontSerifLatin, fontSansLatin, fontSerifCjk, fontSansCjk
-        case opacity, sideTabOpacity, frost, toggleShortcut, quickAddShortcut, settingsShortcut, viewsShortcut
+        case opacity, sideTabOpacity, frost, toggleShortcut, quickAddShortcut, settingsShortcut, viewsShortcut, searchShortcut, shortcutScopes
         case trayMode, trayRotateSecs, trayLeftClick, trayRightClick
         case alwaysOnTop, hoverExpand, showDock, showMenubar, idleFade, locked
         case windowWidth, windowHeight, idleOpacity, idleDelaySecs, idleFadeSecs
@@ -176,6 +178,8 @@ extension DotistSettings {
         quickAddShortcut = try values.decode(String.self, forKey: .quickAddShortcut)
         settingsShortcut = try values.decode(String.self, forKey: .settingsShortcut)
         viewsShortcut = try values.decode(String.self, forKey: .viewsShortcut)
+        searchShortcut = try values.decodeIfPresent(String.self, forKey: .searchShortcut) ?? "Command+K"
+        shortcutScopes = try values.decodeIfPresent([String: String].self, forKey: .shortcutScopes) ?? ["toggle": "global", "quickAdd": "global", "settings": "app", "views": "off", "search": "app"]
         trayMode = try values.decode(String.self, forKey: .trayMode)
         trayRotateSecs = try values.decode(UInt16.self, forKey: .trayRotateSecs)
         trayLeftClick = try values.decode(String.self, forKey: .trayLeftClick)
@@ -246,6 +250,8 @@ public struct DotistSettingsPatch: Encodable, Sendable {
     public var quickAddShortcut: String?
     public var settingsShortcut: String?
     public var viewsShortcut: String?
+    public var searchShortcut: String?
+    public var shortcutScopes: [String: String]?
     public var autoCheckUpdates: Bool?
     public var autoInstallUpdates: Bool?
     public var skippedUpdateVersion: String?

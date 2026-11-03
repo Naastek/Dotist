@@ -7,9 +7,10 @@ struct SettingsWindow: View {
     @ObservedObject var updater: NativeUpdater
     let beginShortcutCapture: () -> Void
     let endShortcutCapture: (UInt32, String?) -> Void
+    var changeShortcutScope: (String, String) -> Void = { _, _ in }
     let resetWindowSize: () -> Void
     @ObservedObject private var toolbar = ToolbarConfig.shared
-    @State private var active = SettingsModule.appearance
+    @State private var active: SettingsModule
     @State private var query = ""
     @State private var searchTarget: String?
     @State private var searchRequest = UUID()
@@ -18,6 +19,15 @@ struct SettingsWindow: View {
     @State private var draggedToolbarItem: ToolbarItem?
     @State private var toolbarTranslation: CGFloat = 0
     private enum Manager: String, Identifiable { case tags, groups; var id: String { rawValue } }
+    init(model: AppModel, updater: NativeUpdater, beginShortcutCapture: @escaping () -> Void, endShortcutCapture: @escaping (UInt32, String?) -> Void, changeShortcutScope: @escaping (String, String) -> Void = { _, _ in }, resetWindowSize: @escaping () -> Void, initialModule: SettingsModule = .appearance) {
+        self.model = model
+        self.updater = updater
+        self.beginShortcutCapture = beginShortcutCapture
+        self.endShortcutCapture = endShortcutCapture
+        self.changeShortcutScope = changeShortcutScope
+        self.resetWindowSize = resetWindowSize
+        _active = State(initialValue: initialModule)
+    }
     private func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular, serif: Bool = false) -> Font {
         DotistDesign.font(size, weight: weight, serif: serif, language: model.language)
     }
@@ -344,7 +354,7 @@ struct SettingsWindow: View {
     }
     private var shortcuts: some View {
         VStack(alignment: .leading, spacing: 22) {
-            settingsGroup("面板内") {
+            settingsGroup("面板内固定按键", footer: "这些按键在面板内固定生效，不可修改") {
                 infoRow("移动焦点", "↑↓")
                 infoRow("调整顺序", "⌥↑↓")
                 infoRow("缩进", "Tab")
@@ -353,11 +363,12 @@ struct SettingsWindow: View {
                 infoRow("取消", "Esc")
                 infoRow("完成 / 取消完成", model.text("空格"))
             }
-            settingsGroup("全局快捷键", footer: ["Command+Comma", "CommandOrControl+Comma"].contains(model.settings.settingsShortcut) ? "⌘, 仅在 Dotist 位于前台时打开设置。" : "") {
-                shortcutRow("显示 / 收起窗口", id: 1, value: model.settings.toggleShortcut)
-                shortcutRow("打开设置", id: 3, value: model.settings.settingsShortcut)
-                shortcutRow("打开任务视图", id: 4, value: model.settings.viewsShortcut)
-                shortcutRow("快速添加", id: 2, value: model.settings.quickAddShortcut)
+            settingsGroup("应用快捷键", footer: "全局在任意应用生效；仅 Dotist 只在本应用位于前台时生效。") {
+                shortcutRow("显示 / 收起窗口", id: 1, key: "toggle", value: model.settings.toggleShortcut)
+                shortcutRow("快速添加", id: 2, key: "quickAdd", value: model.settings.quickAddShortcut)
+                shortcutRow("打开搜索", id: 5, key: "search", value: model.settings.searchShortcut)
+                shortcutRow("打开任务视图", id: 4, key: "views", value: model.settings.viewsShortcut)
+                shortcutRow("打开设置", id: 3, key: "settings", value: model.settings.settingsShortcut)
             }
         }
     }
@@ -471,13 +482,41 @@ struct SettingsWindow: View {
             settingMenu(label, value: value, options: [("toggle", model.text("显示 / 收起窗口")), ("bubble", model.text("展开 / 收起悬浮球")), ("quick", model.text("快速添加")), ("settings", model.text("打开设置")), ("show", model.text("显示窗口")), ("menu", model.text("打开菜单")), ("none", model.text("无操作"))]) { selected in update { change(&$0, selected) } }
         }
     }
-    private func shortcutRow(_ label: String, id: UInt32, value: String) -> some View {
-        settingRow(label) {
-            ShortcutRecorder(value: value, label: model.text(label), empty: model.text("未设置"), recordingText: model.text("按下新的快捷键…"), language: model.language, begin: beginShortcutCapture, finish: { endShortcutCapture(id, $0) }).frame(width: 150, height: 28)
-            if !value.isEmpty {
-                Button { beginShortcutCapture(); endShortcutCapture(id, "") } label: { OpticalSymbol(name: "xmark", size: 11).frame(width: 24, height: 24) }
-                    .modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("清除")))
+    private func shortcutRow(_ label: String, id: UInt32, key: String, value: String) -> some View {
+        let scope = model.settings.shortcutScopes[key] ?? "app"
+        let scopeTitle = model.text(scope == "global" ? "全局" : scope == "off" ? "不启用" : "仅 Dotist")
+        return settingRow(label) {
+            Menu {
+                ForEach([("global", "全局"), ("app", "仅 Dotist"), ("off", "不启用")], id: \.0) { option, title in
+                    Button { changeShortcutScope(key, option) } label: {
+                        if option == scope { Label(model.text(title), systemImage: "checkmark") }
+                        else { Text(model.text(title)) }
+                    }
+                }
+            } label: {
+                // The native Menu bridge draws a label's symbol on the leading
+                // side, so the chevron is declared first to match what renders.
+                HStack(spacing: 6) {
+                    OpticalSymbol(name: "chevron.down", size: 8)
+                    OpticalText(title: scopeTitle, size: 13, language: model.language).lineLimit(1)
+                }
+                .foregroundStyle(DotistDesign.muted)
+                .frame(width: 96, alignment: .leading)
+                .contentShape(Rectangle())
+            }.menuStyle(.borderlessButton).menuIndicator(.hidden).modifier(DotistFocusRing())
+                .accessibilityLabel(Text(model.text("作用域")))
+                .accessibilityValue(Text(scopeTitle))
+                .accessibilityIdentifier("shortcut-scope:\(key)")
+            ShortcutRecorder(value: value, label: model.text(label), empty: model.text("未设置"), recordingText: model.text("按下新的快捷键…"), language: model.language, begin: beginShortcutCapture, finish: { endShortcutCapture(id, $0) }).frame(width: 130, height: 28)
+            // The clear slot keeps its width whether or not a shortcut is set,
+            // so the recorder column stays aligned across rows.
+            Button { beginShortcutCapture(); endShortcutCapture(id, "") } label: {
+                OpticalSymbol(name: "xmark", size: 10).frame(width: 22, height: 22).contentShape(Rectangle())
             }
+            .buttonStyle(.plain).foregroundStyle(DotistDesign.faint)
+            .opacity(value.isEmpty ? 0 : 1).disabled(value.isEmpty)
+            .modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("清除")))
+            .accessibilityIdentifier("shortcut-clear:\(key)")
         }
     }
     private func infoRow(_ label: String, _ value: String) -> some View {

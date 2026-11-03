@@ -69,11 +69,11 @@ final class TaskListIntrinsicLayoutTests: XCTestCase {
                 if let original = baselineGroups[group.id] { XCTAssertEqual(group.frame, original) }
             }
             // Section geometry includes its top padding. Consecutive sections
-            // must be contiguous; the next header starts after 20 pt of padding.
+            // must be contiguous; the next header starts after 8 pt of padding.
             for (a, b) in zip(sections, sections.dropFirst()) {
                 XCTAssertEqual(b.frame.minY - a.frame.maxY, 0, accuracy: 0.5)
                 if b.id != work.id {
-                    XCTAssertEqual(b.frame.height, 20 + 34, accuracy: 0.5, "Empty section = 20 pt gap + 34 pt header")
+                    XCTAssertEqual(b.frame.height, 8 + 34, accuracy: 0.5, "Empty section = 8 pt gap + 34 pt header")
                 }
             }
             if baseline.isEmpty { baseline = Dictionary(uniqueKeysWithValues: rows.map { ($0.task.id, $0.frame) }) }
@@ -85,7 +85,7 @@ final class TaskListIntrinsicLayoutTests: XCTestCase {
                 // The production header is 30 pt tall with its own 4 pt top
                 // padding. Measure its live ink inside the section's gap, so a
                 // stretched header cannot hide behind a correct section frame.
-                let top = section.frame.minY + (section.id == work.id ? 6 : 20) + 4
+                let top = section.frame.minY + (section.id == work.id ? 6 : 8) + 4
                 let mask = CGRect(x: 16, y: top, width: 200, height: 30)
                 let center = try inkCenter(rep, in: mask)
                 print("wQ1 panel=\(height) header=\(section.id) mask=\(mask) inkCenterY=\(center)")
