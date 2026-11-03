@@ -529,6 +529,32 @@ struct GanttRowLayout: Layout {
     }
 }
 
+/// Keep the live accessibility policy and uptime clock together. Debug fixtures
+/// can freeze layout time without changing the desktop's accessibility settings.
+@MainActor
+enum LayoutMotionInputs {
+    #if DEBUG
+    struct Override {
+        var now: @MainActor () -> TimeInterval
+        var reduceMotion: Bool
+    }
+    static var testOverride: Override?
+    #endif
+
+    static var now: TimeInterval {
+        #if DEBUG
+        if let testOverride { return testOverride.now() }
+        #endif
+        return ProcessInfo.processInfo.systemUptime
+    }
+    static func shouldReduceMotion(_ environmentValue: Bool) -> Bool {
+        #if DEBUG
+        if let testOverride { return testOverride.reduceMotion }
+        #endif
+        return environmentValue || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+}
+
 /// A run-loop clock also advances in unordered hosting windows. Retarget from
 /// the presented fraction, so rapid reversals never restart at an endpoint.
 @MainActor
@@ -565,12 +591,12 @@ final class DisclosureMotion: ObservableObject {
             return
         }
         let start = fraction
-        let began = ProcessInfo.processInfo.systemUptime
+        let began = LayoutMotionInputs.now
         let duration = 0.22 * Double(abs(target - start))
         let clock = Timer(timeInterval: 1 / 60, repeats: true) { [weak self] timer in
             MainActor.assumeIsolated {
                 guard let self else { timer.invalidate(); return }
-                let t = min(1, (ProcessInfo.processInfo.systemUptime - began) / duration)
+                let t = min(1, (LayoutMotionInputs.now - began) / duration)
                 let eased = t * t * (3 - 2 * t)
                 var transaction = Transaction(); transaction.animation = nil
                 withTransaction(transaction) { self.fraction = start + (target - start) * eased }
@@ -629,7 +655,7 @@ struct CollapsibleTaskSection<Content: View>: View {
             if !interactive { frames.removeAll() }
         }
         .onAppear { motion.setExpanded(expanded, reduceMotion: true) }
-        .onChange(of: expanded) { value in motion.setExpanded(value, reduceMotion: reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) }
+        .onChange(of: expanded) { value in motion.setExpanded(value, reduceMotion: LayoutMotionInputs.shouldReduceMotion(reduceMotion)) }
         .onChange(of: reduceMotion) { value in if value { motion.setExpanded(expanded, reduceMotion: true) } }
         .onDisappear { motion.stop() }
     }

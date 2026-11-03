@@ -413,11 +413,11 @@ final class TaskInsertionMotion: ObservableObject {
         guard !reduceMotion, heights != target else { publish(target); return }
         let start = heights
         let keys = Set(start.keys).union(target.keys)
-        let began = ProcessInfo.processInfo.systemUptime
+        let began = LayoutMotionInputs.now
         let clock = Timer(timeInterval: 1 / 60, repeats: true) { [weak self] timer in
             MainActor.assumeIsolated {
                 guard let self else { timer.invalidate(); return }
-                let t = min(1, (ProcessInfo.processInfo.systemUptime - began) / Self.duration)
+                let t = min(1, (LayoutMotionInputs.now - began) / Self.duration)
                 let eased = CGFloat(1 - pow(1 - t, 3))
                 self.publish(t >= 1 ? target : Dictionary(uniqueKeysWithValues: keys.map { key in
                     let from = start[key, default: 0], to = target[key, default: 0]

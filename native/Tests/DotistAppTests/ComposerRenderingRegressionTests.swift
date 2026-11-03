@@ -70,6 +70,24 @@ final class NativeRenderingFixture<Content: View> {
     }
 }
 
+/// Advances the real layout timers on explicit logical time. Slow AX queries
+/// and bitmap captures cannot consume the transition before it is inspected.
+@MainActor
+final class LayoutMotionTestClock {
+    private var time: TimeInterval = 1_000
+    private let saved = LayoutMotionInputs.testOverride
+    init(reduceMotion: Bool = false) {
+        LayoutMotionInputs.testOverride = .init(now: { [unowned self] in self.time }, reduceMotion: reduceMotion)
+    }
+    func advance(by interval: TimeInterval) async throws {
+        time += interval
+        // Let the unchanged production run-loop timers deliver this instant.
+        // Logical time stays fixed even if this task resumes much later.
+        try await Task.sleep(for: .milliseconds(25))
+    }
+    func restore() { LayoutMotionInputs.testOverride = saved }
+}
+
 @MainActor
 final class ComposerRenderingRegressionTests: XCTestCase {
     override func setUp() async throws {

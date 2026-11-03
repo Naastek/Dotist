@@ -201,6 +201,8 @@ final class FeedbackFourRegressionTests: XCTestCase {
         XCTAssertTrue(unsafeBitCast(method, to: Press.self)(object, selector))
     }
     func testActualTaskSectionsHaveIntermediateFrames() async throws {
+        let clock = LayoutMotionTestClock()
+        defer { clock.restore() }
         let animationEvidence = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".cache/feedback-sampling-final/frames")
         try FileManager.default.createDirectory(at: animationEvidence, withIntermediateDirectories: true)
@@ -278,7 +280,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
             var positions: [CGFloat] = []
             for index in 0...10 {
                 if index == 1 { try press(button) }
-                if index > 0 { try await Task.sleep(for: .milliseconds(18)) }
+                if index > 0 { try await clock.advance(by: 0.018) }
                 let bitmap = try await fixture.capture(scale: captureScale)
                 let y = fixture.host.convert(below.bounds, from: below).minY
                 positions.append(y)
@@ -296,7 +298,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
             // Reverse an expansion before it reaches the endpoint. No endpoint
             // assignment may precede the new clock's first sample.
             try press(button)
-            try await Task.sleep(for: .milliseconds(55))
+            try await clock.advance(by: 0.055)
             _ = try await fixture.capture(scale: captureScale)
             XCTAssertEqual(header.titleInkFrame, titleFrame)
             let before = header.disclosureProgress
@@ -306,7 +308,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
             _ = try await fixture.capture(scale: captureScale)
             XCTAssertGreaterThan(retargets, 0)
             reversing = false
-            try await Task.sleep(for: .milliseconds(40))
+            try await clock.advance(by: 0.040)
             _ = try await fixture.capture(scale: captureScale)
             XCTAssertLessThan(header.disclosureProgress, try XCTUnwrap(retargetFractions.min()))
             func waitForEnd(_ target: CGFloat) async throws {
@@ -314,7 +316,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
                 repeat {
                     _ = try await fixture.capture(scale: captureScale)
                     if header.disclosureProgress == target && !lastClock.values.contains(where: \.animating) { return }
-                    try await Task.sleep(for: .milliseconds(5))
+                    try await clock.advance(by: 0.020)
                 } while ProcessInfo.processInfo.systemUptime < deadline
                 XCTFail("Disclosure did not deliver endpoint \(target)")
             }
@@ -334,6 +336,8 @@ final class FeedbackFourRegressionTests: XCTestCase {
         }
     }
     func testClosingGroupRemovesInteractionGeometryAndAXBeforeAnimationFinishes() async throws {
+        let clock = LayoutMotionTestClock()
+        defer { clock.restore() }
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".cache/feedback-sampling-final")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -385,7 +389,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
                 await Task.yield()
                 fixture.host.layoutSubtreeIfNeeded()
                 if condition() { return }
-                try await Task.sleep(for: .milliseconds(5))
+                try await clock.advance(by: 0.020)
             } while ProcessInfo.processInfo.systemUptime < deadline
             XCTFail("Presentation did not finish: \(phase), active=\(active.count), rows=\(rows.count)")
         }

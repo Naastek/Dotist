@@ -85,6 +85,8 @@ final class TaskReorderPresentationTests: XCTestCase {
     }
 
     func testCrossGroupGiveWayMovesNativeHeadingsAndRowsTogetherAtIntermediateHeights() async throws {
+        let clock = LayoutMotionTestClock()
+        defer { clock.restore() }
         for size in [CGSize(width: 364, height: 620), CGSize(width: 320, height: 540)] {
             let scene = try Scene(height: size.height, width: size.width)
             defer { scene.close() }
@@ -99,7 +101,7 @@ final class TaskReorderPresentationTests: XCTestCase {
             scene.runtime.send(.move(source.task.id, point))
             let fullHeight = try XCTUnwrap(scene.runtime.drag).startFrame.height
             XCTAssertTrue(scene.runtime.insertionMotion.heights.isEmpty, "Retarget must start from presented layout")
-            try await Task.sleep(for: .milliseconds(25))
+            try await clock.advance(by: 0.025)
             _ = try await scene.capture("motion-during")
             let intermediate = try scene.row(sibling.task.id).frame.minY - sibling.frame.minY
             let headerDelta = try XCTUnwrap(scene.headers().max { $0.minY < $1.minY }).minY - header.minY
@@ -109,6 +111,15 @@ final class TaskReorderPresentationTests: XCTestCase {
             XCTAssertEqual(headerDelta, intermediate, accuracy: 0.5, "Native heading and SwiftUI row share every layout tick")
             XCTAssertEqual(scene.ghost.height, fullHeight, "Destination metadata retains the full reserved height")
             scene.assertNoInFlowHeaderOverlap()
+            // A slow AX/bitmap operation must not silently consume the rest of
+            // this logical frame. Inspect the real layout after a wall-clock
+            // pause longer than the production transition's whole duration.
+            let heldRow = try scene.row(sibling.task.id).frame
+            let heldHeader = try XCTUnwrap(scene.headers().max { $0.minY < $1.minY })
+            try await Task.sleep(for: .milliseconds(150))
+            _ = try await scene.capture("motion-held")
+            XCTAssertEqual(try scene.row(sibling.task.id).frame, heldRow)
+            XCTAssertEqual(try XCTUnwrap(scene.headers().max { $0.minY < $1.minY }), heldHeader)
             scene.runtime.send(.move(source.task.id, point))
             XCTAssertEqual(scene.runtime.drag?.target?.beforeID, scene.life[1].id)
 
@@ -117,11 +128,11 @@ final class TaskReorderPresentationTests: XCTestCase {
             let presented = scene.runtime.insertionMotion.heights
             scene.runtime.send(.move(source.task.id, start))
             XCTAssertEqual(scene.runtime.insertionMotion.heights, presented)
-            try await Task.sleep(for: .milliseconds(20))
+            try await clock.advance(by: 0.020)
             _ = try await scene.capture("motion-reversal")
             scene.assertNoInFlowHeaderOverlap()
             scene.runtime.send(.move(source.task.id, point))
-            try await Task.sleep(for: .milliseconds(150))
+            try await clock.advance(by: 0.150)
             _ = try await scene.capture("motion-after")
             XCTAssertEqual(try scene.row(sibling.task.id).frame.minY - sibling.frame.minY, fullHeight, accuracy: 0.5)
             scene.assertNoInFlowHeaderOverlap()
@@ -131,6 +142,8 @@ final class TaskReorderPresentationTests: XCTestCase {
 
     func testSameGroupDisplacementAndReducedMotionUseTheSameImmediateLayout() async throws {
         for reduced in [false, true] {
+            let clock = LayoutMotionTestClock(reduceMotion: reduced)
+            defer { clock.restore() }
             let scene = try Scene(height: 620)
             defer { scene.close() }
             _ = try await scene.capture("same-group-before-\(reduced)")
@@ -140,10 +153,10 @@ final class TaskReorderPresentationTests: XCTestCase {
             scene.runtime.send(.begin(source.task.id, CGPoint(x: 100, y: source.frame.midY)))
             scene.runtime.send(.move(source.task.id, point))
             if reduced {
-                // SwiftUI exposes the OS preference as read-only. Exercise the
-                // same clock input without changing system accessibility settings.
-                scene.runtime.insertionMotion.retarget(slot: .before(destination.task.id), height: source.frame.height, reduceMotion: true)
-            } else { try await Task.sleep(for: .milliseconds(25)) }
+                XCTAssertEqual(scene.runtime.insertionMotion.heights,
+                               [.before(destination.task.id): source.frame.height],
+                               "The real input handler must resolve Reduce Motion immediately")
+            } else { try await clock.advance(by: 0.025) }
             _ = try await scene.capture("same-group-during-\(reduced)")
             let displacement = try scene.row(destination.task.id).frame.minY - destination.frame.minY
             if reduced {

@@ -11,21 +11,7 @@ minimum="$(python3 -c 'import json; print(json.load(open("native/app.json"))["mi
 mkdir -p "$cache_dir/fonts" "$scratch_dir" "$project_dir/.cache/native-consolidation/clang" "$project_dir/.cache/native-consolidation/swift-modules"
 export CLANG_MODULE_CACHE_PATH="$project_dir/.cache/native-consolidation/clang"
 export SWIFTPM_MODULECACHE_OVERRIDE="$project_dir/.cache/native-consolidation/swift-modules"
-font_version=6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec
-while read -r name checksum path license_checksum license_url; do
-  file="$cache_dir/fonts/$name.ttf"
-  if [[ "$path" == https://* ]]; then
-    font_url="$path"
-  else
-    font_url="https://raw.githubusercontent.com/google/fonts/$font_version/ofl/$path"
-    license_url="https://raw.githubusercontent.com/google/fonts/$font_version/ofl/${path%%/*}/OFL.txt"
-  fi
-  if [[ ! -f "$file" ]]; then curl --fail --location --silent --show-error "$font_url" --output "$file"; fi
-  printf '%s  %s\n' "$checksum" "$file" | shasum -a 256 -c - >/dev/null
-  license="$cache_dir/fonts/$name-OFL.txt"
-  if [[ ! -f "$license" ]]; then curl --fail --location --silent --show-error "$license_url" --output "$license"; fi
-  if [[ -n "$license_checksum" ]]; then printf '%s  %s\n' "$license_checksum" "$license" | shasum -a 256 -c - >/dev/null; fi
-done < native/scripts/fonts.tsv
+bash native/scripts/prepare-fonts.sh >/dev/null
 sparkle_framework="$(bash native/scripts/prepare-sparkle.sh)"
 export DOTIST_SPARKLE_XCFRAMEWORK='../.cache/native-migration/deps/Sparkle-2.9.6/Sparkle.xcframework'
 swift build --disable-sandbox --build-system native --triple "arm64-apple-macosx$minimum" --sdk "$sdk_path" --configuration "$profile" --package-path native --scratch-path "$scratch_dir" --disable-automatic-resolution

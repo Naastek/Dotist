@@ -400,7 +400,7 @@ struct MainWindow: View {
         ghostFrame = TaskInsertionFramesKey.logicalFrame(slot: slot, height: drag?.startFrame.height ?? 0, frames: insertionFrames)
         guard drag != nil else { reorderRuntime.insertionMotion.reset(); return }
         reorderRuntime.insertionMotion.retarget(slot: slot, height: drag?.startFrame.height ?? 0,
-            reduceMotion: reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+            reduceMotion: LayoutMotionInputs.shouldReduceMotion(reduceMotion))
     }
 
     private func emptyGroupGhost(_ id: String, region: String) -> some View {
@@ -1608,7 +1608,7 @@ struct GroupCollapseHeader: View {
             }.frame(height: 30).contentShape(Rectangle())
         }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(title))
             .onAppear { motion.setExpanded(!collapsed, reduceMotion: true) }
-            .onChange(of: collapsed) { value in motion.setExpanded(!value, reduceMotion: reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) }
+            .onChange(of: collapsed) { value in motion.setExpanded(!value, reduceMotion: LayoutMotionInputs.shouldReduceMotion(reduceMotion)) }
             .onChange(of: reduceMotion) { value in if value { motion.setExpanded(!collapsed, reduceMotion: true) } }
             .onDisappear { motion.stop() }
     }
