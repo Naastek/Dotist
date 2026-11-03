@@ -51,45 +51,47 @@ final class ComposerAlignmentTests: XCTestCase {
                     ComposerCalendarIcon(language: language)
                 }.padding(.leading, 16).padding(.trailing, 11).frame(width: 364, height: 52)
                     .foregroundStyle(Color.black).background(Color.white).environment(\.colorScheme, .light)
-                let fixture = NativeRenderingFixture(content, size: CGSize(width: 364, height: 52))
-                defer { fixture.close() }
-                let field = try XCTUnwrap(fixture.descendants(ComposerTextField.self).first)
-                let popup = try XCTUnwrap(fixture.descendants(NSPopUpButton.self).first)
-                let nativeMenu = try XCTUnwrap(popup.menu)
-                let itemTitles = nativeMenu.items.map(\.title)
-                let itemActions = nativeMenu.items.map(\.action)
-                let selectedItem = popup.selectedItem
-                let attributedTitle = NSAttributedString(attributedString: popup.attributedTitle)
-                for focused in [false, true] {
-                    XCTAssertTrue(fixture.window.makeFirstResponder(focused ? field : nil))
-                    if focused { try XCTUnwrap(field.currentEditor() as? NSTextView).insertionPointColor = .clear }
-                    for scale: CGFloat in [1, 2] {
-                        let image = try await fixture.capture(scale: scale)
-                        XCTAssertTrue(popup.menu === nativeMenu)
-                        XCTAssertEqual(nativeMenu.items.map(\.title), itemTitles)
-                        XCTAssertEqual(nativeMenu.items.map(\.action), itemActions)
-                        XCTAssertTrue(popup.selectedItem === selectedItem)
-                        XCTAssertTrue(popup.attributedTitle.isEqual(to: attributedTitle), "Optical placement must preserve the native menu title and attributes")
-                        let input = fixture.host.convert(field.bounds, from: field)
-                        let ranges = [CGFloat(16)..<(input.minX - 8), input.minX..<input.maxX, CGFloat(330)..<351]
-                        var centers: [CGFloat] = []
-                        for (index, range) in ranges.enumerated() {
-                            var first = image.pixelsHigh, last = -1
-                            for y in 0..<image.pixelsHigh {
-                                for x in max(0, Int(ceil(range.lowerBound * scale)))..<min(image.pixelsWide, Int(floor(range.upperBound * scale))) {
-                                    guard let c = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
-                                          c.alphaComponent > 0.1, max(c.redComponent, c.greenComponent, c.blueComponent) < 0.8 else { continue }
-                                    first = min(first, y); last = max(last, y)
+                for backing: CGFloat in [1, 2] {
+                    let fixture = NativeRenderingFixture(content, size: CGSize(width: 364, height: 52), simulatedBackingScale: backing)
+                    defer { fixture.close() }
+                    let field = try XCTUnwrap(fixture.descendants(ComposerTextField.self).first)
+                    let popup = try XCTUnwrap(fixture.descendants(NSPopUpButton.self).first)
+                    let nativeMenu = try XCTUnwrap(popup.menu)
+                    let itemTitles = nativeMenu.items.map(\.title)
+                    let itemActions = nativeMenu.items.map(\.action)
+                    let selectedItem = popup.selectedItem
+                    let attributedTitle = NSAttributedString(attributedString: popup.attributedTitle)
+                    for focused in [false, true] {
+                        XCTAssertTrue(fixture.window.makeFirstResponder(focused ? field : nil))
+                        if focused { try XCTUnwrap(field.currentEditor() as? NSTextView).insertionPointColor = .clear }
+                        for scale: CGFloat in [1, 2] {
+                            let image = try await fixture.capture(scale: scale)
+                            XCTAssertTrue(popup.menu === nativeMenu)
+                            XCTAssertEqual(nativeMenu.items.map(\.title), itemTitles)
+                            XCTAssertEqual(nativeMenu.items.map(\.action), itemActions)
+                            XCTAssertTrue(popup.selectedItem === selectedItem)
+                            XCTAssertTrue(popup.attributedTitle.isEqual(to: attributedTitle), "Optical placement must preserve the native menu title and attributes")
+                            let input = fixture.host.convert(field.bounds, from: field)
+                            let ranges = [CGFloat(16)..<(input.minX - 8), input.minX..<input.maxX, CGFloat(330)..<351]
+                            var centers: [CGFloat] = []
+                            for (index, range) in ranges.enumerated() {
+                                var first = image.pixelsHigh, last = -1
+                                for y in 0..<image.pixelsHigh {
+                                    for x in max(0, Int(ceil(range.lowerBound * scale)))..<min(image.pixelsWide, Int(floor(range.upperBound * scale))) {
+                                        guard let c = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                                              c.alphaComponent > 0.1, max(c.redComponent, c.greenComponent, c.blueComponent) < 0.8 else { continue }
+                                        first = min(first, y); last = max(last, y)
+                                    }
                                 }
+                                XCTAssertGreaterThanOrEqual(last, first, "Each native component must contain ink")
+                                let center = CGFloat(first + last + 1) / (2 * scale)
+                                centers.append(center)
+                                // The group name is aligned by shared text baseline with the input, so its
+                                // ink center may differ from the input's by the two faces' glyph proportions.
+                                XCTAssertEqual(center, 26, accuracy: 1.5, "\(serif), \(title), focus=\(focused), capture=\(scale)x, backing=\(fixture.window.backingScaleFactor)x")
                             }
-                            XCTAssertGreaterThanOrEqual(last, first, "Each native component must contain ink")
-                            let center = CGFloat(first + last + 1) / (2 * scale)
-                            centers.append(center)
-                            // The group name is aligned by shared text baseline with the input, so its
-                            // ink center may differ from the input's by the two faces' glyph proportions.
-                            XCTAssertEqual(center, 26, accuracy: 1.5, "\(serif), \(title), focus=\(focused), capture=\(scale)x, backing=\(fixture.window.backingScaleFactor)x")
+                            XCTAssertLessThanOrEqual(try XCTUnwrap(centers.max()) - XCTUnwrap(centers.min()), 3.0, "Whole composer must share its visual axis: \(centers), \(serif), \(title), \(scale)x")
                         }
-                        XCTAssertLessThanOrEqual(try XCTUnwrap(centers.max()) - XCTUnwrap(centers.min()), 3.0, "Whole composer must share its visual axis: \(centers), \(serif), \(title), \(scale)x")
                     }
                 }
             }

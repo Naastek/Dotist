@@ -255,12 +255,14 @@ final class TaskReorderPresentationTests: XCTestCase {
             target: drag.target, region: drag.region, ghostBeforeID: drag.ghostBeforeID, ghostAfterID: drag.ghostAfterID,
             targetIsEmpty: drag.targetIsEmpty, rootIDs: drag.rootIDs, sourceDepth: drag.sourceDepth,
             subtreeHeight: drag.subtreeHeight, initialTarget: drag.initialTarget)
-        for _ in 0..<30 where scene.ghost.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+        for _ in 0..<30 {
             _ = try await scene.capture("duplicates-inflow")
+            if !scene.ghost.isEmpty && scene.gaps.values.contains(scene.ghost) { break }
+            try await Task.sleep(for: .milliseconds(10))
         }
         let image = try await scene.capture("duplicates-inflow")
         XCTAssertFalse(scene.ghost.isEmpty)
+        XCTAssertTrue(scene.gaps.values.contains(scene.ghost), "The insertion space must finish opening before inspecting its full area")
         for rect in [source.frame, try scene.row(scene.child.id).frame, scene.ghost] {
             var ink = 0
             for y in Int(rect.minY * 2)..<Int(rect.maxY * 2) {

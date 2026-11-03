@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import SwiftUI
 
 enum ComposerMetrics {
@@ -20,16 +21,15 @@ enum ComposerMetrics {
     }
 }
 
-/// Menu extracts text attributes but discards view offsets. Give that bridge a
-/// native template image whose visible ink is centered in the complete row;
-/// neither the primary font's line box nor a neighboring field positions it.
+/// Menu discards view offsets. A native template image preserves the input's
+/// baseline while letting the serif label retain its own glyph proportions.
 struct ComposerGroupLabel: View {
     @ObservedObject private var typography = DotistTypography.shared
     @Environment(\.displayScale) private var displayScale
     @Environment(\.colorScheme) private var scheme
     let title: String
     let language: String
-    /// The input's reference run (its placeholder), so both share one baseline.
+    /// Preview text never changes the fixed baseline or the cached label raster.
     var sample = "中文任务"
     private static let images: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
@@ -39,14 +39,23 @@ struct ComposerGroupLabel: View {
 
     private func image(font: NSFont) -> NSImage {
         let scale = max(1, displayScale)
-        let key = "\(sample)|\(DotistDesign.fontCacheKey)|\(font.fontDescriptor)|\(title)|\(scale)|\(scheme)" as NSString
+        let key = "\(DotistDesign.fontCacheKey)|\(font.fontDescriptor)|\(title)|\(scale)|\(scheme)" as NSString
         if let image = Self.images.object(forKey: key) { return image }
         let text = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: NSColor(DotistDesign.muted)])
         // The group name and the typed task share one text baseline, taken from
         // the input's own line geometry; ink-centering would let the bold serif
         // sit off the regular face beside it.
         let inputFont = DotistDesign.nativeFont(ComposerMetrics.fontSize, language: language)
-        let baseline = TextLineGeometry(font: inputFont, in: CGRect(x: 0, y: 0, width: 100, height: ComposerMetrics.rowHeight), sample: "Hx").baseline
+        let inputCell = ComposerTextFieldCell(textCell: "")
+        inputCell.font = inputFont
+        inputCell.opticalSample = "Hx"
+        inputCell.placeholderAttributedString = NSAttributedString(string: "Hx", attributes: [
+            .font: inputFont, .foregroundColor: NSColor(DotistDesign.faint)
+        ])
+        var baseline: CGFloat = 0
+        NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance {
+            baseline = inputCell.textBaseline(in: CGRect(x: 0, y: 0, width: 100, height: ComposerMetrics.rowHeight), scale: scale)
+        }
         let size = CGSize(width: max(1, ceil(text.size().width)), height: ComposerMetrics.rowHeight)
         guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: max(1, Int(ceil(size.width * scale))),
             pixelsHigh: Int(size.height * scale), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
@@ -56,9 +65,13 @@ struct ComposerGroupLabel: View {
         NSGraphicsContext.current = graphics
         graphics.cgContext.clear(CGRect(x: 0, y: 0, width: bitmap.pixelsWide, height: bitmap.pixelsHigh))
         graphics.cgContext.scaleBy(x: scale, y: scale)
-        // Bitmap contexts are y-up; the line box's bottom sits |descender| below its baseline.
-        let y = ((size.height - baseline + font.descender) * scale).rounded() / scale
-        NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance { text.draw(at: CGPoint(x: 0, y: y)) }
+        // Core Text positions glyphs at a baseline, without NSString's separate
+        // line-origin rounding or the serif face's descender moving the label.
+        graphics.cgContext.textMatrix = .identity
+        graphics.cgContext.textPosition = CGPoint(x: 0, y: size.height - baseline)
+        NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance {
+            CTLineDraw(CTLineCreateWithAttributedString(text), graphics.cgContext)
+        }
         NSGraphicsContext.restoreGraphicsState()
         let image = bitmap.cgImage.map { NSImage(cgImage: $0, size: size) } ?? NSImage(size: size)
         image.isTemplate = true
@@ -96,9 +109,13 @@ final class ComposerTextFieldCell: NSTextFieldCell, NSLayoutManagerDelegate {
     private var measurementKey = ""
     private var inkOffset: CGFloat = 0
 
-    private func lineGeometry(in rect: CGRect) -> (rect: CGRect, baseline: CGFloat) {
+    func textBaseline(in rect: CGRect, scale: CGFloat) -> CGFloat {
+        lineGeometry(in: rect, rasterScale: scale).baseline
+    }
+
+    private func lineGeometry(in rect: CGRect, rasterScale: CGFloat? = nil) -> (rect: CGRect, baseline: CGFloat) {
         guard let font else { return (rect, rect.midY) }
-        let scale = controlView?.window?.backingScaleFactor ?? 1
+        let scale = rasterScale ?? controlView?.window?.backingScaleFactor ?? 1
         let color = stringValue.isEmpty
             ? (placeholderAttributedString.flatMap { $0.length > 0 ? $0.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor : nil } ?? NSColor(DotistDesign.faint))
             : (textColor ?? NSColor(DotistDesign.ink))

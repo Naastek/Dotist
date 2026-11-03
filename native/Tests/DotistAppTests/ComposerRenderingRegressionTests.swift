@@ -302,6 +302,12 @@ final class ComposerRenderingRegressionTests: XCTestCase {
                     let a = NativeRenderingFixture(FieldHost(field: actual).frame(height: height).background(Color.white), size: CGSize(width: 280, height: height))
                     let b = NativeRenderingFixture(FieldHost(field: reference).frame(height: height).background(Color.white), size: CGSize(width: 280, height: height))
                     defer { a.close(); b.close() }
+                    // Compare two independent native painters at the same line
+                    // origin. SwiftUI centers the stock field's intrinsic height,
+                    // which can otherwise introduce a half-point raster phase.
+                    let actualLine = a.host.convert(actual.cell!.drawingRect(forBounds: actual.bounds), from: actual)
+                    let referenceLine = b.host.convert(reference.cell!.drawingRect(forBounds: reference.bounds), from: reference)
+                    b.host.frame.origin.y += actualLine.minY - referenceLine.minY
                     let alignment = actual.alignmentRect(forFrame: actual.frame)
                     XCTAssertEqual(alignment.height, height, accuracy: 0.01, "Native line padding must preserve the SwiftUI row")
                     XCTAssertNotNil(actual.hitTest(CGPoint(x: alignment.midX, y: alignment.midY)))
@@ -350,6 +356,37 @@ final class ComposerRenderingRegressionTests: XCTestCase {
         }
         try captures.joined(separator: "\n").write(to: directory.appendingPathComponent("capture-scales.csv"), atomically: true, encoding: .utf8)
         print("Native input artifacts: \(directory.path); actual screen backing=\(String(describing: NSScreen.main?.backingScaleFactor)). Window backing, bitmap size and draw-context scale are recorded separately.")
+    }
+
+    func testFrenchPlaceholderMatchesNativePainterAtBothBackingScales() async throws {
+        let saved = DotistDesign.fontPreferences
+        defer { DotistDesign.fontPreferences = saved }
+        DotistDesign.fontPreferences = .init(sansLatin: "system")
+        for backing: CGFloat in [1, 2] {
+            let actual = field(value: "", placeholder: "Notez quelque chose", reference: false, size: 14, language: "fr")
+            let reference = field(value: "", placeholder: "Notez quelque chose", reference: true, size: 14, language: "fr")
+            let a = NativeRenderingFixture(FieldHost(field: actual).frame(height: 24).background(Color.white),
+                size: CGSize(width: 280, height: 24), simulatedBackingScale: backing)
+            let b = NativeRenderingFixture(FieldHost(field: reference).frame(height: 24).background(Color.white),
+                size: CGSize(width: 280, height: 24), simulatedBackingScale: backing)
+            defer { a.close(); b.close() }
+            let actualLine = a.host.convert(actual.cell!.drawingRect(forBounds: actual.bounds), from: actual)
+            let referenceLine = b.host.convert(reference.cell!.drawingRect(forBounds: reference.bounds), from: reference)
+            b.host.frame.origin.y += actualLine.minY - referenceLine.minY
+            for focused in [false, true, false] {
+                for (fixture, field) in [(a, actual as NSTextField), (b, reference)] {
+                    XCTAssertTrue(fixture.window.makeFirstResponder(focused ? field : nil))
+                    if focused { try XCTUnwrap(field.currentEditor() as? NSTextView).insertionPointColor = .clear }
+                }
+                for scale: CGFloat in [1, 2] {
+                    let expected = try await b.capture(scale: scale)
+                    let observed = try await a.capture(scale: scale)
+                    try assertSingleNativeRun(observed, reference: expected,
+                        fieldFrame: a.host.convert(actual.bounds, from: actual), scale: scale, material: false,
+                        backingScale: backing, message: "French placeholder, backing=\(backing), capture=\(scale), focused=\(focused)")
+                }
+            }
+        }
     }
 
     func testFractionalRasterPhaseChangesContourCoverageWithoutChangingShape() throws {
