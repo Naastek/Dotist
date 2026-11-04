@@ -379,7 +379,12 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         parent.isReleasedWhenClosed = false
         defer { parent.close() }
         let motion = PanelMotion(model: model, panel: parent, size: parent.frame.size, title: { "test" })
-        let controller = SideTabsController(parent: parent, model: model, state: TaskPanelState(), motion: motion)
+        var environment = SideTabsController.Environment()
+        environment.visible = { _ in true }
+        environment.reduceMotion = { true }
+        environment.desktopEvents = false
+        environment.mouse = { CGPoint(x: -10_000, y: -10_000) }
+        let controller = SideTabsController(parent: parent, model: model, state: TaskPanelState(), motion: motion, environment: environment)
         defer { controller.stop() }
         let child = try XCTUnwrap(parent.childWindows?.first { $0.identifier?.rawValue == "dotist.side-tabs" })
         let content = try XCTUnwrap(child.contentView)
@@ -419,6 +424,9 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         let inward = false
         let tab = SideTabGeometry.frame(panel: parent.frame, index: 0, width: 10, inward: inward)
         let mouse = CGPoint(x: tab.midX, y: tab.midY)
+        controller.synchronize(mouse: CGPoint(x: parent.frame.maxX - 20, y: parent.frame.minY + 20))
+        try await Task.sleep(for: .milliseconds(500))
+        controller.synchronize(mouse: CGPoint(x: parent.frame.maxX - 20, y: parent.frame.minY + 20))
         let collapsed = child.frame
         controller.synchronize(mouse: mouse)
         for _ in 0..<24 {
@@ -448,7 +456,7 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         content.layoutSubtreeIfNeeded()
         XCTAssertEqual(child.frame, collapsed)
         let narrow = try XCTUnwrap(hitTarget(in: content, atWindowPoint: child.convertPoint(fromScreen: mouse)))
-        XCTAssertEqual(narrow.bounds.width, SideTabGeometry.collapsedWidth, accuracy: 0.001)
+        XCTAssertEqual(narrow.bounds.width, SideTabGeometry.selectedWidth, accuracy: 0.001)
     }
 
     func testNativeTabMouseCaptureReordersWithoutSelectingOrMovingPanel() async throws {
@@ -474,6 +482,8 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         let before = model.visibleGroups.map(\.id)
         XCTAssertGreaterThanOrEqual(before.count, 2)
         let inward = false
+        controller.synchronize(mouse: CGPoint(x: parent.frame.maxX - 20, y: parent.frame.minY + 20))
+        try await Task.sleep(for: .milliseconds(500))
         let point = SideTabGeometry.frame(panel: parent.frame, index: 1, width: 10, inward: inward)
         let start = CGPoint(x: point.midX, y: point.midY)
         controller.synchronize(mouse: start)
@@ -573,8 +583,10 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         let resting = try XCTUnwrap(container.subviews.first { $0.identifier?.rawValue == "dotist.side-tabs-rest" })
         let outside = CGPoint(x: parent.frame.maxX - 20, y: parent.frame.minY + 20)
         controller.synchronize(mouse: outside)
+        try await Task.sleep(for: .milliseconds(500))
+        controller.synchronize(mouse: outside)
         XCTAssertTrue(parent.frame.contains(child.frame))
-        XCTAssertEqual(child.frame.width, 10)
+        XCTAssertEqual(child.frame.width, 15)
         try assertOrderedAbove(parent, child, "Resting child must be below its parent")
         XCTAssertFalse(resting.isHidden, "The in-panel ear must remain visible when its window is below")
         let ear = SideTabGeometry.frame(panel: parent.frame, index: 0, width: 10, inward: true, visibleMinX: area.minX)
@@ -700,7 +712,8 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
             let inward = placement.inward
             XCTAssertEqual(child.frame, SideTabGeometry.snapshot(panel: frame,
                 fullWidths: Array(repeating: SideTabGeometry.collapsedWidth, count: model.visibleGroups.count + 1),
-                progress: 0, inward: inward, visibleMinX: visibleMinX).window, file: file, line: line)
+                progress: 0, inward: inward, visibleMinX: visibleMinX, selectedIndex: 0,
+                entrance: Array(repeating: 0, count: model.visibleGroups.count + 1)).window, file: file, line: line)
         }
         assertAttached()
         for frame in [CGRect(x: 700, y: 170, width: 364, height: 620),
