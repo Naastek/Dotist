@@ -129,11 +129,8 @@ struct OpticalSymbol: View {
     }
 }
 
-/// A group title and its disclosure share one native drawing surface. The
-/// complete title (including fallback glyphs) is rasterized at the window's
-/// backing scale, then both cropped ink boxes are placed on the same axis.
-/// This deliberately bypasses OpticalText's attributed Menu baseline and the
-/// ImageRenderer calibration: neither describes a window-hosted header.
+/// Ordinary inline header ink. Its SwiftUI row inherits the same transaction
+/// as tasks; no animation-suppressing transaction is applied to the label.
 struct GroupHeaderInkLabel: NSViewRepresentable {
     @ObservedObject private var typography = DotistTypography.shared
     let title: String
@@ -629,17 +626,38 @@ private struct DisclosureLayout: Layout {
     }
 }
 
+/// One visibility contract for painted collapse rows, input geometry and AX.
+/// Partly revealed rows stay paint-only until their complete height is restored.
+struct TaskRowVisibility {
+    let expanded: Bool
+    let fraction: CGFloat
+    var interactive: Bool { expanded && fraction >= 1 }
+    static func hasUsableFrame(_ frame: CGRect) -> Bool {
+        frame.width > 0 && frame.height >= 1 && !frame.isInfinite && !frame.isNull
+    }
+}
+
+private struct TaskRowInteractiveKey: EnvironmentKey { static let defaultValue = true }
+extension EnvironmentValues {
+    var taskRowInteractive: Bool {
+        get { self[TaskRowInteractiveKey.self] }
+        set { self[TaskRowInteractiveKey.self] = newValue }
+    }
+}
+
 struct CollapsibleTaskSection<Content: View>: View {
     let expanded: Bool
     @ViewBuilder let content: () -> Content
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var motion: DisclosureMotion
+    @State private var hasLayoutHeight = false
     init(expanded: Bool, @ViewBuilder content: @escaping () -> Content) {
         self.expanded = expanded; self.content = content
         _motion = StateObject(wrappedValue: DisclosureMotion(expanded: expanded))
     }
     var body: some View {
-        let interactive = expanded && motion.fraction == 1
+        let visibility = TaskRowVisibility(expanded: expanded, fraction: motion.fraction)
+        let interactive = visibility.interactive && hasLayoutHeight
         // Keep lifecycle identity even at zero height. A conditional Group
         // re-fires onAppear when rows return and would snap an opening to 1.
         VStack(alignment: .leading, spacing: 0) {
@@ -647,12 +665,18 @@ struct CollapsibleTaskSection<Content: View>: View {
                 DisclosureLayout(fraction: motion.fraction) { content() }
                     .clipped().opacity(Double(motion.fraction))
                     .allowsHitTesting(interactive).accessibilityHidden(!interactive)
+                    .environment(\.taskRowInteractive, interactive)
             }
         }
+        .background(GeometryReader { geometry in
+            let usable = TaskRowVisibility.hasUsableFrame(CGRect(origin: .zero, size: geometry.size))
+            Color.clear.onAppear { hasLayoutHeight = usable }
+                .onChange(of: usable) { hasLayoutHeight = $0 }
+        })
         // Rendered transition rows are not interaction geometry: this key also
         // drives keyboard selection, drag targeting and native mouse guards.
         .transformPreference(TaskListRowFrame.Key.self) { frames in
-            if !interactive { frames.removeAll() }
+            frames.removeAll { !interactive || !TaskRowVisibility.hasUsableFrame($0.frame) }
         }
         .onAppear { motion.setExpanded(expanded, reduceMotion: true) }
         .onChange(of: expanded) { value in motion.setExpanded(value, reduceMotion: LayoutMotionInputs.shouldReduceMotion(reduceMotion)) }

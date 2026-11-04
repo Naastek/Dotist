@@ -130,7 +130,8 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
+        // .stationary keeps the panel in place when "click wallpaper to reveal desktop" slides ordinary windows aside.
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
         panel.level = model.settings.alwaysOnTop ? .floating : .normal
         panel.isMovableByWindowBackground = true
         panel.delegate = self
@@ -231,6 +232,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             panel.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
+        GlassDebugState.shared.showPanel(avoiding: panel)
         model.mcp.focus = { [weak self] task in
             guard let self else { return }
             self.performMenuAction("show")

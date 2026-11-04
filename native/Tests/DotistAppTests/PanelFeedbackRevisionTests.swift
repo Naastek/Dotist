@@ -188,7 +188,8 @@ final class PanelFeedbackRevisionTests: XCTestCase {
         }
         try await waitForPresentation([root.id, child.id, completed.id, inbox.id], phase: "initial")
         XCTAssertEqual(Set(rows.map(\.task.id)), [root.id, child.id, completed.id, inbox.id])
-        let expandedHeight = try XCTUnwrap(groups.first { $0.id == group.id }).frame.height
+        let expandedHeader = try XCTUnwrap(groups.first { $0.id == group.id }).frame
+        let expandedHeight = (rows.filter { $0.task.category == group.id }.map(\.frame.maxY).max() ?? expandedHeader.maxY) - expandedHeader.minY
         timeline.append("\((ProcessInfo.processInfo.systemUptime-began)*1000),collapse-command,,,false,\(rows.count)")
         let closingRequested = ProcessInfo.processInfo.systemUptime
         state.setGroupCollapsed(true, id: group.id)
@@ -225,7 +226,6 @@ final class PanelFeedbackRevisionTests: XCTestCase {
         XCTAssertEqual(hierarchy.outline().filter { $0.category == group.id && $0.parentId == nil }.map(\.id), [existing.id, root.id])
         XCTAssertEqual(hierarchy.children(of: root.id).map(\.id), [child.id])
         XCTAssertFalse(state.collapsedGroups.contains(group.id))
-        XCTAssertEqual(TaskCollapsedGroupDrop.removingGap(CGRect(x: 16, y: 80, width: 332, height: 40), gap: CGRect(x: 16, y: 60, width: 332, height: 32)), CGRect(x: 16, y: 60, width: 332, height: 28))
     }
     func testSelectedFilterAndGroupDisclosureKeepOpticalCenterWithinHalfPoint() async throws {
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -291,8 +291,8 @@ final class PanelFeedbackRevisionTests: XCTestCase {
                     if color.redComponent > 0.9 && color.greenComponent < 0.1 { minX = min(minX, x); minY = min(minY, y) }
                 }
             }
-            // Horizontal travel is level-only: without a drop target the block keeps its column.
-            XCTAssertEqual(CGFloat(minX), 16, accuracy: 0.5)
+            // Both axes preserve the original grabbed point.
+            XCTAssertEqual(CGFloat(minX), 16 + point.x - 80, accuracy: 0.5)
             XCTAssertEqual(CGFloat(minY), 100 + point.y - 110, accuracy: 0.5)
         }
     }

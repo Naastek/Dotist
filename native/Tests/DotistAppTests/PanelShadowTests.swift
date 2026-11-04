@@ -13,9 +13,11 @@ final class PanelShadowTests: XCTestCase {
         return try AppModel(store: TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path))
     }
 
-    func testHoverIntermediateWidthsHaveNoPixelsOutsideTheirOnlySurface() throws {
-        // Render the production backdrop, including glass, paper, frost and tint,
-        // at both display scales and on both sides of the screen.
+    func testAccessibleHoverIntermediateWidthsHaveNoPixelsOutsideTheirOnlySurface() throws {
+        // Rasterizers omit compositor-only glass. Exercise the production opaque
+        // accessibility branch so these positive coverage/shape assertions stay
+        // meaningful at both display scales and on both sides of the screen.
+        // The SDK backing environment key is injected only inside this fixture.
         for reveal in [CGFloat(0), 0.3, 0.6, 1] {
             for onRight in [false, true] {
                 for scale in [CGFloat(1), 2] {
@@ -28,6 +30,7 @@ final class PanelShadowTests: XCTestCase {
                             .frame(width: size.width, height: size.height).padding(12)
                             .environment(\.colorScheme, scheme)
                             .environment(\.displayScale, scale)
+                            .environment(\._accessibilityReduceTransparency, true)
                         let renderer = ImageRenderer(content: content)
                         renderer.scale = scale
                         let bitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
@@ -61,7 +64,8 @@ final class PanelShadowTests: XCTestCase {
                         let reference = ImageRenderer(content: FloatingPanelMaterial(opacity: 73, frost: 22, compact: true, color: .orange)
                             .frame(width: surfaceWidth, height: 48)
                             .environment(\.colorScheme, scheme)
-                            .environment(\.displayScale, scale))
+                            .environment(\.displayScale, scale)
+                            .environment(\._accessibilityReduceTransparency, true))
                         reference.scale = scale
                         let referenceBitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(reference.cgImage))
                         for fraction in [CGFloat(0.25), 0.5, 0.75] {
@@ -80,7 +84,7 @@ final class PanelShadowTests: XCTestCase {
         }
     }
 
-    func testWindowBackedHoverSurfaceKeepsUnusedWindowAreaTransparentAfterResizes() async throws {
+    func testAccessibleWindowBackedHoverSurfaceKeepsUnusedWindowAreaTransparentAfterResizes() async throws {
         _ = NSApplication.shared
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 280, height: 48),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -90,7 +94,8 @@ final class PanelShadowTests: XCTestCase {
         panel.hasShadow = true
         defer { panel.close() }
         let host = DotistHostingView(rootView: FloatingSurface(opacity: 73, frost: 22,
-            compact: true, transitioning: false, onRight: true, size: CGSize(width: 280, height: 48), reveal: 0, color: .orange))
+            compact: true, transitioning: false, onRight: true, size: CGSize(width: 280, height: 48), reveal: 0, color: .orange)
+            .environment(\._accessibilityReduceTransparency, true))
         host.sizingOptions = []
         panel.contentView = host
         for onRight in [false, true] {
@@ -100,6 +105,7 @@ final class PanelShadowTests: XCTestCase {
                 host.frame = CGRect(origin: .zero, size: size)
                 host.rootView = FloatingSurface(opacity: 73, frost: 22, compact: true,
                     transitioning: false, onRight: onRight, size: size, reveal: reveal, color: .orange)
+                    .environment(\._accessibilityReduceTransparency, true)
                 host.layoutSubtreeIfNeeded()
                 try await Task.sleep(for: .milliseconds(35))
                 host.layoutSubtreeIfNeeded()

@@ -68,12 +68,14 @@ final class TaskListIntrinsicLayoutTests: XCTestCase {
                 print("wQ1 panel=\(height) group=\(group.id) frame=\(group.frame)")
                 if let original = baselineGroups[group.id] { XCTAssertEqual(group.frame, original) }
             }
-            // Section geometry includes its top padding. Consecutive sections
-            // must be contiguous; the next header starts after 8 pt of padding.
+            // Flat group frames describe their header only. Include the real
+            // member rows when measuring the section's complete extent.
             for (a, b) in zip(sections, sections.dropFirst()) {
-                XCTAssertEqual(b.frame.minY - a.frame.maxY, 0, accuracy: 0.5)
+                let lastMember = rows.filter { $0.task.category == a.id }.map(\.frame.maxY).max() ?? a.frame.maxY
+                XCTAssertEqual(b.frame.minY, max(a.frame.maxY, lastMember), accuracy: 0.5,
+                               "The next section follows the last row without surplus space")
                 if b.id != work.id {
-                    XCTAssertEqual(b.frame.height, 8 + 34, accuracy: 0.5, "Empty section = 8 pt gap + 34 pt header")
+                    XCTAssertEqual(b.frame.height, 8 + 32, accuracy: 0.5, "Empty section = 8 pt gap + one 32 pt header row")
                 }
             }
             if baseline.isEmpty { baseline = Dictionary(uniqueKeysWithValues: rows.map { ($0.task.id, $0.frame) }) }
@@ -82,10 +84,10 @@ final class TaskListIntrinsicLayoutTests: XCTestCase {
             host.cacheDisplay(in: host.bounds, to: rep)
             rep.size = host.bounds.size
             for section in sections {
-                // The production header is 30 pt tall with its own 4 pt top
-                // padding. Measure its live ink inside the section's gap, so a
-                // stretched header cannot hide behind a correct section frame.
-                let top = section.frame.minY + (section.id == work.id ? 6 : 8) + 4
+                // A 30 pt label is centered in the ordinary 32 pt header row.
+                // Measure live ink, so a stretched header still fails even if
+                // its published frame happens to have the right height.
+                let top = section.frame.minY + (section.id == work.id ? 6 : 8) + 1
                 let mask = CGRect(x: 16, y: top, width: 200, height: 30)
                 let center = try inkCenter(rep, in: mask)
                 print("wQ1 panel=\(height) header=\(section.id) mask=\(mask) inkCenterY=\(center)")

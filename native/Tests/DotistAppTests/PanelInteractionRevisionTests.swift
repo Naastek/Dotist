@@ -14,27 +14,6 @@ final class PanelInteractionRevisionTests: XCTestCase {
         XCTAssertEqual(ToolbarDragLayout.targetIndex(from: 0, translation: .nan, count: 4), 0)
     }
 
-    func testPointerProjectionKeepsAnInsertedGhostFromChangingItsOwnTarget() throws {
-        let gap = CGRect(x: 16, y: 64, width: 332, height: 32)
-        XCTAssertEqual(TaskDragGeometry.pointerY(50, excludingGhost: gap), 50)
-        XCTAssertEqual(TaskDragGeometry.pointerY(70, excludingGhost: gap), 64)
-        XCTAssertEqual(TaskDragGeometry.pointerY(110, excludingGhost: gap), 78)
-        let rows: [TaskReorderEngine.Row] = [
-            .init(id: "source", level: 0, groupID: "g", parentID: nil, midY: 16),
-            .init(id: "b", level: 0, groupID: "g", parentID: nil, midY: 48),
-            .init(id: "c", level: 0, groupID: "g", parentID: nil, midY: 80)
-        ]
-        func target(_ y: CGFloat) throws -> TaskReorderEngine.Target {
-            try XCTUnwrap(TaskReorderEngine.target(rows: rows, groups: [.init(id: "g", minY: 0, maxY: 96)], draggedID: "source",
-                blockIDs: ["source"], startY: 16, offsetY: y - 16, offsetX: 0))
-        }
-        let beforeGap = try target(50)
-        XCTAssertEqual(beforeGap.beforeID, "c")
-        XCTAssertEqual(try target(TaskDragGeometry.pointerY(70, excludingGhost: gap)), beforeGap)
-        XCTAssertEqual(try target(TaskDragGeometry.pointerY(110, excludingGhost: gap)), beforeGap)
-        XCTAssertNil(try target(TaskDragGeometry.pointerY(114, excludingGhost: gap)).beforeID)
-    }
-
     func testAdjacentToolbarItemsMakeRoomInBothDirections() {
         XCTAssertEqual(ToolbarDragLayout.offset(index: 1, source: 0, target: 2, translation: 70), -32)
         XCTAssertEqual(ToolbarDragLayout.offset(index: 2, source: 0, target: 2, translation: 70), -32)

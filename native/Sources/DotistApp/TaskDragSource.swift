@@ -262,6 +262,29 @@ struct TaskCheckmark: View {
     @Published var location = CGPoint.zero
 }
 
+/// A flat, stable identity for every row and heading. Decorations do not count
+/// toward the drop slot; visible headings do, just like ordinary rows in Tic.
+struct TaskListEntry: Identifiable {
+    let id: String
+    var expanded = true
+    var row: TaskListRowFrame? = nil
+    var group: TaskListGroupFrame? = nil
+    var content = AnyView(EmptyView())
+
+    static func insertionIndex(_ slot: TaskInsertionSlot, in entries: [TaskListEntry]) -> Int {
+        switch slot {
+        case .before(let id, let region):
+            return entries.firstIndex { $0.row?.task.id == id && $0.row?.region == region } ?? entries.count
+        case .after(let id, let region):
+            return entries.firstIndex { $0.row?.task.id == id && $0.row?.region == region }.map { $0 + 1 } ?? entries.count
+        case .empty(let region):
+            // An opening group may still have paint-only retained rows. An
+            // empty interactive slot means append, matching the store target.
+            return entries.lastIndex { $0.row?.region == region || $0.group?.region == region }.map { $0 + 1 } ?? entries.count
+        }
+    }
+}
+
 struct TaskGhostFrameKey: PreferenceKey {
     static let defaultValue = CGRect.zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) { let next = nextValue(); if next != .zero { value = next } }
@@ -291,6 +314,12 @@ struct TaskListRowFrame: Equatable {
     var sub = false
     var allTasks = false
     var hideDue = false
+    var region = ""
+    var date: String? = nil
+    var depth = 0
+    var context = false
+    var previous: String? = nil
+    var next: String? = nil
     struct Key: PreferenceKey {
         static let defaultValue: [TaskListRowFrame] = []
         static func reduce(value: inout [TaskListRowFrame], nextValue: () -> [TaskListRowFrame]) { value.append(contentsOf: nextValue()) }
@@ -301,6 +330,7 @@ struct TaskListGroupFrame: Equatable {
     let id: String
     let region: String
     let frame: CGRect
+    var date: String? = nil
     struct Key: PreferenceKey {
         static let defaultValue: [TaskListGroupFrame] = []
         static func reduce(value: inout [TaskListGroupFrame], nextValue: () -> [TaskListGroupFrame]) { value.append(contentsOf: nextValue()) }
@@ -349,30 +379,36 @@ enum TaskDragDiagnostics {
 }
 
 struct TaskListDrag {
+    let generation = UUID()
     let taskID: String
     let blockIDs: Set<String>
     let visibleBlock: [TaskListRowFrame]
     let startFrame: CGRect
     let startLocation: CGPoint
-    var target: TaskReorderEngine.Target?
-    var region: String?
-    var ghostBeforeID: String?
-    var ghostAfterID: String?
-    var targetIsEmpty = false
+    /// One semantic destination owns gap feedback and selects the committed row.
+    var destination: TaskDropDestination?
+    var target: TaskReorderEngine.Target? { destination?.target }
     var committing = false
     var rootIDs: [String] = []
     var sourceDepth = 0
     var subtreeHeight = 0
-    var initialTarget: TaskReorderEngine.Target?
-    var baselineRows: [TaskListRowFrame] = []
-    var baselineGroups: [TaskListGroupFrame] = []
-    var scrollOriginY: CGFloat = 0
     var expandedDropGroup: String?
+    func carries(_ id: String, region: String) -> Bool {
+        visibleBlock.contains { $0.task.id == id && $0.region == region }
+    }
+}
+
+/// The semantic slot is shared by the one-line placeholder and atomic commit.
+struct TaskDropDestination: Equatable {
+    let target: TaskReorderEngine.Target
+    let region: String
+    let slot: TaskInsertionSlot
+    let frame: CGRect
+    var date: String? = nil
 }
 
 @MainActor
 final class TaskReorderRuntime: ObservableObject {
-    let insertionMotion = TaskInsertionMotion()
     enum Input {
         case begin(String, CGPoint), move(String, CGPoint), end(String, CGPoint), cancel
     }
@@ -381,6 +417,58 @@ final class TaskReorderRuntime: ObservableObject {
     @Published var drag: TaskListDrag?
     weak var scrollView: NSScrollView?
     var scrollOriginY: CGFloat { scrollView?.contentView.bounds.minY ?? 0 }
+
+    private weak var pickupPanel: NSView?
+    private weak var pickupViewport: NSView?
+    private final class WeakPickupView {
+        weak var view: NSView?
+        let row: TaskListRowFrame?
+        let group: TaskListGroupFrame?
+        init(_ view: NSView, row: TaskListRowFrame? = nil, group: TaskListGroupFrame? = nil) { self.view = view; self.row = row; self.group = group }
+    }
+    private var pickupRows: [TaskInsertionSlot: WeakPickupView] = [:]
+    private var pickupGroups: [String: WeakPickupView] = [:]
+    func registerPickup(_ view: NSView, role: TaskPickupFrameProbe.Role, row: TaskListRowFrame? = nil, group: TaskListGroupFrame? = nil) {
+        switch role {
+        case .panel: pickupPanel = view
+        case .viewport: pickupViewport = view
+        case .row(let slot): pickupRows[slot] = WeakPickupView(view, row: row)
+        case .group(let region): pickupGroups[region] = WeakPickupView(view, group: group)
+        }
+    }
+    func removePickup(_ view: NSView, role: TaskPickupFrameProbe.Role) {
+        switch role {
+        case .panel: if pickupPanel === view { pickupPanel = nil }
+        case .viewport: if pickupViewport === view { pickupViewport = nil }
+        case .row(let slot): if pickupRows[slot]?.view === view { pickupRows[slot] = nil }
+        case .group(let region): if pickupGroups[region]?.view === view { pickupGroups[region] = nil }
+        }
+    }
+    private func pickupFrame(_ view: NSView?) -> CGRect? {
+        guard let view, let panel = pickupPanel, panel.window != nil,
+              view.window === panel.window else { return nil }
+        return panel.convert(view.bounds, from: view)
+    }
+    var pickupViewportFrame: CGRect? { pickupFrame(pickupViewport) }
+    func pickupFrames(_ cached: [TaskListRowFrame]) -> [TaskListRowFrame] {
+        let cached = cached.filter { TaskRowVisibility.hasUsableFrame($0.frame) }
+        guard pickupPanel != nil else { return cached }
+        var seen: Set<TaskInsertionSlot> = []
+        return cached.compactMap { old in
+            let source = pickupRows[.before(old.task.id, region: old.region)]
+            guard let source, var live = source.row, let frame = pickupFrame(source.view), TaskRowVisibility.hasUsableFrame(frame),
+                  seen.insert(.before(live.task.id, region: live.region)).inserted else { return nil }
+            live.frame = frame
+            return live
+        }
+    }
+    func pickupGroupFrames(_ cached: [TaskListGroupFrame]) -> [TaskListGroupFrame] {
+        guard pickupPanel != nil else { return cached }
+        return pickupGroups.values.compactMap { source in
+            guard let group = source.group, let frame = pickupFrame(source.view) else { return nil }
+            return .init(id: group.id, region: group.region, frame: frame, date: group.date)
+        }
+    }
 
     @discardableResult func scroll(by delta: CGFloat) -> Bool {
         guard let scrollView, let document = scrollView.documentView else { return false }
@@ -395,86 +483,48 @@ final class TaskReorderRuntime: ObservableObject {
     }
 }
 
-enum TaskInsertionSlot: Hashable {
-    case before(String), after(String), empty(String)
-}
-
-/// Animate layout itself, without a SwiftUI presentation transform. Native
-/// heading surfaces and SwiftUI rows therefore receive the same frame each tick.
-@MainActor
-final class TaskInsertionMotion: ObservableObject {
-    static let duration: TimeInterval = 0.12
-    @Published private(set) var heights: [TaskInsertionSlot: CGFloat] = [:]
-    private var destination: [TaskInsertionSlot: CGFloat] = [:]
-    private var timer: Timer?
-
-    func retarget(slot: TaskInsertionSlot?, height: CGFloat, reduceMotion: Bool) {
-        let target = slot.map { [$0: height] } ?? [:]
-        guard target != destination || reduceMotion else { return }
-        destination = target
-        timer?.invalidate(); timer = nil
-        guard !reduceMotion, heights != target else { publish(target); return }
-        let start = heights
-        let keys = Set(start.keys).union(target.keys)
-        let began = LayoutMotionInputs.now
-        let clock = Timer(timeInterval: 1 / 60, repeats: true) { [weak self] timer in
-            MainActor.assumeIsolated {
-                guard let self else { timer.invalidate(); return }
-                let t = min(1, (LayoutMotionInputs.now - began) / Self.duration)
-                let eased = CGFloat(1 - pow(1 - t, 3))
-                self.publish(t >= 1 ? target : Dictionary(uniqueKeysWithValues: keys.map { key in
-                    let from = start[key, default: 0], to = target[key, default: 0]
-                    return (key, from + (to - from) * eased)
-                }))
-                if t >= 1 { timer.invalidate(); self.timer = nil }
-            }
+/// Read native source geometry at pickup, before collapsing the gesture owner.
+/// SwiftUI preferences may still describe the previous scroll/viewport frame.
+struct TaskPickupFrameProbe: NSViewRepresentable {
+    enum Role: Equatable { case panel, viewport, row(TaskInsertionSlot), group(String) }
+    @Environment(\.taskRowInteractive) private var rowInteractive
+    let runtime: TaskReorderRuntime
+    let role: Role
+    var row: TaskListRowFrame? = nil
+    var group: TaskListGroupFrame? = nil
+    func makeCoordinator() -> Coordinator { Coordinator(runtime: runtime, role: role) }
+    func makeNSView(context: Context) -> Probe {
+        let view = Probe(); runtime.registerPickup(view, role: role, row: row, group: group); return view
+    }
+    func updateNSView(_ view: Probe, context: Context) {
+        if context.coordinator.role != role {
+            runtime.removePickup(view, role: context.coordinator.role)
+            context.coordinator.role = role
         }
-        timer = clock
-        RunLoop.main.add(clock, forMode: .common)
+        if row != nil && !rowInteractive { runtime.removePickup(view, role: role) }
+        else { runtime.registerPickup(view, role: role, row: row, group: group) }
     }
-
-    private func publish(_ value: [TaskInsertionSlot: CGFloat]) {
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        // AppKit rounds hosted heading origins to whole points. Use that same
-        // grid for layout, so fractional gap heights cannot cause edge overlap.
-        withTransaction(transaction) { heights = value.mapValues { $0.rounded() } }
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: Probe, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
     }
-    func reset() { timer?.invalidate(); timer = nil; destination = [:]; publish([:]) }
-    deinit { timer?.invalidate() }
-}
-
-struct TaskInsertionFramesKey: PreferenceKey {
-    static let defaultValue: [TaskInsertionSlot: CGRect] = [:]
-    static func reduce(value: inout [TaskInsertionSlot: CGRect], nextValue: () -> [TaskInsertionSlot: CGRect]) {
-        value.merge(nextValue()) { _, new in new }
+    static func dismantleNSView(_ view: Probe, coordinator: Coordinator) { coordinator.runtime.removePickup(view, role: coordinator.role) }
+    final class Coordinator {
+        let runtime: TaskReorderRuntime
+        var role: Role
+        init(runtime: TaskReorderRuntime, role: Role) { self.runtime = runtime; self.role = role }
     }
-
-    static func pointerY(_ y: CGFloat, frames: [TaskInsertionSlot: CGRect]) -> CGFloat {
-        y - frames.values.reduce(CGFloat.zero) { $0 + min($1.height, max(0, y - $1.minY)) }
-    }
-
-    /// Destination metadata in the gap-free baseline. Pointer projection above
-    /// separately strips all presented spaces, including a slot still closing.
-    static func logicalFrame(slot: TaskInsertionSlot?, height: CGFloat, frames: [TaskInsertionSlot: CGRect]) -> CGRect {
-        guard let slot, let frame = frames[slot] else { return .zero }
-        let preceding = frames.filter { $0.key != slot && $0.value.maxY <= frame.minY + 0.001 }
-            .values.reduce(CGFloat.zero) { $0 + $1.height }
-        return CGRect(x: frame.minX, y: frame.minY - preceding, width: frame.width, height: height)
+    final class Probe: NSView {
+        override var isFlipped: Bool { true }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
 
-struct TaskInsertionSpace: View {
-    @ObservedObject var motion: TaskInsertionMotion
-    let slot: TaskInsertionSlot
-    let coordinateSpace: String
-    var body: some View {
-        Color.clear.frame(height: motion.heights[slot, default: 0])
-            .allowsHitTesting(false).accessibilityHidden(true)
-            .background(GeometryReader { geometry in
-                Color.clear.preference(key: TaskInsertionFramesKey.self,
-                    value: [slot: geometry.frame(in: .named(coordinateSpace))])
-            })
+enum TaskInsertionSlot: Hashable {
+    case before(String, region: String = ""), after(String, region: String = ""), empty(String)
+    var region: String {
+        switch self {
+        case .before(_, let region), .after(_, let region), .empty(let region): region
+        }
     }
 }
 
@@ -794,16 +844,6 @@ struct TaskTitleFade: View {
     }
 }
 
-/// Map live coordinates into the gap-free baseline. The baseline retains the
-/// original source slot, so remove only the additional insertion gap.
-/// A pointer inside the placeholder keeps the same insertion boundary.
-enum TaskDragGeometry {
-    static func pointerY(_ y: CGFloat, excludingGhost frame: CGRect) -> CGFloat {
-        guard !frame.isEmpty else { return y }
-        return y - min(frame.height, max(0, y - frame.minY))
-    }
-}
-
 /// The board/calendar adapters use exactly the same geometry as native fields.
 /// Unlike a fixed y origin this remains centered for every preview font size.
 enum TaskDragPreview {
@@ -827,32 +867,37 @@ enum TaskDragPreview {
     }
 }
 
-/// Only this layer observes pointer frames; the document's row tree stays still.
+enum TaskLiftedSurfaceMetrics {
+    static let horizontalInset: CGFloat = 12
+    static let verticalInset: CGFloat = 4
+}
+
+/// Only this layer observes pointer frames; the list reads slot and level only.
 struct TaskLiftedBlock<Content: View>: View {
+    static var height: CGFloat { 32 }
     let drag: TaskListDrag
     @ObservedObject var motion: TaskDragMotion
-    /// Open insertion gap, in list coordinates; the block rides it instead of the pointer.
-    var slotFrame: CGRect = .zero
-    var viewport: CGRect = .zero
     @ViewBuilder let content: (TaskListRowFrame) -> Content
-    /// Horizontal motion only changes level; vertical follows the actual slot.
-    private var snappedY: CGFloat {
-        if !slotFrame.isEmpty { return slotFrame.minY }
-        let free = drag.startFrame.minY + motion.location.y - drag.startLocation.y
-        guard !viewport.isEmpty else { return free }
-        return min(max(free, viewport.minY), max(viewport.minY, viewport.maxY - drag.startFrame.height))
-    }
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(drag.visibleBlock, id: \.task.id) { row in content(row).frame(height: row.frame.height) }
-        }.frame(width: drag.startFrame.width, height: drag.startFrame.height, alignment: .topLeading)
-            .offset(x: drag.startFrame.minX + CGFloat((drag.target?.level ?? drag.sourceDepth) - drag.sourceDepth) * 22,
-                    y: snappedY)
-            .shadow(color: .black.opacity(0.12), radius: 3, y: 2)
-            .allowsHitTesting(false).accessibilityHidden(true)
-            // Pointer positions are direct input, including in a transaction
-            // that animates other parts of the outline.
-            .transaction { $0.animation = nil; $0.disablesAnimations = true }
+        if let row = drag.visibleBlock.first(where: { $0.task.id == drag.taskID }) {
+            content(row).frame(height: Self.height).clipped()
+                .overlay(alignment: .trailing) {
+                    if drag.blockIDs.count > 1 {
+                        Text("+\(drag.blockIDs.count - 1)").font(.caption.weight(.semibold))
+                            .padding(.horizontal, 6).background(.regularMaterial, in: Capsule())
+                    }
+                }
+                .frame(width: drag.startFrame.width, height: Self.height)
+                .background {
+                    TransientGlassMaterial(cornerRadius: 12)
+                        .padding(.horizontal, -TaskLiftedSurfaceMetrics.horizontalInset)
+                        .padding(.vertical, -TaskLiftedSurfaceMetrics.verticalInset)
+                }
+                .offset(x: drag.startFrame.minX + motion.location.x - drag.startLocation.x,
+                        y: motion.location.y - min(max(drag.startLocation.y - drag.startFrame.minY, 0), Self.height))
+                .allowsHitTesting(false).accessibilityHidden(true)
+                .transaction { $0.animation = nil; $0.disablesAnimations = true }
+        }
     }
 }
 
@@ -861,12 +906,7 @@ enum TaskCollapsedGroupDrop {
     static func target(groupID: String) -> TaskReorderEngine.Target {
         .init(groupID: groupID, slot: Int.max, level: 0, parentID: nil, beforeID: nil)
     }
-    static func removingGap(_ frame: CGRect, gap: CGRect) -> CGRect {
-        guard !gap.isEmpty else { return frame }
-        let minY = TaskDragGeometry.pointerY(frame.minY, excludingGhost: gap)
-        let maxY = TaskDragGeometry.pointerY(frame.maxY, excludingGhost: gap)
-        return CGRect(x: frame.minX, y: minY, width: frame.width, height: maxY - minY)
-    }
+
 }
 
 struct TaskSectionHeadingKey: PreferenceKey {

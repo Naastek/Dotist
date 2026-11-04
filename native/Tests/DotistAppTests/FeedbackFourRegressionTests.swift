@@ -219,27 +219,22 @@ final class FeedbackFourRegressionTests: XCTestCase {
             let fixture = NativeRenderingFixture(main(model, state), size: CGSize(width: 364, height: 620), simulatedBackingScale: NSScreen.main == nil ? 2 : nil)
             defer { fixture.close() }
             try await Task.sleep(for: .milliseconds(120))
-            let headers = fixture.descendants(GroupHeaderInkView.self)
-            XCTAssertGreaterThanOrEqual(headers.count, 2)
-            let belowAX = try XCTUnwrap(ax(fixture.host, id: "group-header:life") as? any NSAccessibilityElementProtocol)
-            let below = try XCTUnwrap(headers.min { a, b in
-                let aFrame = fixture.window.convertToScreen(fixture.host.convert(fixture.host.convert(a.bounds, from: a), to: nil))
-                let bFrame = fixture.window.convertToScreen(fixture.host.convert(fixture.host.convert(b.bounds, from: b), to: nil))
-                return abs(aFrame.midY - belowAX.accessibilityFrame().midY) < abs(bFrame.midY - belowAX.accessibilityFrame().midY)
-            })
+            let below = try XCTUnwrap(ax(fixture.host, id: "group-header:life") as? any NSAccessibilityElementProtocol)
             let button = try XCTUnwrap(ax(fixture.host, id: "group-header:work"))
-            let workAX = try XCTUnwrap(ax(fixture.host, id: "group-header:work") as? any NSAccessibilityElementProtocol)
-            let header = try XCTUnwrap(headers.min { a, b in
-                let aFrame = fixture.window.convertToScreen(fixture.host.convert(fixture.host.convert(a.bounds, from: a), to: nil))
-                let bFrame = fixture.window.convertToScreen(fixture.host.convert(fixture.host.convert(b.bounds, from: b), to: nil))
-                return abs(aFrame.midY - workAX.accessibilityFrame().midY) < abs(bFrame.midY - workAX.accessibilityFrame().midY)
-            })
+            let header = try XCTUnwrap(button as? any NSAccessibilityElementProtocol)
+            func frame(_ element: any NSAccessibilityElementProtocol) -> CGRect {
+                fixture.host.convert(fixture.window.convertFromScreen(element.accessibilityFrame()), from: nil)
+            }
             let captureScale = fixture.window.backingScaleFactor
             let baselineImage = try await fixture.capture(scale: captureScale)
-            let titleFrame = header.titleInkFrame
-            let titleWidth = header.bounds.width
+            // Use the baseline painted title, not its font advance: the latter
+            // includes whitespace that can contain the rotating disclosure.
+            try save(baselineImage, "animation-\(scope)-baseline", directory: animationEvidence)
+            let baselineTitle = try ink(baselineImage, rect: frame(header))
+            let titleFrame = CGRect(x: 0, y: 0, width: baselineTitle.maxX - frame(header).minX, height: 30)
+            let titleWidth = frame(header).width
             func titleMask(_ image: NSBitmapImageRep) -> [UInt8] {
-                let frame = fixture.host.convert(header.bounds, from: header)
+                let frame = frame(header)
                 var mask: [UInt8] = []
                 for y in Int(frame.minY*captureScale)..<Int(frame.maxY*captureScale) {
                     for x in Int(frame.minX*captureScale)..<Int((frame.minX+titleFrame.maxX)*captureScale) {
@@ -252,6 +247,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
             }
             let initialMask = titleMask(baselineImage)
             XCTAssertTrue(initialMask.contains(1))
+            var disclosureProgress: CGFloat = 1
             var lastClock: [ObjectIdentifier: DisclosureMotion.Sample] = [:]
             var reversing = false
             var retargetY: CGFloat?
@@ -259,8 +255,9 @@ final class FeedbackFourRegressionTests: XCTestCase {
             var retargets = 0
             let previousTrace = DisclosureMotion.trace
             DisclosureMotion.trace = { sample in
+                disclosureProgress = sample.fraction
                 if reversing, sample.event == "retarget", sample.target == 0 {
-                    retargetY = fixture.host.convert(below.bounds, from: below).minY
+                    retargetY = frame(below).minY
                 }
                 if reversing, sample.event == "start", sample.target == 0 {
                     if let previous = lastClock[sample.id] {
@@ -268,7 +265,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
                                        "Retarget is continuous at the same instant, not after a slow bitmap capture")
                     }
                     if let retargetY {
-                        XCTAssertEqual(fixture.host.convert(below.bounds, from: below).minY, retargetY, accuracy: 1)
+                        XCTAssertEqual(frame(below).minY, retargetY, accuracy: 1)
                     } else { XCTFail("Missing same-instant retarget geometry") }
                     retargetFractions.append(sample.fraction)
                     retargets += 1
@@ -282,12 +279,11 @@ final class FeedbackFourRegressionTests: XCTestCase {
                 if index == 1 { try press(button) }
                 if index > 0 { try await clock.advance(by: 0.018) }
                 let bitmap = try await fixture.capture(scale: captureScale)
-                let y = fixture.host.convert(below.bounds, from: below).minY
+                let y = frame(below).minY
                 positions.append(y)
-                angles.append(header.disclosureProgress)
-                XCTAssertEqual(header.titleInkFrame, titleFrame, "The complete title never moves or loses letters")
-                XCTAssertTrue(titleMask(bitmap) == initialMask, "The complete same-scale title pixel mask must remain identical")
-                XCTAssertEqual(header.bounds.width, titleWidth, accuracy: 0.01)
+                angles.append(disclosureProgress)
+                XCTAssertTrue(titleMask(bitmap) == initialMask, "The complete same-scale title pixel mask must remain identical: \(scope), frame=\(index), header=\(frame(header)), title=\(baselineTitle), diff=\(zip(titleMask(bitmap), initialMask).filter { $0 != $1 }.count)")
+                XCTAssertEqual(frame(header).width, titleWidth, accuracy: 0.01)
                 try save(bitmap, "animation-\(scope)-\(index)", directory: animationEvidence)
             }
             let start = try XCTUnwrap(positions.first), end = try XCTUnwrap(positions.last)
@@ -300,8 +296,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
             try press(button)
             try await clock.advance(by: 0.055)
             _ = try await fixture.capture(scale: captureScale)
-            XCTAssertEqual(header.titleInkFrame, titleFrame)
-            let before = header.disclosureProgress
+            let before = disclosureProgress
             XCTAssertGreaterThan(before, 0); XCTAssertLessThan(before, 1)
             reversing = true
             try press(button)
@@ -310,27 +305,25 @@ final class FeedbackFourRegressionTests: XCTestCase {
             reversing = false
             try await clock.advance(by: 0.040)
             _ = try await fixture.capture(scale: captureScale)
-            XCTAssertLessThan(header.disclosureProgress, try XCTUnwrap(retargetFractions.min()))
+            XCTAssertLessThan(disclosureProgress, try XCTUnwrap(retargetFractions.min()))
             func waitForEnd(_ target: CGFloat) async throws {
                 let deadline = ProcessInfo.processInfo.systemUptime + 2
                 repeat {
                     _ = try await fixture.capture(scale: captureScale)
-                    if header.disclosureProgress == target && !lastClock.values.contains(where: \.animating) { return }
+                    if disclosureProgress == target && !lastClock.values.contains(where: \.animating) { return }
                     try await clock.advance(by: 0.020)
                 } while ProcessInfo.processInfo.systemUptime < deadline
                 XCTFail("Disclosure did not deliver endpoint \(target)")
             }
             try await waitForEnd(0)
-            XCTAssertEqual(header.disclosureProgress, 0)
-            XCTAssertEqual(header.titleInkFrame, titleFrame)
+            XCTAssertEqual(disclosureProgress, 0)
             try press(button)
             try await waitForEnd(1)
             let expandedImage = try await fixture.capture(scale: captureScale)
             try save(expandedImage, "animation-\(scope)-expanded", directory: animationEvidence)
             XCTAssertTrue(titleMask(expandedImage) == initialMask, "Expansion and reversal must preserve the complete title pixel mask")
-            XCTAssertEqual(header.disclosureProgress, 1)
-            XCTAssertEqual(header.titleInkFrame, titleFrame)
-            XCTAssertEqual(fixture.host.convert(below.bounds, from: below).minY, start, accuracy: 0.5)
+            XCTAssertEqual(disclosureProgress, 1)
+            XCTAssertEqual(frame(below).minY, start, accuracy: 0.5)
             print("FEEDBACK DISCLOSURE \(scope): \(angles), rapid reversal from \(before)")
             XCTAssertFalse(fixture.window.isVisible)
         }
@@ -356,6 +349,14 @@ final class FeedbackFourRegressionTests: XCTestCase {
         state.folded.insert("work")
         var rows: [TaskListRowFrame] = []
         var groups: [TaskListGroupFrame] = []
+        let runtime = TaskReorderRuntime()
+        // Group frames now describe only the ordinary heading row. Measure
+        // the actual section span to the following heading instead.
+        func sectionHeight(_ frames: [TaskListGroupFrame]) -> CGFloat? {
+            guard let work = frames.first(where: { $0.id == "work" }),
+                  let life = frames.first(where: { $0.id == "life" }) else { return nil }
+            return life.frame.minY - work.frame.minY
+        }
         var active: Set<ObjectIdentifier> = []
         var samples: [DisclosureMotion.Sample] = []
         var collectOpening = false
@@ -369,14 +370,15 @@ final class FeedbackFourRegressionTests: XCTestCase {
             if sample.animating { active.insert(sample.id) } else { active.remove(sample.id) }
         }
         defer { DisclosureMotion.trace = previousTrace }
-        let fixture = NativeRenderingFixture(main(model, state)
+        let fixture = NativeRenderingFixture(MainWindow(model: model, state: state, showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, collapse: {}, primary: false, reorderRuntime: runtime)
+            .background(Color.white).environment(\.colorScheme, .light)
             .onPreferenceChange(TaskListRowFrame.Key.self) { rows = $0 }
             .onPreferenceChange(TaskListGroupFrame.Key.self) { frames in
                 let began = ProcessInfo.processInfo.systemUptime
                 groups = frames
                 // This is delivered layout geometry, not a timer-derived height.
                 // No AX, bitmap, assertions or string formatting in this callback.
-                if collectOpening, let height = frames.first(where: { $0.id == "work" })?.frame.height {
+                if collectOpening, let height = sectionHeight(frames) {
                     openingDeliveries.append((began, height))
                     callbackCosts.append((ProcessInfo.processInfo.systemUptime-began)*1000)
                 }
@@ -404,13 +406,20 @@ final class FeedbackFourRegressionTests: XCTestCase {
         try await waitFor("initial") { rows.count == 4 && active.isEmpty }
         checkAX(true, phase: "initial-positive")
         let original = try XCTUnwrap(rows.first { $0.task.id == root.id }).frame
-        let height = try XCTUnwrap(groups.first { $0.id == "work" }).frame.height
+        let height = try XCTUnwrap(sectionHeight(groups))
         let guardView = try XCTUnwrap(fixture.descendants(TaskReorderInteractionGuard.GuardView.self).first)
         let point = CGPoint(x: original.midX, y: original.midY)
+        let expandedRows = rows
         XCTAssertTrue(guardView.rowFrames.contains { $0.contains(point) },
                       "Expanded tasks must be real native hit regions before testing their removal")
         func assertPaintOnly() {
             XCTAssertEqual(rows.map(\.task.id), [inbox.id], "Transition rows cannot be drag/selection candidates")
+            XCTAssertEqual(runtime.pickupFrames(rows).map(\.task.id), [inbox.id], "Native pickup must use the same visible identities")
+            XCTAssertEqual(runtime.pickupFrames(expandedRows).map(\.task.id), [inbox.id], "Even stale preferences cannot reactivate a clipped native source")
+            for hidden in [root, child, done] {
+                runtime.send(.begin(hidden.id, point))
+                XCTAssertNil(runtime.drag, "A retained paint-only row must reject drag pickup")
+            }
             XCTAssertFalse(guardView.rowFrames.contains { $0.contains(point) },
                            "Hidden rows cannot be native mouse-guard hit regions")
         }
@@ -436,7 +445,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
             assertPaintOnly()
             return active.isEmpty && rows.map(\.task.id) == [inbox.id]
         }
-        let closedHeight = try XCTUnwrap(groups.first { $0.id == "work" }).frame.height
+        let closedHeight = try XCTUnwrap(sectionHeight(groups))
         XCTAssertLessThan(closedHeight, height)
         XCTAssertGreaterThanOrEqual(closedHeight, 30)
         checkAX(false, phase: "closed")
@@ -459,7 +468,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
             assertPaintOnly()
             return active.isEmpty && rows.map(\.task.id) == [inbox.id]
         }
-        let geometryClosedHeight = try XCTUnwrap(groups.first { $0.id == "work" }).frame.height
+        let geometryClosedHeight = try XCTUnwrap(sectionHeight(groups))
         XCTAssertEqual(geometryClosedHeight, closedHeight, accuracy: 0.5)
         openingDeliveries.append((ProcessInfo.processInfo.systemUptime, geometryClosedHeight))
         collectOpening = true
@@ -468,7 +477,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
         XCTAssertFalse(active.isEmpty)
         assertPaintOnly()
         try await waitFor("geometry-expanded") {
-            let presentedHeight = groups.first { $0.id == "work" }?.frame.height ?? geometryClosedHeight
+            let presentedHeight = sectionHeight(groups) ?? geometryClosedHeight
             if presentedHeight < height - 0.5 { assertPaintOnly() }
             return active.isEmpty && Set(rows.map(\.task.id)) == [root.id, child.id, done.id, inbox.id]
         }
@@ -480,7 +489,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
         XCTAssertTrue(openingHeights.contains { $0 > closedHeight + (height-closedHeight)*0.2 && $0 < closedHeight + (height-closedHeight)*0.8 },
                       "Real task expansion must present substantial intermediate heights: \(openingHeights)")
         XCTAssertEqual(try XCTUnwrap(openingHeights.last), height, accuracy: 0.5)
-        XCTAssertEqual(try XCTUnwrap(groups.first { $0.id == "work" }).frame.height, height, accuracy: 0.5)
+        XCTAssertEqual(try XCTUnwrap(sectionHeight(groups)), height, accuracy: 0.5)
         XCTAssertTrue(guardView.rowFrames.contains { $0.contains(point) })
         checkAX(true, phase: "geometry-end-positive")
         XCTAssertEqual(try model.core.listTasks().count, 4)

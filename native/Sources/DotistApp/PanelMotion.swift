@@ -113,6 +113,7 @@ final class PanelMotion: ObservableObject {
         self.bubbleContent = bubbleContent
         self.rememberFrame = rememberFrame
         panel.hasShadow = true
+        GlassDebugState.shared.register(panel)
         closeObservation = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stop() }
         }
@@ -123,6 +124,7 @@ final class PanelMotion: ObservableObject {
     }
     func stop() {
         guard !stopped else { return }
+        GlassDebugState.shared.unregister(panel)
         stopped = true
         hoverClose?.cancel(); hoverClose = nil
         pendingHover = nil
@@ -490,6 +492,7 @@ struct FloatingPanelShape: Shape {
     let onRight: Bool
     var reveal: CGFloat
     var base: CGFloat = 48
+    var debug: GlassDebugParameters? = nil
     var animatableData: CGFloat {
         get { reveal }
         set { reveal = newValue }
@@ -497,11 +500,16 @@ struct FloatingPanelShape: Shape {
     func path(in rect: CGRect) -> Path {
         let width = compact && !transitioning ? base + (rect.width - base) * min(1, max(0, reveal)) : rect.width
         let surface = CGRect(x: rect.minX + (onRight ? rect.width - width : 0), y: rect.minY, width: width, height: rect.height)
+        if compact, let debug {
+            if debug.shape == .capsule { return Capsule().path(in: surface) }
+            return RoundedRectangle(cornerRadius: CGFloat(debug.radius.rawValue), style: .continuous).path(in: surface)
+        }
         return RoundedRectangle(cornerRadius: compact ? 24 : DotistDesign.windowCornerRadius, style: .continuous).path(in: surface)
     }
 }
 
 struct FloatingPanelView<Content: View>: View {
+    @ObservedObject private var glassDebug = GlassDebugState.shared
     @ObservedObject var model: AppModel
     @ObservedObject var motion: PanelMotion
     @ObservedObject var colorState: TaskPanelState
@@ -542,13 +550,17 @@ struct FloatingPanelView<Content: View>: View {
                     .accessibilityHidden(!motion.bubble)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topTrailing)
+            // Clip the animated content, then attach glass. Masking the combined
+            // result also cuts the system material's light at the silhouette.
+            .clipShape(FloatingPanelShape(compact: motion.bubble, transitioning: motion.animationInProgress,
+                onRight: motion.bubbleOnRight, reveal: hoverReveal, base: 48 + extra,
+                debug: glassDebug.enabled && !reduceTransparency && contrast != .increased ? glassDebug.parameters : nil))
             .background(FloatingSurface(opacity: model.settings.opacity, frost: model.settings.frost,
                 compact: motion.bubble, transitioning: motion.animationInProgress, onRight: motion.bubbleOnRight,
                 size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID), base: 48 + extra))
-            .clipShape(FloatingPanelShape(compact: motion.bubble, transitioning: motion.animationInProgress,
-                onRight: motion.bubbleOnRight, reveal: hoverReveal, base: 48 + extra))
             .background(WindowShadowInvalidation())
         }
+        .environment(\.glassDebugParameters, glassDebug.enabled ? glassDebug.parameters : nil)
         .onAppear { motion.refreshShadow(); motion.filterState = colorState; motion.filterLines = filter }
         .onChange(of: filter) { motion.filterLines = filter; motion.refreshBaseWidth() }
         .onChange(of: model.settings) { motion.refreshShadow() }
@@ -577,6 +589,8 @@ struct FloatingPanelView<Content: View>: View {
 }
 
 struct FloatingSurface: View, Animatable {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
     let opacity: UInt8
     let frost: UInt8
     let compact: Bool
@@ -592,15 +606,24 @@ struct FloatingSurface: View, Animatable {
     }
 
     var body: some View {
-        FloatingPanelMaterial(opacity: opacity, frost: frost, compact: compact, color: color)
+        let material = FloatingPanelMaterial(opacity: opacity, frost: frost, compact: compact, color: color)
             .frame(width: compact && !transitioning ? base + (size.width - base) * min(1, max(0, reveal)) : size.width, height: size.height)
             .frame(width: size.width, height: size.height, alignment: onRight ? .topTrailing : .topLeading)
-            .clipShape(FloatingPanelShape(compact: compact, transitioning: transitioning, onRight: onRight, reveal: reveal, base: base))
+        if compact && !reduceTransparency && contrast != .increased {
+            // The native material owns its shape at the animated width. Leave
+            // its optical edge unmasked; no second glass/paint layer.
+            material
+        } else {
+            // Preserve the exact opaque/expanded silhouette, including pixel
+            // rounding at fractional hover widths, for window alpha/shadows.
+            material.clipShape(FloatingPanelShape(compact: compact, transitioning: transitioning,
+                onRight: onRight, reveal: reveal, base: base))
+        }
     }
 }
 
-/// Glass, paper and color share one background alpha; content stays opaque.
-/// Shared by the expanded panel, circle and hover strip.
+/// The compact surface uses native glass directly. Expanded reading surfaces
+/// retain their independently configured paper, frost and background opacity.
 struct FloatingPanelMaterial: View {
     let opacity: UInt8
     let frost: UInt8
@@ -620,6 +643,7 @@ struct FloatingPanelMaterial: View {
 
 /// Resolved material inputs also let previews inspect the opaque accessibility surface.
 struct FloatingPanelSurface: View {
+    @Environment(\.glassDebugParameters) private var glassDebug
     let opacity: UInt8
     let frost: UInt8
     let compact: Bool
@@ -628,23 +652,22 @@ struct FloatingPanelSurface: View {
     let scheme: ColorScheme
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: compact ? 24 : DotistDesign.windowCornerRadius, style: .continuous)
-        Group {
-            if solid {
-                DotistDesign.paper
-            } else if compact {
-                Color.clear.glassEffect(.regular.tint(DotistTheme.tint(color, scheme)).interactive(), in: shape)
-                    .overlay(paperOverlay)
-            } else {
-                Color.clear.glassEffect(.regular.tint(DotistTheme.tint(color, scheme)), in: shape)
-                    .overlay(paperOverlay)
+        if compact {
+            TransientGlassSurface(cornerRadius: 24, color: color, interactive: true, solid: solid, scheme: scheme, debug: glassDebug)
+        } else {
+            let shape = RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius, style: .continuous)
+            Group {
+                if solid {
+                    DotistDesign.paper
+                } else {
+                    Color.clear.glassEffect(.regular.tint(DotistTheme.tint(color, scheme)), in: shape)
+                        .overlay(paperOverlay)
+                }
             }
+            .overlay(DotistTheme.swatch(color).opacity(solid ? 0.08 : (scheme == .dark ? 0.18 : 0.16)))
+            .opacity(solid ? 1 : DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false))
+            .clipShape(shape)
         }
-        .overlay(DotistTheme.swatch(color).opacity(solid ? 0.08 : (scheme == .dark ? 0.18 : 0.16)))
-        // Native regular glass has its own alpha floor. Scale the complete
-        // composed backdrop, including tint, rather than only its paper wash.
-        .opacity(solid ? 1 : DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false))
-        .clipShape(shape)
     }
 
     private var paperOverlay: some View {

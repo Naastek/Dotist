@@ -48,9 +48,8 @@ struct MainWindow: View {
     @State private var manageGroups = false
     @State private var manageTags = false
     @State private var showCalendar = false
-    @State private var filtersOpen = false
+    @StateObject var filterPresentation = DateFilterPresentation()
     @State private var hideCompleted = false
-    @State private var filterCloseWork: DispatchWorkItem?
     @State private var showDuePicker = false
     @State private var pickingTask: String?
     @State private var hoveredTask: String?
@@ -80,7 +79,6 @@ struct MainWindow: View {
     @State private var undoToastLifetime = PausableToastLifetime(duration: 7)
     @State private var undoToastVisible = false
     @State private var ghostFrame = CGRect.zero
-    @State private var insertionFrames: [TaskInsertionSlot: CGRect] = [:]
 
     private var drag: TaskListDrag? {
         get { reorderRuntime.drag }
@@ -107,25 +105,26 @@ struct MainWindow: View {
                 GroupManager(model: model, close: { manageGroups = false }, tags: { manageGroups = false; manageTags = true })
             } else {
                 header
-                    .overlay(alignment: .bottomTrailing) {
-                        if filtersOpen { filterStrip.offset(y: TaskDateFilterMetrics.rowHeight - 4).transition(.opacity) }
-                    }.zIndex(1)
-                activeFilterLine
-                if model.tagCounts.contains(where: { $0.open > 0 }) { tagBar }
-                taskList
+                DateFilterPushdown(isOpen: filterPresentation.isOpen) { filterStrip }
+                VStack(spacing: 0) {
+                    activeFilterLine
+                    if model.tagCounts.contains(where: { $0.open > 0 }) { tagBar }
+                    taskList
+                }.background(DateFilterContentClickObserver(enabled: filterPresentation.isOpen, dismiss: filterPresentation.contentClicked))
             }
             if !manageGroups && !manageTags {
                 composerArea
-
+                    .background(DateFilterContentClickObserver(enabled: filterPresentation.isOpen, dismiss: filterPresentation.contentClicked))
             }
         }
         .coordinateSpace(name: Self.listSpace)
         .overlay(alignment: .topLeading) {
             ghostConnector
             if let drag {
-                TaskLiftedBlock(drag: drag, motion: dragMotion, slotFrame: ghostFrame, viewport: listViewport) { row in
+                TaskLiftedBlock(drag: drag, motion: dragMotion) { row in
                     rowContent(row.task, children: model.children(of: row.task), sub: row.sub, allTasks: row.allTasks, previous: nil,
-                               hideDue: row.hideDue, titleParts: model.tags(for: row.task), actionsVisible: false)
+                               hideDue: row.hideDue, titleParts: model.tags(for: row.task), actionsVisible: false,
+                               selected: selection.value.ids.contains(row.task.id), depthOverride: row.depth)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .allowsHitTesting(false)
@@ -134,25 +133,22 @@ struct MainWindow: View {
                 }
             }
         }
+        .background(TaskPickupFrameProbe(runtime: reorderRuntime, role: .panel))
         .background(TaskReorderInteractionGuard(rowFrames: rowFrames.map(\.frame) + Array(toolbarFrames.values), dragging: drag != nil, cancel: cancelReorder, undoRedo: handleUndoShortcut))
-        .onPreferenceChange(TaskListRowFrame.Key.self) { if rowFrames != $0 { rowFrames = $0 } }
-        .onPreferenceChange(TaskListGroupFrame.Key.self) { if groupFrames != $0 { groupFrames = $0 } }
-        .onPreferenceChange(TaskInsertionFramesKey.self) { frames in
-            insertionFrames = frames
-            let frame = TaskInsertionFramesKey.logicalFrame(slot: insertionSlot, height: drag?.startFrame.height ?? 0, frames: frames)
-            if ghostFrame != frame { ghostFrame = frame }
-        }
+        .onPreferenceChange(TaskListRowFrame.Key.self) { if rowFrames != $0 { rowFrames = $0; updateGhostFrame() } }
+        .onPreferenceChange(TaskListGroupFrame.Key.self) { if groupFrames != $0 { groupFrames = $0; updateGhostFrame() } }
         .preference(key: TaskGhostFrameKey.self, value: ghostFrame)
-        .onChange(of: insertionSlot) { _ in updateInsertionMotion() }
-        .onChange(of: reduceMotion) { _ in updateInsertionMotion() }
+        .onChange(of: listViewport) { _ in updateGhostFrame() }
         .onPreferenceChange(ToolbarFrameKey.self) { toolbarFrames = $0 }
         .onChange(of: toolbarGestureActive) { active in if !active { toolbarDrag = nil } }
         .onPreferenceChange(TaskShelfFrameKey.self) { shelfFrames = $0 }
         .onChange(of: reorderGestureActive) { active in
             traceReorder("swiftui.active-change", fields: ["newActive": "\(active)"])
             if !active {
-                if drag?.committing == false { cancelReorder() }
-                dragCancelled = false
+                DispatchQueue.main.async {
+                    if drag?.committing == false { cancelReorder() }
+                    dragCancelled = false
+                }
             }
         }
         .onReceive(Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect()) { _ in autoScrollReorder() }
@@ -165,10 +161,11 @@ struct MainWindow: View {
             if undoToastVisible && !undoToastLifetime.isVisible(at: now) { undoToastVisible = false }
             if notice != nil && !noticeLifetime.isVisible(at: now) { notice = nil }
         }
-        .onDisappear { traceReorder("lifecycle.disappear"); cancelReorder(); reorderRuntime.handleInput = nil; leaveInputs(); selection.update { $0.clear() } }
+        .onDisappear { filterPresentation.dismiss(); traceReorder("lifecycle.disappear"); cancelReorder(); reorderRuntime.handleInput = nil; leaveInputs(); selection.update { $0.clear() } }
         .onHover { panelHovered = $0 }
         .foregroundColor(textColor)
         .onAppear { category = state.groupID ?? DotistGroup.inboxID; reorderRuntime.handleInput = handleReorderInput }
+        .onChange(of: showCalendar) { _, open in filterPresentation.dateControlsChanged(open) }
         .onChange(of: state.groupID) { id in
             cancelReorder()
             category = id ?? DotistGroup.inboxID
@@ -202,31 +199,35 @@ struct MainWindow: View {
         #endif
         return ScrollViewReader { proxy in
             GeometryReader { space in
-                ScrollView {
-                    // An eager stack keeps the gesture source alive while auto-scrolling
-                    // beyond the viewport. A lazy stack may recycle it mid-drag.
-                    VStack(alignment: .leading, spacing: 0) { listSections }
-                        // The viewport owns surplus height. Never propose that
-                        // height to sections or their minimum-height row labels.
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.bottom, 12)
-                        .frame(minHeight: max(space.size.height, showsEmptyState ? emptyStateHeight : 0), alignment: .topLeading)
-                        .overlay(alignment: .topLeading) {
-                            if showsEmptyState {
-                                emptyState(viewportHeight: space.size.height)
-                                    .background(GeometryReader { geometry in
-                                        Color.clear.preference(key: TaskEmptyStateHeightKey.self, value: geometry.size.height)
-                                    })
+                TaskContentPresentation(state: state, dragging: drag != nil || model.dragId != nil) {
+                    ScrollView {
+                        // An eager stack keeps the gesture source alive while auto-scrolling
+                        // beyond the viewport. A lazy stack may recycle it mid-drag.
+                        VStack(alignment: .leading, spacing: 0) { listSections }
+                            .animation(LayoutMotionInputs.shouldReduceMotion(reduceMotion) ? nil : .easeOut(duration: 0.16),
+                                       value: TaskContentSelection(state: state))
+                            // The viewport owns surplus height. Never propose that
+                            // height to sections or their minimum-height row labels.
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.bottom, 12)
+                            .frame(minHeight: max(space.size.height, showsEmptyState ? emptyStateHeight : 0), alignment: .topLeading)
+                            .overlay(alignment: .topLeading) {
+                                if showsEmptyState {
+                                    emptyState(viewportHeight: space.size.height)
+                                        .background(GeometryReader { geometry in
+                                            Color.clear.preference(key: TaskEmptyStateHeightKey.self, value: geometry.size.height)
+                                        })
+                                }
                             }
-                        }
-                        // Keep an overflowing empty block scrollable in short
-                        // windows without letting it size the section stack.
-                        .onPreferenceChange(TaskEmptyStateHeightKey.self) { emptyStateHeight = $0 }
-                        .padding(.horizontal, 16)
-                        .background(WindowDragArea())
-                        .background(TaskReorderScrollBridge(runtime: reorderRuntime))
-                }
+                            // Keep an overflowing empty block scrollable in short
+                            // windows without letting it size the section stack.
+                            .onPreferenceChange(TaskEmptyStateHeightKey.self) { emptyStateHeight = $0 }
+                            .padding(.horizontal, 16)
+                            .background(WindowDragArea())
+                            .background(TaskReorderScrollBridge(runtime: reorderRuntime))
+                    }
+                .background(TaskPickupFrameProbe(runtime: reorderRuntime, role: .viewport))
                 .background(GeometryReader { geometry in
                     Color.clear.onAppear { listViewport = geometry.frame(in: .named(Self.listSpace)) }
                         .onChange(of: geometry.frame(in: .named(Self.listSpace))) { listViewport = $0 }
@@ -248,16 +249,191 @@ struct MainWindow: View {
                     else if let id = model.gotoGroup { proxy.scrollTo(id, anchor: .top) }
                     model.gotoGroup = nil
                 }
+                }
             }
         }
     }
 
-    @ViewBuilder private var listSections: some View {
-        if state.scope == "all" && customDateRange == nil {
-            if !showsEmptyState { allGroups }
+    /// One ForEach owns headers and task rows. Moving the invisible gesture
+    /// owner through this array preserves its identity even across groups.
+    private var listSections: some View {
+        ForEach(presentedListEntries) { entry in
+            if let row = entry.row {
+                CollapsibleTaskSection(expanded: entry.expanded) {
+                    interactiveTaskRow(row.task, children: model.children(of: row.task), sub: row.sub,
+                        allTasks: row.allTasks, previous: row.previous, next: row.next, hideDue: row.hideDue,
+                        titleParts: model.tags(for: row.task), actionsVisible: drag == nil && (hoveredTask == row.task.id || pickingTask == row.task.id),
+                        region: row.region, date: row.date)
+                        .opacity(row.context ? 0.5 : 1)
+                }
+            } else if let group = entry.group {
+                entry.content
+                    .background(groupGeometry(group.id, region: group.region, date: group.date))
+                    .background(TaskPickupFrameProbe(runtime: reorderRuntime, role: .group(group.region), group: group))
+                    .id(group.id)
+            } else { entry.content }
         }
-        else if state.scope == "today" && customStart == nil { todayList }
-        else { filteredTasks }
+    }
+
+    private var presentedListEntries: [TaskListEntry] {
+        let entries = listEntries
+        guard let drag, let head = entries.first(where: { $0.row?.task.id == drag.taskID && drag.carries(drag.taskID, region: $0.row?.region ?? "") }),
+              let destination = drag.destination else { return entries }
+        var rest = reorderRestEntries(entries, session: drag)
+        // Slot is an index in the content array without the carried block.
+        // Draft/spacing decorations are not part of midpoint counting.
+        let index = TaskListEntry.insertionIndex(destination.slot, in: rest)
+        rest.insert(head, at: index)
+        return rest
+    }
+
+    /// Filtered groups exist only while they contain displayed rows. Apply
+    /// that same rule to the projected outline before release, so removing an
+    /// empty source heading cannot shift the committed destination a second time.
+    private func reorderRestEntries(_ entries: [TaskListEntry], session: TaskListDrag) -> [TaskListEntry] {
+        var rest = entries.filter { entry in
+            guard let row = entry.row else { return true }
+            return !session.carries(row.task.id, region: row.region)
+        }
+        if state.scope != "all" || customDateRange != nil {
+            let regions = Set(rest.compactMap { $0.row?.region })
+            rest.removeAll { entry in
+                guard let group = entry.group else { return false }
+                return !regions.contains(group.region) && group.region != session.destination?.region
+            }
+        }
+        return rest
+    }
+
+    private var listEntries: [TaskListEntry] {
+        var entries: [TaskListEntry] = []
+        func extra(_ id: String, _ view: some View) {
+            entries.append(.init(id: id, content: AnyView(view)))
+        }
+        func header(_ group: DotistGroup, region: String, date: String? = nil, empty: Bool, after: DotistTask?, inset: CGFloat = 0, visible: Bool = true) {
+            entries.append(.init(id: "header:" + region,
+                group: .init(id: group.id, region: region, frame: .zero, date: date),
+                content: AnyView(Group {
+                    if visible { groupHeader(group, empty: empty, after: after, region: region).padding(.top, inset) }
+                    else { Color.clear.frame(height: inset) }
+                })))
+        }
+        func row(_ task: DotistTask, region: String, date: String? = nil, flat: Bool = false, context: Bool = false, previous: String?, next: String?) {
+            entries.append(.init(id: "row:" + region + ":" + task.id,
+                expanded: state.showsGroupContents(task.category, hasHeader: task.category != DotistGroup.inboxID),
+                row: .init(task: task, frame: .zero, sub: model.depth(of: task) > 0, allTasks: flat, hideDue: date != nil,
+                    region: region, date: date, depth: model.depth(of: task), context: context, previous: previous, next: next)))
+            extra("draft:" + region + ":" + task.id, draftRow(after: task, sub: model.depth(of: task) > 0))
+        }
+        func tree(_ task: DotistTask, region: String, result: TaskFilterResult, previous: String?, next: String?) {
+            row(task, region: region, context: result.contextIDs.contains(task.id), previous: previous, next: next)
+            // "Only open" also hides completed subtasks of an open parent.
+            let children = model.visibleChildren(of: task).filter { child in
+                panelTasks.contains { $0.id == child.id } && !(hideCompleted && child.completed)
+            }
+            for (index, child) in children.enumerated() {
+                tree(child, region: region, result: result, previous: index > 0 ? children[index - 1].id : nil,
+                     next: index + 1 < children.count ? children[index + 1].id : nil)
+            }
+        }
+        func flat(_ result: TaskFilterResult, section: String, date: String? = nil) {
+            for id in dropGroupIDs.filter({ state.groupID == nil || $0 == state.groupID }) {
+                let items = result.tasks.filter { $0.category == id }
+                guard !items.isEmpty, let group = model.groups.first(where: { $0.id == id }) else { continue }
+                let region = section + ":" + id
+                let ids = Set(items.map(\.id))
+                let heads = items.filter { $0.parentId == nil || !ids.contains($0.parentId!) }
+                let children = Dictionary(grouping: items.filter { $0.parentId != nil }, by: { $0.parentId! })
+                func outline(_ task: DotistTask) -> [DotistTask] { [task] + (children[task.id] ?? []).flatMap(outline) }
+                let ordered = heads.flatMap(outline)
+                header(group, region: region, date: date, empty: false, after: heads.last, visible: id != DotistGroup.inboxID)
+                for (index, task) in ordered.enumerated() {
+                        row(task, region: region, date: date, flat: true, context: result.contextIDs.contains(task.id),
+                            previous: index > 0 ? ordered[index - 1].id : nil, next: index + 1 < ordered.count ? ordered[index + 1].id : nil)
+                }
+            }
+        }
+        func section(_ title: String, result: TaskFilterResult, key: String, date: String? = nil, gap: CGFloat = 0) {
+            extra("section:" + key, HStack(alignment: .opticalCenter, spacing: 6) {
+                OpticalText(title: model.text(title), size: 15, weight: .semibold, language: model.language)
+                    .foregroundColor(title == "已逾期" ? DotistDesign.danger : DotistDesign.ink)
+            }.frame(height: 30).padding(.top, 4 + gap).accessibilityIdentifier("section-heading:\(title)")
+                .preference(key: TaskSectionHeadingKey.self, value: [title]))
+            flat(result, section: key, date: date)
+        }
+        func disclosure(_ title: String, result: TaskFilterResult, upcoming: Bool, gap: CGFloat) {
+            let key = upcoming ? "upcoming" : "completed"
+            extra("disclosure:" + key, Button {
+                withAnimation(reorderAnimation()) { if upcoming { upcomingOpen.toggle() } else { todayDoneOpen.toggle() } }
+            } label: {
+                DisclosureRow(title: model.text(title), expanded: upcoming ? upcomingOpen : todayDoneOpen, language: model.language)
+            }.buttonStyle(.plain).modifier(DotistFocusRing()).padding(.top, gap))
+            if upcoming ? upcomingOpen : todayDoneOpen { flat(result, section: key) }
+        }
+        if state.scope == "all" && customDateRange == nil {
+            guard !showsEmptyState else { return [] }
+            let groups = model.groups.filter { dropGroupIDs.contains($0.id) && (state.groupID == nil || state.groupID == $0.id) }
+                .sorted { dropGroupIDs.firstIndex(of: $0.id)! < dropGroupIDs.firstIndex(of: $1.id)! }
+            var first = true
+            for group in groups {
+                let open = model.filteredTasks(scope: "all", groupID: group.id, tag: state.activeTag)
+                let done = model.filteredTasks(scope: "done", groupID: group.id, tag: state.activeTag)
+                let openIDs = Set(open.roots.map(\.id))
+                let completed = done.roots.filter { !openIDs.contains($0.id) }
+                let roots = model.ordered(panelTasks.filter { $0.category == group.id && $0.parentId == nil })
+                let visible = group.id != DotistGroup.inboxID
+                header(group, region: group.id, empty: roots.isEmpty, after: open.roots.last,
+                       inset: first ? 6 : 8, visible: visible)
+                if visible || !roots.isEmpty { first = false }
+                for result in [open, done] {
+                    let roots = result.roots.filter { result.roots == open.roots || (!hideCompleted && completed.contains($0)) }
+                    for (index, task) in roots.enumerated() {
+                        tree(task, region: group.id, result: result, previous: index > 0 ? roots[index - 1].id : nil,
+                             next: index + 1 < roots.count ? roots[index + 1].id : nil)
+                    }
+                }
+                if state.showsGroupContents(group.id, hasHeader: visible), addingToGroup == group.id {
+                    extra("group-draft:" + group.id, groupDraft(group))
+                }
+            }
+        } else if state.scope == "today" && customStart == nil {
+            let values = model.todayTaskSections(groupID: state.groupID, tag: state.activeTag)
+            var hasSection = false
+            if !values.overdue.matches.isEmpty { section("已逾期", result: values.overdue, key: "overdue"); hasSection = true }
+            if !values.today.matches.isEmpty {
+                if hasSection { extra("today-gap", Color.clear.frame(height: 20)) }
+                flat(values.today, section: "today", date: Date().dotistDay); hasSection = true
+            }
+            if !values.upcoming.matches.isEmpty { disclosure("接下来 {n} 天".replacingOccurrences(of: "{n}", with: "7"), result: values.upcoming, upcoming: true, gap: hasSection ? 20 : 0); hasSection = true }
+            if !values.completed.matches.isEmpty { disclosure("已完成", result: values.completed, upcoming: false, gap: hasSection ? 20 : 0) }
+        } else {
+            let result = dateFilterResult()
+            if customDateRange == nil && state.scope == "overdue" {
+                if !result.matches.isEmpty { section("已逾期", result: result, key: "overdue") }
+            } else if customDateRange == nil && state.scope == "undated" { flat(result, section: "undated") }
+            else if customDateRange == nil && state.scope == "done" {
+                if !result.matches.isEmpty { section("已完成", result: result, key: "done") }
+            } else {
+                let dates = Array(Set(result.matches.compactMap(\.dueDate))).sorted()
+                for (index, date) in dates.enumerated() {
+                    section(model.dueLabel(date), result: dateFilterResult(range: TaskDateRange(date, date)), key: date, date: date, gap: index > 0 ? 20 : 0)
+                }
+                let done = dateFilterResult(completed: true)
+                if !done.matches.isEmpty { disclosure("已完成", result: done, upcoming: false, gap: dates.isEmpty ? 0 : 20) }
+            }
+        }
+        return entries
+    }
+
+    private func groupDraft(_ group: DotistGroup) -> some View {
+        TaskRowLayout(depth: 0) {
+            TaskCheckmark(depth: 0, completed: false, children: [], emphasized: false)
+            TaskEditor(text: Binding(get: { groupTitles[group.id] ?? "" }, set: { groupTitles[group.id] = $0 }), height: $draftHeight,
+                font: DotistDesign.nativeFont(13, language: model.language), label: model.text("新任务（{name}）").replacingOccurrences(of: "{name}", with: group.name),
+                commit: { saveGroupDraft(group, continuing: true) }, cancel: { clearInputs() }, indent: { _ in }, blur: { saveGroupDraft(group, continuing: false) })
+                .id("group:\(group.id)").frame(height: draftHeight)
+            Color.clear.frame(width: 0, height: 0)
+        }
     }
 
     private var emptyStateContext: TaskEmptyState {
@@ -376,68 +552,49 @@ struct MainWindow: View {
         }
     }
 
-    private func rowGeometry(_ task: DotistTask, sub: Bool, allTasks: Bool, hideDue: Bool) -> some View {
+    private func rowGeometry(_ task: DotistTask, sub: Bool, allTasks: Bool, hideDue: Bool, region: String, date: String?) -> some View {
         GeometryReader { geometry in
             Color.clear.preference(key: TaskListRowFrame.Key.self, value: [TaskListRowFrame(
-                task: task, frame: geometry.frame(in: .named(Self.listSpace)), sub: sub, allTasks: allTasks, hideDue: hideDue
+                task: task, frame: geometry.frame(in: .named(Self.listSpace)), sub: sub, allTasks: allTasks, hideDue: hideDue, region: region, date: date, depth: model.depth(of: task)
             )])
         }
     }
 
-    private func groupGeometry(_ id: String, region: String) -> some View {
+    private func groupGeometry(_ id: String, region: String, date: String? = nil) -> some View {
         GeometryReader { geometry in
             Color.clear.preference(key: TaskListGroupFrame.Key.self, value: [TaskListGroupFrame(
-                id: id, region: region, frame: geometry.frame(in: .named(Self.listSpace))
+                id: id, region: region, frame: geometry.frame(in: .named(Self.listSpace)), date: date
             )])
         }
     }
 
-    private var showsInsertionGhost: Bool {
-        guard let drag, shelfTarget == nil else { return false }
-        return drag.target != drag.initialTarget
+    private var showsInsertionGhost: Bool { drag?.destination != nil }
+
+    private func updateGhostFrame() {
+        guard let drag, let row = rowFrames.first(where: { $0.task.id == drag.taskID && drag.carries($0.task.id, region: $0.region) }) else { return }
+        ghostFrame = row.frame
     }
 
-    private var insertionSlot: TaskInsertionSlot? {
-        guard showsInsertionGhost, let drag else { return nil }
-        if let id = drag.ghostBeforeID { return .before(id) }
-        if let id = drag.ghostAfterID { return .after(id) }
-        if drag.targetIsEmpty, let region = drag.region { return .empty(region) }
-        return nil
-    }
-
-    private func updateInsertionMotion() {
-        let slot = insertionSlot
-        // Publish logical destination geometry immediately, even if another
-        // slot is still closing or the pointer reverses before the next tick.
-        ghostFrame = TaskInsertionFramesKey.logicalFrame(slot: slot, height: drag?.startFrame.height ?? 0, frames: insertionFrames)
-        guard drag != nil else { reorderRuntime.insertionMotion.reset(); return }
-        reorderRuntime.insertionMotion.retarget(slot: slot, height: drag?.startFrame.height ?? 0,
-            reduceMotion: LayoutMotionInputs.shouldReduceMotion(reduceMotion))
-    }
-
-    private func emptyGroupGhost(_ id: String, region: String) -> some View {
-        insertionSpace(.empty(region))
-    }
-
-    private func insertionSpace(_ slot: TaskInsertionSlot) -> some View {
-        TaskInsertionSpace(motion: reorderRuntime.insertionMotion, slot: slot, coordinateSpace: Self.listSpace)
+    private func reorderAnimation(_ duration: Double = 0.16) -> Animation? {
+        LayoutMotionInputs.shouldReduceMotion(reduceMotion) ? nil : .snappy(duration: duration)
     }
 
     @ViewBuilder private var ghostConnector: some View {
         if let drag, let target = drag.target, target.level > 0, shelfTarget == nil,
-           let parent = rowFrames.first(where: { $0.task.id == target.parentID }),
-           let first = drag.visibleBlock.first {
+           let parent = rowFrames.first(where: { $0.task.id == target.parentID && $0.task.category == target.groupID && $0.region == drag.destination?.region }),
+           !drag.visibleBlock.isEmpty {
             let frame = showsInsertionGhost ? ghostFrame : drag.startFrame
             if frame != .zero {
                 let parentDepth = model.depth(of: parent.task)
                 let start = CGPoint(x: parent.frame.minX + TaskRowMetrics.circleX(parentDepth) - TaskRowMetrics.inset + TaskRowMetrics.diameter(parentDepth) / 2,
                                     y: parent.frame.midY + TaskRowMetrics.diameter(parentDepth) / 2 + 2)
                 let end = CGPoint(x: frame.minX + TaskRowMetrics.circleX(target.level) - TaskRowMetrics.inset - 2,
-                                  y: frame.minY + first.frame.height / 2)
+                                  y: frame.midY)
                 TaskGhostConnector(start: start, end: end)
                     .stroke(DotistDesign.rule, style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round))
-                    .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.12), value: end)
-                    .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.12), value: start)
+                    .animation(reorderAnimation(), value: end)
+                    .animation(reorderAnimation(), value: start)
+                    .id(parent.task.id + ":" + parent.region)
                     .mask(alignment: .topLeading) {
                         Rectangle().frame(width: listViewport.width, height: listViewport.height).offset(x: listViewport.minX, y: listViewport.minY)
                     }
@@ -495,164 +652,135 @@ struct MainWindow: View {
             if case .move = input { guard editing == nil, draftAfter == nil else { traceReorder("input.move-rejected-editor", taskID: id); return } }
             guard !dragCancelled, drag?.taskID == id, drag?.committing == false else { traceReorder("input.move-or-end-rejected", taskID: id); return }
             dragMotion.location = point
-            retargetReorder()
+            // Mouse-up commits the last presented slot, as Tic does. Resolving
+            // again here can choose a different slot after layout has settled,
+            // causing the committed row to jump away from its placeholder.
             if case .end = input { finishReorder() }
+            else { retargetReorder() }
         case .cancel: traceReorder("input.cancel"); cancelReorder()
         }
     }
 
     private func beginReorder(_ task: DotistTask, at start: CGPoint) {
-        guard let head = rowFrames.first(where: { $0.task.id == task.id }) else { traceReorder("begin.missing-row", taskID: task.id, point: start); return }
+        let rowFrames = reorderRuntime.pickupFrames(self.rowFrames)
+        guard let head = rowFrames.first(where: { $0.task.id == task.id && $0.frame.contains(start) }) ?? rowFrames.first(where: { $0.task.id == task.id }) else { traceReorder("begin.missing-row", taskID: task.id, point: start); return }
         let hierarchy = TaskHierarchy(model.tasks)
         let selectedIDs = selection.value.ids.contains(task.id) ? Array(selection.value.ids) : [task.id]
         let roots = hierarchy.selectionRoots(ids: selectedIDs, groupIDs: model.groups.map(\.id))
             .sorted { a, b in (displayOrder.firstIndex(of: a.id) ?? 0) < (displayOrder.firstIndex(of: b.id) ?? 0) }
         let ids = Set(roots.flatMap { [$0.id] + model.descendants(of: $0).map(\.id) })
-        let block = rowFrames.filter { ids.contains($0.task.id) && $0.frame.height > 0 }.sorted { $0.frame.minY < $1.frame.minY }
-        guard let first = block.first else { traceReorder("begin.empty-block", taskID: task.id); return }
-        traceReorder("begin.accepted", taskID: task.id, point: start, fields: ["sourceFrame": "\(head.frame)", "roots": "\(roots.map(\.id))"])
+        // A filtered outline can show the same task as context in several
+        // regions. Lift one representation per identity, preferring the press's
+        // region; other representations keep their ordinary layout.
+        var seen: Set<String> = []
+        let block = rowFrames.filter { ids.contains($0.task.id) && $0.frame.height > 0 }
+            .sorted {
+                if ($0.region == head.region) != ($1.region == head.region) { return $0.region == head.region }
+                return abs($0.frame.midY - head.frame.midY) < abs($1.frame.midY - head.frame.midY)
+            }.filter { seen.insert($0.task.id).inserted }.sorted { $0.frame.minY < $1.frame.minY }
+        guard !block.isEmpty else { return }
         dragMotion.location = start
-        ghostFrame = .zero
-        drag = TaskListDrag(taskID: task.id, blockIDs: ids, visibleBlock: block, startFrame: CGRect(x: head.frame.minX, y: first.frame.minY, width: head.frame.width, height: block.reduce(0) { $0 + $1.frame.height }), startLocation: start,
-                            rootIDs: roots.map(\.id), sourceDepth: roots.first.map { model.depth(of: $0) } ?? model.depth(of: task), subtreeHeight: roots.map { model.subtreeHeight(of: $0) }.max() ?? 0)
-        // Resolve against pre-drag geometry. Neither the source row nor the
-        // composer changes height, and the initial slot adds no duplicate gap.
-        drag?.baselineRows = rowFrames
-        drag?.baselineGroups = groupFrames
-        drag?.scrollOriginY = reorderRuntime.scrollOriginY
+        var next = TaskListDrag(taskID: task.id, blockIDs: ids, visibleBlock: block,
+            startFrame: CGRect(x: head.frame.minX, y: head.frame.minY, width: head.frame.width, height: 32), startLocation: start,
+            rootIDs: roots.map(\.id), sourceDepth: roots.first.map { model.depth(of: $0) } ?? model.depth(of: task),
+            subtreeHeight: roots.map { model.subtreeHeight(of: $0) }.max() ?? 0)
+        // The source itself becomes the single-line placeholder; never create
+        // a separate replacement gap or remove the view owning mouse-down.
+        let members = rowFrames.filter { !ids.contains($0.task.id) && $0.region == head.region }.sorted { $0.frame.minY < $1.frame.minY }
+        let slot = members.prefix { $0.frame.midY < head.frame.midY }.count
+        let target = TaskReorderEngine.Target(groupID: task.category, slot: slot, level: next.sourceDepth,
+            parentID: roots.first?.parentId, beforeID: members.dropFirst(slot).first?.task.id)
+        let anchor: TaskInsertionSlot = slot < members.count ? .before(members[slot].task.id, region: head.region)
+            : members.last.map { .after($0.task.id, region: head.region) } ?? .empty(head.region)
+        next.destination = .init(target: target, region: head.region, slot: anchor, frame: head.frame, date: head.date)
+        withAnimation(reorderAnimation()) { drag = next }
+        ghostFrame = next.startFrame
         model.beginDrag(task.id, scope: "list:\(state.scope)")
         model.focusId = task.id
-        retargetReorder()
     }
 
     private func retargetReorder() {
         guard var next = drag, !next.committing else { return }
         let location = dragMotion.location
         let shelf = shelfFrames.first(where: { $0.value.contains(location) })?.key
-        if shelfTarget != shelf { shelfTarget = shelf }
-        if let shelf {
-            let wasCollapsed = state.collapsedGroups.contains(shelf)
-            if wasCollapsed {
-                withAnimation(groupCollapseAnimation) { state.setGroupCollapsed(false, id: shelf) }
-                next.expandedDropGroup = shelf
-            }
-            let target = TaskCollapsedGroupDrop.target(groupID: shelf)
-            if next.target != target || wasCollapsed { next.target = target; drag = next }
-            return
+        shelfTarget = shelf
+        let entries = reorderRestEntries(listEntries, session: next)
+        let rows = reorderRuntime.pickupFrames(rowFrames)
+        let groups = reorderRuntime.pickupGroupFrames(groupFrames)
+        func frame(_ entry: TaskListEntry) -> CGRect? {
+            if let row = entry.row { return rows.first { $0.task.id == row.task.id && $0.region == row.region }?.frame }
+            return groups.first { $0.region == entry.group?.region }?.frame
         }
-        // A collapsed header is a whole-group destination. Keep its append
-        // target while its newly revealed rows animate under the pointer.
-        let hoveredRegion = groupFrames.first { $0.frame.contains(location) }
-        if let region = hoveredRegion, state.collapsedGroups.contains(region.id) {
-            withAnimation(groupCollapseAnimation) { state.setGroupCollapsed(false, id: region.id) }
-            next.expandedDropGroup = region.id
-            next.target = TaskCollapsedGroupDrop.target(groupID: region.id)
-            next.region = region.region
-            next.ghostBeforeID = nil
-            next.ghostAfterID = nil
-            next.targetIsEmpty = true
-            drag = next
-            return
+        let content = entries.filter { entry in
+            guard let bounds = frame(entry) else { return false }
+            return entry.row == nil || (entry.expanded && TaskRowVisibility.hasUsableFrame(bounds))
         }
-        if let expanded = next.expandedDropGroup {
-            if let region = hoveredRegion, region.id == expanded {
-                next.target = TaskCollapsedGroupDrop.target(groupID: expanded)
-                next.region = region.region
-                next.ghostBeforeID = nil
-                // The group's end placeholder follows all open task trees.
-                next.ghostAfterID = nil
-                next.targetIsEmpty = true
-                if drag?.target != next.target || drag?.region != next.region { drag = next }
-                return
-            }
-            // Rebase once after leaving the expanded group. Strip the live
-            // placeholder so that it cannot feed back into pointer projection.
-            next.baselineRows = rowFrames.map { row in
-                var row = row
-                row.frame = removingInsertionSpaces(row.frame)
-                return row
-            }
-            next.baselineGroups = groupFrames.map { group in
-                TaskListGroupFrame(id: group.id, region: group.region, frame: removingInsertionSpaces(group.frame))
-            }
-            next.scrollOriginY = reorderRuntime.scrollOriginY
-            next.expandedDropGroup = nil
+        let center = location.y - min(max(next.startLocation.y - next.startFrame.minY, 0), 32) + 16
+        // Exactly Tic's count, with the gap open. Headings occupy the same
+        // content stream and therefore move with the very same transaction.
+        let slot = content.filter { (frame($0)?.midY ?? .greatestFiniteMagnitude) < center }.count
+        let preceding = Array(content.prefix(slot))
+        let owner = shelf.flatMap { id in content.first { $0.group?.id == id }?.group }
+            ?? preceding.last.flatMap { entry -> TaskListGroupFrame? in
+                let region = entry.row?.region ?? entry.group?.region
+                return content.first { $0.group?.region == region }?.group
+            } ?? content.first?.group
+        guard let group = owner else { return }
+        if let date = group.date, !model.tasks.contains(where: { next.blockIDs.contains($0.id) && $0.dueDate == date }) { return }
+        if state.collapsedGroups.contains(group.id) {
+            next.expandedDropGroup = group.id
+            withAnimation(reorderAnimation()) { state.setGroupCollapsed(false, id: group.id) }
         }
-        // Project through every actual layout gap: a previous slot can still
-        // be closing during a reversal. The pre-drag baseline stays frozen.
-        let logicalY = TaskInsertionFramesKey.pointerY(location.y, frames: insertionFrames)
-        let scrollDelta = reorderRuntime.scrollOriginY - next.scrollOriginY
-        let groups = next.baselineGroups.sorted { $0.frame.minY < $1.frame.minY }
-        let engineGroups = groups.map { TaskReorderEngine.Group(id: $0.id, minY: $0.frame.minY - scrollDelta, maxY: $0.frame.maxY - scrollDelta) }
-        let rows = next.baselineRows.sorted { $0.frame.midY < $1.frame.midY }.map { row in
-            TaskReorderEngine.Row(id: row.task.id, depth: model.depth(of: row.task), groupID: row.task.category, parentID: row.task.parentId, midY: row.frame.midY - scrollDelta)
+        let members = content.compactMap(\.row).filter { $0.region == group.region }
+        let rawSlot = shelf != nil ? members.count : preceding.compactMap(\.row).filter { $0.region == group.region }.count
+        let engineRows = next.rootIDs.compactMap { id in model.tasks.first { $0.id == id } }.map {
+            TaskReorderEngine.Row(id: $0.id, depth: model.depth(of: $0), groupID: $0.category, parentID: $0.parentId, midY: -1)
+        } + members.enumerated().map { index, row in
+            TaskReorderEngine.Row(id: row.task.id, depth: row.depth, groupID: row.task.category, parentID: row.task.parentId, midY: Double(index))
         }
-        let target = TaskReorderEngine.target(rows: rows, groups: engineGroups, draggedID: next.rootIDs.first ?? next.taskID, blockIDs: next.blockIDs, startY: next.startLocation.y, offsetY: logicalY - next.startLocation.y, offsetX: location.x - next.startLocation.x, indentStep: 22, subtreeHeight: next.subtreeHeight)
-        if TaskDragDiagnostics.enabled {
-            traceReorder("target.resolved", point: location, fields: ["resolved": String(describing: target),
-                "logicalY": "\(logicalY)", "ghost": "\(ghostFrame)", "scrollDelta": "\(scrollDelta)",
-                "groups": groups.map { "\($0.id):\($0.frame)" }.joined(separator: ";")])
-        }
-        let region = groups.first { $0.id == target?.groupID && logicalY >= $0.frame.minY - scrollDelta && logicalY < $0.frame.maxY - scrollDelta }
-            ?? groups.filter { $0.id == target?.groupID }.min { abs($0.frame.midY - scrollDelta - logicalY) < abs($1.frame.midY - scrollDelta - logicalY) }
-        // Frozen pre-drag geometry prevents a newly inserted gap from
-        // feeding back into target selection or shifting the scroll origin.
-        guard target != next.target || region?.region != next.region || drag?.expandedDropGroup != next.expandedDropGroup else { return }
-        let rest = rows.filter { $0.groupID == target?.groupID && !next.blockIDs.contains($0.id) }
-        let slot = target?.slot ?? 0
-        next.target = target
-        next.ghostBeforeID = rest.indices.contains(slot) ? rest[slot].id : nil
-        next.ghostAfterID = slot >= rest.count ? rest.last?.id : nil
-        next.targetIsEmpty = rest.isEmpty
-        next.region = region?.region
-        if next.initialTarget == nil { next.initialTarget = target }
-        // Layout ticks animate insertion heights; keep native and SwiftUI
-        // frames immediate within each tick, without a second animation.
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) { drag = next }
-        updateInsertionMotion()
-    }
-
-    private func removingInsertionSpaces(_ frame: CGRect) -> CGRect {
-        let minY = TaskInsertionFramesKey.pointerY(frame.minY, frames: insertionFrames)
-        let maxY = TaskInsertionFramesKey.pointerY(frame.maxY, frames: insertionFrames)
-        return CGRect(x: frame.minX, y: minY, width: frame.width, height: maxY - minY)
+        guard let target = TaskReorderEngine.target(rows: engineRows,
+            groups: [.init(id: group.id, minY: -1, maxY: Double(members.count + 1))],
+            draggedID: next.rootIDs.first ?? next.taskID, blockIDs: next.blockIDs,
+            startY: 0, offsetY: Double(rawSlot) - 0.5, offsetX: location.x - next.startLocation.x,
+            subtreeHeight: next.subtreeHeight) else { return }
+        // The engine can advance across descendants to preserve subtree order.
+        let anchor: TaskInsertionSlot = target.slot < members.count ? .before(members[target.slot].task.id, region: group.region)
+            : members.last.map { .after($0.task.id, region: group.region) } ?? .empty(group.region)
+        let destination = TaskDropDestination(target: target, region: group.region, slot: anchor, frame: .zero, date: group.date)
+        guard destination.target != next.destination?.target || destination.slot != next.destination?.slot || next.expandedDropGroup != drag?.expandedDropGroup else { return }
+        next.destination = destination
+        withAnimation(reorderAnimation()) { drag = next }
     }
 
     private func finishReorder() {
-        traceReorder("finish.request")
-        guard let drag, !drag.committing else { traceReorder("finish.rejected-no-drag"); return }
-        guard let target = drag.target, listViewport.contains(dragMotion.location) || shelfTarget != nil else { traceReorder("finish.rejected-target-or-viewport"); cancelReorder(); return }
-        traceReorder("commit.request", fields: ["roots": "\(drag.rootIDs)"])
+        guard let drag, !drag.committing else { return }
+        guard let target = drag.target, listViewport.contains(dragMotion.location) || shelfTarget != nil else { cancelReorder(); return }
         self.drag?.committing = true
-        let complete = { traceReorder("commit.callback-success"); clearReorder() }
+        let complete = {
+            // Publish the committed snapshot and retire the placeholder in one
+            // transaction. There is no measured second landing or release clock.
+            withAnimation(reorderAnimation(0.18)) { clearReorder() }
+        }
         if drag.rootIDs.count == 1 {
-            model.commitReorder(taskID: drag.rootIDs[0], to: target, completed: complete, failed: { traceReorder("commit.callback-failure"); clearReorder() })
+            model.commitReorder(taskID: drag.rootIDs[0], to: target, completed: complete, failed: { clearReorder() })
         } else {
-            // Preflight every root before applying the gesture. Core owns
-            // each subtree move and the model freezes observation until done.
-            model.change(completed: complete, failed: { traceReorder("commit.callback-failure"); clearReorder() }) { store in
+            model.change(completed: complete, failed: { clearReorder() }) { store in
                 try TaskDragBatch.commit(ids: drag.rootIDs, target: target, store: store)
             }
         }
     }
 
     private func cancelReorder() {
-        traceReorder("cancel.request")
         guard drag != nil, drag?.committing == false else { return }
         dragCancelled = reorderGestureActive
-        clearReorder()
+        withAnimation(reorderAnimation(0.18)) { clearReorder() }
     }
 
     private func clearReorder() {
-        traceReorder("clear.begin")
         drag = nil
-        reorderRuntime.insertionMotion.reset()
         ghostFrame = .zero
         shelfTarget = nil
         model.endDrag()
-        traceReorder("clear.finished")
     }
 
     private func autoScrollReorder() {
@@ -700,7 +828,7 @@ struct MainWindow: View {
         switch item {
         // Filter and calendar state is named by the line under the header, so their
         // visibility follows the user setting; only an open popover or the completion toggle pins.
-        case .filter: filtersOpen
+        case .filter: filterPresentation.isOpen
         case .completion: hideCompleted
         case .calendar: showCalendar
         default: false
@@ -843,8 +971,7 @@ struct MainWindow: View {
         }
     }
 
-    /// The header names the active scope; the full strip only appears while the
-    /// pointer rests on that name or on the strip itself.
+    /// The toolbar names the scope; clicking opens a timed, in-flow filter row.
     private var currentScopeLabel: String {
         if let start = customStart {
             let end = customEnd ?? start
@@ -853,43 +980,32 @@ struct MainWindow: View {
         return model.text(filterLabel(state.scope))
     }
 
-    private func filterHover(_ inside: Bool) {
-        filterCloseWork?.cancel()
-        let animation: Animation? = reduceMotion ? nil : .easeOut(duration: 0.14)
-        if inside { withAnimation(animation) { filtersOpen = true }; return }
-        let work = DispatchWorkItem { withAnimation(animation) { filtersOpen = false } }
-        filterCloseWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
-    }
-
     private var dateFilterActive: Bool { state.dateFilterActive }
 
     private var filterButton: some View {
-        Button { filterHover(!filtersOpen) } label: {
+        Button { filterPresentation.toggle() } label: {
             OpticalSymbol(name: "line.3.horizontal.decrease", size: 14).frame(width: 28, height: 28).contentShape(Rectangle())
         }.buttonStyle(.plain).modifier(DotistFocusRing())
-            .foregroundColor(dateFilterActive || filtersOpen ? DotistDesign.accent : DotistDesign.muted)
-            .onHover { filterHover($0) }
+            .foregroundColor(dateFilterActive || filterPresentation.isOpen ? DotistDesign.accent : DotistDesign.muted)
+            .animation(DateFilterSelectionMotion.animation(reduceMotion: reduceMotion), value: dateFilterActive || filterPresentation.isOpen)
             .help(model.text("日期筛选")).accessibilityLabel(Text(model.text("日期筛选")))
             .accessibilityValue(Text(currentScopeLabel))
             .accessibilityIdentifier("date-filter-current")
     }
 
-    /// One quiet line naming whatever narrows the list. Nothing shows for "All".
-    @ViewBuilder private var activeFilterLine: some View {
+    /// Reserve the summary's 22pt even for All. Selection must not insert a
+    /// second, instantaneous push below the independently animated filter strip.
+    private var activeFilterLine: some View {
         let summary = state.filterSummary(in: model)
-        let parts = [summary].compactMap { $0 }
-        Group {
-            if !parts.isEmpty {
-                HStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    Text(summary ?? "").font(DotistDesign.textFont(12, language: model.language))
-                        .foregroundStyle(DotistDesign.faint).lineLimit(1)
-                }.padding(.horizontal, 16).frame(height: 22)
-                    .transition(.opacity)
-                    .accessibilityIdentifier("active-filter-line")
-            }
-        }.animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: parts)
+        return HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            Text(summary ?? "").font(DotistDesign.textFont(12, language: model.language))
+                .foregroundStyle(DotistDesign.faint).lineLimit(1)
+                .contentTransition(.opacity)
+        }.padding(.horizontal, 16).frame(height: 22)
+            .accessibilityHidden(summary == nil)
+            .accessibilityIdentifier("active-filter-line")
+            .animation(DateFilterSelectionMotion.animation(reduceMotion: reduceMotion), value: summary)
     }
 
     private var filterStrip: some View {
@@ -899,14 +1015,16 @@ struct MainWindow: View {
                     DraggableFilterButton(title: model.text(filterLabel(id)), selected: customStart == nil && state.scope == id, language: model.language,
                                           distance: TaskDateFilterMetrics.distance(of: id, selected: customStart == nil ? state.scope : nil, in: model.settings.filters)) {
                         state.scope = id; customStart = nil; customEnd = nil
-                        filterHover(false)
+                        filterPresentation.selected()
                     }.accessibilityIdentifier("date-filter:\(id)")
                 }
-            }.padding(.horizontal, 12)
+            }.padding(.horizontal, DateFilterEdgeMask.contentInset)
         }.frame(height: TaskDateFilterMetrics.rowHeight)
+            .mask { DateFilterEdgeMask() }
             .glassEffect(.regular, in: .rect(cornerRadius: 12))
-            .padding(.horizontal, 8)
-            .onHover { filterHover($0) }
+            .background(DateFilterHoverObserver(enabled: filterPresentation.isOpen, changed: filterPresentation.hoverChanged))
+            .padding(.horizontal, TaskRowMetrics.inset)
+            .allowsHitTesting(filterPresentation.isOpen)
     }
 
     private var completionToggle: some View {
@@ -978,55 +1096,6 @@ struct MainWindow: View {
 
     private var dropGroupIDs: [String] { [DotistGroup.inboxID] + model.visibleGroups.map(\.id) }
 
-    @ViewBuilder private var allGroups: some View {
-        if state.groupID == nil || state.groupID == DotistGroup.inboxID, let inbox = model.groups.first(where: { $0.id == DotistGroup.inboxID }) {
-            taskGroup(inbox, showsHeader: false)
-        }
-        ForEach(model.visibleGroups.filter { state.groupID == nil || $0.id == state.groupID }) { group in
-            taskGroup(group)
-        }
-    }
-
-    private func taskGroup(_ group: DotistGroup, showsHeader: Bool = true) -> some View {
-        let roots = showsHeader ? model.ordered(panelTasks.filter { $0.category == group.id && $0.parentId == nil })
-            : model.ungroupedTasks.filter { root in panelTasks.contains { $0.id == root.id } }
-        let openResult = model.filteredTasks(scope: "all", groupID: group.id, tag: state.activeTag)
-        let completedResult = model.filteredTasks(scope: "done", groupID: group.id, tag: state.activeTag)
-        let open = openResult.roots
-        // A completed descendant belongs to its visible parent's full tree.
-        // Only roots absent from the open trees belong in the folded section.
-        let openRootIDs = Set(open.map(\.id))
-        let completed = completedResult.roots.filter { !openRootIDs.contains($0.id) }
-        let firstGroup = model.visibleGroups.first { state.groupID == nil || $0.id == state.groupID }?.id
-        let firstSection = !showsHeader || (group.id == firstGroup && (state.groupID != nil || model.ungroupedTasks.isEmpty))
-        return VStack(alignment: .leading, spacing: 0) {
-            if showsHeader {
-                groupHeader(group, empty: roots.isEmpty, after: open.last)
-            }
-            CollapsibleTaskSection(expanded: state.showsGroupContents(group.id, hasHeader: showsHeader)) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(open.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? open[index - 1].id : nil, next: index + 1 < open.count ? open[index + 1].id : nil, result: openResult) }
-                    emptyGroupGhost(group.id, region: group.id)
-                    if addingToGroup == group.id {
-                        TaskRowLayout(depth: 0) {
-                            TaskCheckmark(depth: 0, completed: false, children: [], emphasized: false)
-                            TaskEditor(text: Binding(get: { groupTitles[group.id] ?? "" }, set: { groupTitles[group.id] = $0 }), height: $draftHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("新任务（{name}）").replacingOccurrences(of: "{name}", with: group.name), commit: { saveGroupDraft(group, continuing: true) }, cancel: { clearInputs() }, indent: { _ in }, blur: { saveGroupDraft(group, continuing: false) })
-                                .id("group:\(group.id)").frame(height: draftHeight)
-                            Color.clear.frame(width: 0, height: 0)
-                        }
-
-                    }
-                    // Completed tasks stay in place, checked and struck through.
-                    if !hideCompleted {
-                        ForEach(Array(completed.enumerated()), id: \.element.id) { index, task in taskTree(task, previous: index > 0 ? completed[index - 1].id : nil, next: index + 1 < completed.count ? completed[index + 1].id : nil, result: completedResult).transition(.opacity) }
-                    }
-                }
-            }
-        }
-            .padding(.top, firstSection ? 6 : 8).id(group.id).contentShape(Rectangle())
-            .background(groupGeometry(group.id, region: group.id))
-    }
-
     private var groupCollapseAnimation: Animation? {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration: 0.16)
     }
@@ -1050,7 +1119,7 @@ struct MainWindow: View {
                     .opacity(hoveredGroup == hoverID || addingToGroup == group.id ? 1 : 0)
                     .allowsHitTesting(hoveredGroup == hoverID || addingToGroup == group.id)
             }
-            .padding(.top, 4)
+            .frame(height: 32)
             .onHover { over in if over { hoveredGroup = hoverID } else if hoveredGroup == hoverID { hoveredGroup = nil } }
             .contextMenu {
                 Button(model.text("添加任务")) { beginGroupDraft(group, after: task) }
@@ -1059,54 +1128,8 @@ struct MainWindow: View {
             }
     }
 
-    private func taskTree(_ task: DotistTask, previous: String?, next: String?, result: TaskFilterResult) -> AnyView {
-        // Group trees always show their complete subtree, including completed
-        // children. Date-filtered lists render their own matching rows separately.
-        let children = model.visibleChildren(of: task).filter { child in panelTasks.contains { $0.id == child.id } }
-        return AnyView(VStack(alignment: .leading, spacing: 0) {
-            taskRow(task, children: model.children(of: task), sub: model.depth(of: task) > 0, allTasks: false, previous: previous, next: next)
-                .opacity(result.contextIDs.contains(task.id) ? 0.5 : 1)
-            if model.depth(of: task) < DotistTask.maxDepth {
-                ForEach(Array(children.enumerated()), id: \.element.id) { index, child in
-                    taskTree(child, previous: index > 0 ? children[index - 1].id : nil, next: index + 1 < children.count ? children[index + 1].id : nil, result: result)
-                }
-            }
-            draftRow(after: task, sub: model.depth(of: task) > 0)
-        })
-    }
-
     private var customDateRange: TaskDateRange? {
         customStart.map { TaskDateRange($0, customEnd ?? $0) }
-    }
-
-    private func dateFilterResult(completed: Bool = false, range: TaskDateRange? = nil) -> TaskFilterResult {
-        model.filteredTasks(scope: state.scope, groupID: state.groupID, tag: state.activeTag,
-                            customRange: range ?? customDateRange, completed: completed)
-    }
-
-    @ViewBuilder private var filteredTasks: some View {
-        let result = dateFilterResult()
-        if customDateRange == nil && state.scope == "overdue" {
-            if !result.matches.isEmpty { todaySection("已逾期", result: result) }
-        } else if customDateRange == nil && state.scope == "undated" {
-            if !result.matches.isEmpty { flatRows(result.tasks, contextIDs: result.contextIDs) }
-        } else if customDateRange == nil && state.scope == "done" {
-            if !result.matches.isEmpty { todaySection("已完成", result: result) }
-        } else {
-            let dates = Array(Set(result.matches.compactMap(\.dueDate))).sorted()
-            let done = dateFilterResult(completed: true)
-            VStack(alignment: .leading, spacing: 20) {
-                ForEach(dates, id: \.self) { date in
-                    todaySection(model.dueLabel(date), result: dateFilterResult(range: TaskDateRange(date, date)), hideDue: true)
-                }
-                if !done.matches.isEmpty {
-                    Button { todayDoneOpen.toggle() } label: {
-                        DisclosureRow(title: model.text("已完成"), expanded: todayDoneOpen, language: model.language)
-                    }.buttonStyle(.plain).modifier(DotistFocusRing())
-                    if todayDoneOpen { flatRows(done.tasks, contextIDs: done.contextIDs) }
-                }
-            }
-        }
     }
 
     private var rangeBounds: (String, String) {
@@ -1114,79 +1137,13 @@ struct MainWindow: View {
         return (range.start, range.end)
     }
 
-    private var todayList: some View {
-        let sections = model.todayTaskSections(groupID: state.groupID, tag: state.activeTag)
-        return VStack(alignment: .leading, spacing: 20) {
-            if !sections.overdue.matches.isEmpty { todaySection("已逾期", result: sections.overdue) }
-            if !sections.today.matches.isEmpty { flatRows(sections.today.tasks, hideDue: true, contextIDs: sections.today.contextIDs) }
-            if !sections.upcoming.matches.isEmpty {
-                Button { upcomingOpen.toggle() } label: {
-                    DisclosureRow(title: model.text("接下来 {n} 天").replacingOccurrences(of: "{n}", with: "7"), expanded: upcomingOpen, language: model.language)
-                }.buttonStyle(.plain).modifier(DotistFocusRing())
-                if upcomingOpen { flatRows(sections.upcoming.tasks, contextIDs: sections.upcoming.contextIDs) }
-            }
-            if !sections.completed.matches.isEmpty {
-                Button { todayDoneOpen.toggle() } label: {
-                    DisclosureRow(title: model.text("已完成"), expanded: todayDoneOpen, language: model.language)
-                }.buttonStyle(.plain).modifier(DotistFocusRing())
-                if todayDoneOpen { flatRows(sections.completed.tasks, contextIDs: sections.completed.contextIDs) }
-            }
-        }
-    }
-    private func todaySection(_ title: String, result: TaskFilterResult, hideDue: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .opticalCenter, spacing: 6) { OpticalText(title: model.text(title), size: 15, weight: .semibold, language: model.language).foregroundColor(title == "已逾期" ? DotistDesign.danger : DotistDesign.ink) }.frame(height: 30).padding(.top, 4).accessibilityIdentifier("section-heading:\(title)").preference(key: TaskSectionHeadingKey.self, value: [title])
-            flatRows(result.tasks, hideDue: hideDue, contextIDs: result.contextIDs)
-        }
-    }
-    private func flatRows(_ items: [DotistTask], hideDue: Bool = false, contextIDs: Set<String> = []) -> some View {
-        ForEach(dropGroupIDs.filter { state.groupID == nil || $0 == state.groupID }, id: \.self) { id in
-            let values = items.filter { $0.category == id }
-            if !values.isEmpty { flatGroupRows(values, groupID: id, hideDue: hideDue, contextIDs: contextIDs) }
-        }
+    private func dateFilterResult(completed: Bool = false, range: TaskDateRange? = nil) -> TaskFilterResult {
+        model.filteredTasks(scope: state.scope, groupID: state.groupID, tag: state.activeTag,
+                            customRange: range ?? customDateRange, completed: completed)
     }
 
-    private func flatGroupRows(_ items: [DotistTask], groupID: String, hideDue: Bool, contextIDs: Set<String> = []) -> some View {
-        let region = "flat:\(items.first?.id ?? ""):\(groupID)"
-        let ids = Set(items.map(\.id))
-        let children = Dictionary(grouping: items.filter { $0.parentId != nil }, by: { $0.parentId! })
-        let heads = items.filter { $0.parentId == nil || !ids.contains($0.parentId!) }
-        func outline(_ task: DotistTask) -> [DotistTask] {
-            [task] + (children[task.id] ?? []).flatMap(outline)
-        }
-        let outlined = heads.flatMap(outline)
-        return VStack(alignment: .leading, spacing: 0) {
-            if groupID != DotistGroup.inboxID, let group = model.groups.first(where: { $0.id == groupID }) {
-                groupHeader(group, empty: false, after: heads.last, region: region)
-            }
-            CollapsibleTaskSection(expanded: state.showsGroupContents(groupID, hasHeader: groupID != DotistGroup.inboxID)) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(outlined.enumerated()), id: \.element.id) { index, task in
-                        taskRow(task, children: model.children(of: task), sub: task.parentId != nil, allTasks: true, previous: index > 0 ? outlined[index - 1].id : nil, next: index + 1 < outlined.count ? outlined[index + 1].id : nil, hideDue: hideDue)
-                            .opacity(contextIDs.contains(task.id) ? 0.5 : 1)
-
-                        draftRow(after: task, sub: task.parentId != nil)
-
-                    }
-                    emptyGroupGhost(groupID, region: region)
-                }
-            }
-        }
-            .background(groupGeometry(groupID, region: region))
-    }
-
-    private func taskRow(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, next: String?, hideDue: Bool = false) -> some View {
-        let titleParts = model.tags(for: task)
-        let actionsVisible = drag == nil && model.dragId == nil && (hoveredTask == task.id || pickingTask == task.id)
-        return VStack(alignment: .leading, spacing: 0) {
-            insertionSpace(.before(task.id))
-            interactiveTaskRow(task, children: children, sub: sub, allTasks: allTasks, previous: previous, next: next, hideDue: hideDue, titleParts: titleParts, actionsVisible: actionsVisible)
-            insertionSpace(.after(task.id))
-        }
-    }
-
-    private func interactiveTaskRow(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, next: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool) -> some View {
-        let carried = drag?.blockIDs.contains(task.id) == true
+    private func interactiveTaskRow(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, next: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool, region: String, date: String?) -> some View {
+        let carried = drag?.carries(task.id, region: region) == true
         return TaskSelectableContent(selection: selection.row(task.id)) { selected, focused in
             rowContent(task, children: children, sub: sub, allTasks: allTasks, previous: previous, hideDue: hideDue, titleParts: titleParts, actionsVisible: (actionsVisible || focused) && drag == nil && model.dragId == nil, selected: selected, focused: focused)
                 .background {
@@ -1213,9 +1170,20 @@ struct MainWindow: View {
         }
         .contextMenu { rowMenu(task, sub: sub, allTasks: allTasks, previous: previous, next: next) }
         .accessibilityElement(children: .contain)
-        // Preserve the full source geometry and the live gesture throughout.
+        // The mounted mouse-down owner is the single one-line placeholder.
         .opacity(carried ? 0 : 1)
-        .background(rowGeometry(task, sub: sub, allTasks: allTasks, hideDue: hideDue))
+        .frame(height: carried ? 32 : nil, alignment: .top).clipped()
+        .overlay {
+            if carried {
+                RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(0.12))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(DotistDesign.rule, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                    .padding(.leading, CGFloat(drag?.target?.level ?? 0) * TaskRowMetrics.indent)
+                    .allowsHitTesting(false)
+            }
+        }
+        .background(TaskPickupFrameProbe(runtime: reorderRuntime, role: .row(.before(task.id, region: region)),
+            row: .init(task: task, frame: .zero, sub: sub, allTasks: allTasks, hideDue: hideDue, region: region, date: date, depth: model.depth(of: task))))
+        .background(rowGeometry(task, sub: sub, allTasks: allTasks, hideDue: hideDue, region: region, date: date))
         .accessibilityIdentifier("task-row:\(task.id)")
     }
 
@@ -1245,8 +1213,8 @@ struct MainWindow: View {
             Button(model.text("删除")) { model.delete(task) }
     }
 
-    private func rowContent(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool, selected: Bool = false, focused: Bool = false) -> some View {
-        let depth = model.depth(of: task)
+    private func rowContent(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool, selected: Bool = false, focused: Bool = false, depthOverride: Int? = nil) -> some View {
+        let depth = depthOverride ?? model.depth(of: task)
         let actionCount = (depth < 4 ? 1 : 0) + (task.dueDate == nil ? 1 : 0) + 1
         let fadeWidth = actionsVisible ? TaskRowActionMetrics.width(count: actionCount) : 0
         return TaskRowLayout(depth: depth) {
@@ -1662,21 +1630,34 @@ struct DraggableFilterButton: View {
     let choose: () -> Void
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focused: Bool
     @State private var hovering = false
     @State private var origin: (mouse: NSPoint, window: NSPoint)?
+    @StateObject private var motion: DateFilterSelectionMotion
+
+    init(title: String, selected: Bool, language: String, distance: Int = 0, choose: @escaping () -> Void) {
+        self.title = title; self.selected = selected; self.language = language
+        self.distance = distance; self.choose = choose
+        _motion = StateObject(wrappedValue: DateFilterSelectionMotion(selected: selected))
+    }
 
     var body: some View {
         Button { if origin == nil { choose() } } label: {
-            OpticalText(title: title, size: TaskDateFilterMetrics.size(selected: selected), weight: TaskDateFilterMetrics.weight(selected: selected), language: language)
-                .foregroundColor(focused ? DotistDesign.accent : selected ? DotistDesign.ink : hovering ? DotistDesign.muted : DotistDesign.faint)
-                .opacity(TaskDateFilterMetrics.opacity(distance: distance, hovered: hovering, focused: focused,
-                                                       increasedContrast: contrast == .increased, voiceOver: voiceOver))
-                .lineLimit(1)
+            DateFilterInkLabel(title: title, language: language, fraction: motion.fraction,
+                               regularColor: focused ? DotistDesign.accent : hovering ? DotistDesign.muted : DotistDesign.faint,
+                               selectedColor: focused ? DotistDesign.accent : DotistDesign.ink,
+                               regularOpacity: TaskDateFilterMetrics.opacity(distance: distance, hovered: hovering, focused: focused,
+                                                                            increasedContrast: contrast == .increased, voiceOver: voiceOver),
+                               feedbackAnimation: DateFilterSelectionMotion.animation(reduceMotion: reduceMotion))
                 .frame(width: TaskDateFilterMetrics.slotWidth(title: title, language: language), height: TaskDateFilterMetrics.rowHeight)
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).focused($focused).focusEffectDisabled().onHover { hovering = $0 }
             .accessibilityAddTraits(selected ? .isSelected : [])
+            .onAppear { motion.setSelected(selected, reduceMotion: true) }
+            .onChange(of: selected) { _, value in motion.setSelected(value, reduceMotion: reduceMotion) }
+            .onChange(of: reduceMotion) { _, _ in motion.setSelected(selected, reduceMotion: reduceMotion) }
+            .onDisappear { motion.stop() }
             .highPriorityGesture(DragGesture(minimumDistance: 4)
                 .onChanged { value in
                     guard let event = NSApp.currentEvent, let window = event.window else { return }
@@ -1708,16 +1689,20 @@ struct GroupCollapseHeader: View {
             HStack(spacing: 6) {
                 GroupHeaderInkLabel(title: title, language: language, collapsed: collapsed,
                                     showsChevron: collapsed || hovered || motion.fraction < 1, empty: empty, disclosureProgress: motion.fraction)
-                    // The clock rotates only the disclosure; title bounds stay fixed.
-                    .transaction { $0.animation = nil }
                 Spacer(minLength: 26)
             }.frame(height: 30).contentShape(Rectangle())
-        }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(title))
+        }.buttonStyle(GroupHeaderButtonStyle()).modifier(DotistFocusRing()).accessibilityLabel(Text(title))
             .onAppear { motion.setExpanded(!collapsed, reduceMotion: true) }
             .onChange(of: collapsed) { value in motion.setExpanded(!value, reduceMotion: LayoutMotionInputs.shouldReduceMotion(reduceMotion)) }
             .onChange(of: reduceMotion) { value in if value { motion.setExpanded(!collapsed, reduceMotion: true) } }
             .onDisappear { motion.stop() }
     }
+}
+
+/// Disclosure motion changes only the arrow. PlainButtonStyle applies a
+/// transient pressed opacity to the complete label, including rasterized text.
+private struct GroupHeaderButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { configuration.label }
 }
 
 private struct HeaderMenuEscape: NSViewRepresentable {

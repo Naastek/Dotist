@@ -136,7 +136,7 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
         panel.hasShadow = true
         panel.isReleasedWhenClosed = false
         panel.isMovableByWindowBackground = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
         super.init(window: panel)
         motion = PanelMotion(model: model, panel: panel, size: size, title: { [weak self] in self?.bubbleTitle ?? "" },
             bubbleContent: { [weak self, model] in self?.bubbleContent ?? BubbleContent(model: model) })
