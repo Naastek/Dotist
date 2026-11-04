@@ -172,7 +172,16 @@ final class MenuBarController: NSObject {
 
 /// A single template image lets the system supply the correct menu-bar tint.
 enum MenuBarImage {
-    static let size = NSSize(width: 26, height: 18)
+    static let iconSize = NSSize(width: 16, height: 18)
+    private static let countFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+
+    static func countLabel(_ count: Int) -> String { count > 99 ? "99+" : "\(count)" }
+
+    static func size(count: Int?) -> NSSize {
+        guard let count else { return iconSize }
+        let width = (countLabel(count) as NSString).size(withAttributes: [.font: countFont]).width
+        return NSSize(width: 19 + ceil(width) + 1, height: iconSize.height)
+    }
 
     static func todayCount(tasks: [DotistTask], groupID: String?, now: Date = Date(), calendar: Calendar = .current) -> Int {
         let sections = TaskFiltering(tasks, now: now, calendar: calendar).todaySections(groupID: groupID)
@@ -180,19 +189,17 @@ enum MenuBarImage {
     }
 
     static func make(count: Int?, accessibilityDescription: String) -> NSImage {
-        let image = NSImage(size: size, flipped: false) { _ in
+        let image = NSImage(size: size(count: count), flipped: false) { _ in
             NSColor.black.set()
-            let circle = NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: 16, height: 16))
-            circle.lineWidth = 1
-            circle.stroke()
-            NSBezierPath(ovalIn: NSRect(x: 20, y: 7.5, width: 3, height: 3)).fill()
+            // Approved 16 pt SVG, vertically centered in 18 pt. AppKit is nonflipped:
+            // SVG hole (9.25, 10.25) becomes (9.25, 6.75), visually lower right.
+            let mark = NSBezierPath(ovalIn: NSRect(x: 1.5, y: 2.5, width: 13, height: 13))
+            mark.appendOval(in: NSRect(x: 6.75, y: 4.25, width: 5, height: 5))
+            mark.windingRule = .evenOdd
+            mark.fill()
             if let count {
-                let label = count > 99 ? "99+" : "\(count)"
-                let font = NSFont.monospacedDigitSystemFont(ofSize: count > 99 ? 6.5 : (count > 9 ? 8 : 10), weight: .medium)
-                let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
-                let text = NSAttributedString(string: label, attributes: attributes)
-                let textSize = text.size()
-                text.draw(at: NSPoint(x: 9 - textSize.width / 2, y: 9 - textSize.height / 2))
+                let text = NSAttributedString(string: countLabel(count), attributes: [.font: countFont, .foregroundColor: NSColor.black])
+                text.draw(at: NSPoint(x: 19, y: (iconSize.height - text.size().height) / 2))
             }
             return true
         }
