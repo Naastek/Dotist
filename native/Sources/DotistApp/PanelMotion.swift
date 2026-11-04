@@ -28,7 +28,9 @@ struct BubbleContent {
         }
         task = next
         remaining = open.count
-        title = filteredEmpty ? model.text("没有符合筛选的任务") : Self.clean(next?.title) ?? (next == nil ? Self.clean(fallbackTitle) ?? model.bubbleTitle : model.text("未命名任务"))
+        // A selected empty group must not borrow the global next task's title.
+        let emptyTitle = groupID.map { model.groupDisplayName($0) } ?? Self.clean(fallbackTitle) ?? model.bubbleTitle
+        title = filteredEmpty ? model.text("没有符合筛选的任务") : Self.clean(next?.title) ?? (next == nil ? emptyTitle : model.text("未命名任务"))
         group = next.flatMap { model.group(for: $0) }.flatMap { Self.clean($0.name) }
         due = next?.dueDate.flatMap(Self.clean).flatMap { Self.clean(model.dueLabel($0)) }
     }
@@ -520,7 +522,11 @@ struct FloatingPanelView<Content: View>: View {
     let contextMenu: (NSEvent, NSView) -> Void
     let content: Content
     @State private var hoverReveal: CGFloat = 0
-    private var filter: [String] { colorState.filterParts(in: model, includeGroup: groupName == nil) }
+    var filter: [String] { colorState.filterParts(in: model, includeGroup: groupName == nil) }
+    var bubbleContent: BubbleContent {
+        // groupName controls panel wording, never the selected task scope.
+        BubbleContent(model: model, groupID: colorState.groupID, fallbackTitle: title, state: colorState)
+    }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
@@ -541,7 +547,7 @@ struct FloatingPanelView<Content: View>: View {
                 // Keep text, font cascade and SwiftUI metadata warm before the first
                 // collapse. The circle's content never lays out at intermediate widths.
                 FloatingBubble(model: model, motion: motion,
-                    details: BubbleContent(model: model, groupID: groupName == nil ? nil : colorState.groupID, fallbackTitle: title, state: colorState),
+                    details: bubbleContent,
                     groupName: groupName, contextMenu: contextMenu, width: motion.bubble && !motion.animationInProgress ? geometry.size.width : 48, reveal: hoverReveal,
                     extra: extra, filter: filter)
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: motion.animationInProgress || motion.bubbleOnRight ? .topTrailing : .topLeading)
