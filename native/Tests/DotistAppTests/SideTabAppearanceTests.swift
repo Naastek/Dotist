@@ -89,13 +89,66 @@ final class SideTabAppearanceTests: XCTestCase {
         XCTAssertEqual(try surface(nil).blueComponent, blue.blueComponent, accuracy: 0.005)
     }
 
+    /// Independent paper shape rendered with the same rasterizer and appearance
+    /// as the full canvas. It intentionally has no production background view.
+    private func paperReference(size: CGSize, inward: Bool, scheme: ColorScheme, selected: Bool,
+                                opacity: UInt8, protection: Int, legacyStroke: Bool = false) throws -> NSBitmapImageRep {
+        let radius = min(8, size.width / 2, size.height / 2)
+        let shape = UnevenRoundedRectangle(topLeadingRadius: inward ? 0 : radius,
+            bottomLeadingRadius: inward ? 0 : radius, bottomTrailingRadius: inward ? radius : 0,
+            topTrailingRadius: inward ? radius : 0, style: .continuous)
+        let fill = DotistDesign.paper.mix(with: DotistDesign.ink,
+            by: selected ? (protection == 2 ? 0.42 : 0.30) : 0.06, in: .device)
+        let alpha = protection == 0 ? Double(opacity) / 100 : 1
+        let view = shape.fill(fill)
+            .overlay { if legacyStroke { shape.stroke(DotistDesign.faint.opacity(0.45), lineWidth: 0.75) } }
+            .compositingGroup().opacity(alpha).frame(width: size.width, height: size.height)
+            .environment(\.colorScheme, scheme)
+        let renderer = ImageRenderer(content: view); renderer.scale = 1
+        var image: CGImage?
+        NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance { image = renderer.cgImage }
+        return NSBitmapImageRep(cgImage: try XCTUnwrap(image))
+    }
+
+    /// Independent literal shapes in a canvas matching the snapshot's extent
+    /// and absolute origins. A cropped tile can rasterize a corner differently.
+    private func canvasReference(size: CGSize, tabs: [CGRect], inward: Bool, scheme: ColorScheme,
+                                 opacity: UInt8, protection: Int, legacyStroke: Bool = false) throws -> NSBitmapImageRep {
+        let alpha = protection == 0 ? Double(opacity) / 100 : 1
+        let view = ZStack(alignment: .topLeading) {
+            Color.clear.frame(width: size.width, height: size.height)
+            ForEach(Array(tabs.enumerated()), id: \.offset) { index, rect in
+                let radius = min(8, rect.width / 2, rect.height / 2)
+                let shape = UnevenRoundedRectangle(topLeadingRadius: inward ? 0 : radius,
+                    bottomLeadingRadius: inward ? 0 : radius, bottomTrailingRadius: inward ? radius : 0,
+                    topTrailingRadius: inward ? radius : 0, style: .continuous)
+                let fill = DotistDesign.paper.mix(with: DotistDesign.ink,
+                    by: index == 0 ? (protection == 2 ? 0.42 : 0.30) : 0.06, in: .device)
+                shape.fill(fill)
+                    .overlay { if legacyStroke { shape.stroke(DotistDesign.faint.opacity(0.45), lineWidth: 0.75) } }
+                    .compositingGroup().opacity(alpha)
+                    .frame(width: rect.width, height: rect.height).clipped()
+                    .offset(x: rect.minX, y: rect.minY)
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .environment(\.colorScheme, scheme)
+        .transaction { $0.disablesAnimations = true }
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 1; renderer.proposedSize = ProposedViewSize(size)
+        var image: CGImage?
+        NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance { image = renderer.cgImage }
+        return NSBitmapImageRep(cgImage: try XCTUnwrap(image))
+    }
+
     /// Capture the actual live paper tree. Interior coverage must have exactly
     /// the same color at the perimeter; a stroked outline adds differing pixels.
     func testNoOutlinePixelsAndFlushCornersAcrossTransparencyAndAccessibility() throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".cache/feedback-host-audit/current/five")
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".cache/integration-install/pixel-evidence/side-tabs")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var measurements = ["scheme,inward,expanded,opacity,protection,tab,backgroundAlpha,outlinePixels"]
+        var pixelEvidence = ["name,tab,x,y,rectMinX,rectMinY,rectMaxX,rectMaxY,expectedAlpha,red,green,blue,alpha,referenceRed,referenceGreen,referenceBlue,referenceAlpha,visibleDifference"]
         for scheme in [ColorScheme.light, .dark] {
             for inward in [false, true] {
                 for expanded in [false, true] {
@@ -109,6 +162,10 @@ final class SideTabAppearanceTests: XCTestCase {
                             let name = "\(scheme)-inward\(inward)-expanded\(expanded)-opacity\(opacity)-protection\(protection)"
                             try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent(name + ".png"))
                             let expected = protection == 0 ? CGFloat(opacity) / 100 : 1
+                            let reference = try canvasReference(size: CGSize(width: bitmap.pixelsWide, height: bitmap.pixelsHigh),
+                                tabs: snapshot.tabs, inward: inward, scheme: scheme, opacity: opacity, protection: protection)
+                            XCTAssertEqual(reference.pixelsWide, bitmap.pixelsWide)
+                            XCTAssertEqual(reference.pixelsHigh, bitmap.pixelsHigh)
                             for (index, rect) in snapshot.tabs.enumerated() {
                                 let connectionX = Int(inward ? rect.minX : rect.maxX - 1)
                                 let outerX = Int(inward ? rect.maxX - 1 : rect.minX)
@@ -129,8 +186,12 @@ final class SideTabAppearanceTests: XCTestCase {
                                         // Exclude the outer corner's antialias coverage, but
                                         // retain every fully covered boundary pixel.
                                         guard abs(pixel.alphaComponent - expected) < 0.001 else { continue }
-                                        let difference = visibleDifference(pixel, center)
-                                        if difference > 1.0 / 255 { outlinePixels += 1 }
+                                        let referencePixel = try XCTUnwrap(reference.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                                        let difference = visibleDifference(pixel, referencePixel)
+                                        if difference > 1.0 / 255 {
+                                            outlinePixels += 1
+                                            pixelEvidence.append("\(name),\(index),\(x),\(y),\(rect.minX),\(rect.minY),\(rect.maxX),\(rect.maxY),\(expected),\(pixel.redComponent),\(pixel.greenComponent),\(pixel.blueComponent),\(pixel.alphaComponent),\(referencePixel.redComponent),\(referencePixel.greenComponent),\(referencePixel.blueComponent),\(referencePixel.alphaComponent),\(difference)")
+                                        }
                                     }
                                 }
                                 XCTAssertEqual(outlinePixels, 0, "\(name): no colored outline in selected or unselected tabs")
@@ -142,6 +203,7 @@ final class SideTabAppearanceTests: XCTestCase {
             }
         }
         try measurements.joined(separator: "\n").write(to: directory.appendingPathComponent("pixels.csv"), atomically: true, encoding: .utf8)
+        try pixelEvidence.joined(separator: "\n").write(to: directory.appendingPathComponent("outline-pixels.csv"), atomically: true, encoding: .utf8)
         // A panel backdrop makes the two attachment directions inspectable.
         // The tab image is the same full live tree used by the pixel matrix;
         // the rectangle is an illustration, not an activated desktop window.
@@ -204,6 +266,36 @@ final class SideTabAppearanceTests: XCTestCase {
                 XCTAssertGreaterThan(count, 0, "The original 0.75pt stroke must still be rejected at the original threshold")
                 print("LEGACY STROKE \(scheme), opacity=\(opacity), visible outline pixels=\(count)")
             }
+        }
+        // The same reference comparison must reject the old stroke; it cannot
+        // merely compare every corner against a center-colored pixel.
+        for scheme in [ColorScheme.light, .dark] {
+            let reference = try paperReference(size: CGSize(width: 120, height: 34), inward: false,
+                scheme: scheme, selected: false, opacity: 100, protection: 0)
+            let legacy = try paperReference(size: CGSize(width: 120, height: 34), inward: false,
+                scheme: scheme, selected: false, opacity: 100, protection: 0, legacyStroke: true)
+            var differences = 0
+            for y in 0..<34 { for x in 0..<120 {
+                let a = try XCTUnwrap(reference.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                let b = try XCTUnwrap(legacy.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                if a.alphaComponent == 1 && b.alphaComponent == 1 && visibleDifference(a, b) > 1.0 / 255 { differences += 1 }
+            } }
+            XCTAssertGreaterThan(differences, 0, "Same-path reference must detect a legacy stroke")
+        }
+        // Exercise the full-canvas comparator at nonzero tab origins as well.
+        let controlTabs = [CGRect(x: 72, y: 0, width: 48, height: 34), CGRect(x: 0, y: 40, width: 120, height: 34)]
+        for scheme in [ColorScheme.light, .dark] {
+            let reference = try canvasReference(size: CGSize(width: 120, height: 74), tabs: controlTabs,
+                inward: false, scheme: scheme, opacity: 100, protection: 0)
+            let legacy = try canvasReference(size: CGSize(width: 120, height: 74), tabs: controlTabs,
+                inward: false, scheme: scheme, opacity: 100, protection: 0, legacyStroke: true)
+            var differences = 0
+            for rect in controlTabs { for y in Int(rect.minY)..<Int(rect.maxY) { for x in Int(rect.minX)..<Int(rect.maxX) {
+                let a = try XCTUnwrap(reference.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                let b = try XCTUnwrap(legacy.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                if b.alphaComponent == 1 && visibleDifference(a, b) > 1.0 / 255 { differences += 1 }
+            } } }
+            XCTAssertGreaterThan(differences, 0, "Full-canvas reference must detect the legacy stroke")
         }
         // Exact host outlier replay: unassociated RGB differs by 0.0785653,
         // while composited RGB differs by 0.003081, below 1/255.

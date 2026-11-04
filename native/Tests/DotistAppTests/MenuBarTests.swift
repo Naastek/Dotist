@@ -207,12 +207,20 @@ final class MenuBarTests: XCTestCase {
             ready.expectationDescription = description
             await fulfillment(of: [ready], timeout: 4)
         }
+        func publish(_ patch: DotistSettingsPatch) async {
+            let succeeded = await withCheckedContinuation { continuation in
+                model.updateSettings(patch) { continuation.resume(returning: $0) }
+            }
+            XCTAssertTrue(succeeded, "Settings update must publish through AppModel")
+            XCTAssertNil(model.error)
+        }
         await wait("Initial count", { controller.item?.button?.toolTip?.contains("100") == true })
         XCTAssertTrue(try XCTUnwrap(controller.item).isVisible)
         XCTAssertTrue(try XCTUnwrap(controller.item?.button?.accessibilityLabel()).contains("100"))
         for mode in ["icon", "next", "next_date", "rotate", "count"] {
             patch = DotistSettingsPatch(); patch.trayMode = mode
-            _ = try store.updateSettings(patch)
+            await publish(patch)
+            XCTAssertEqual(model.settings.trayMode, mode)
             await wait("Mode \(mode)", { model.settings.trayMode == mode && (mode == "icon" || mode == "count" ? controller.item?.button?.title == "" : controller.item?.button?.title.isEmpty == false) })
             XCTAssertNotNil(controller.item?.button?.image?.tiffRepresentation)
             XCTAssertTrue(controller.item?.button?.image?.isTemplate == true)
@@ -224,11 +232,13 @@ final class MenuBarTests: XCTestCase {
         }
         let work = try store.addGroup(name: "Work")
         patch = DotistSettingsPatch(); patch.trayGroup = work.id
-        _ = try store.updateSettings(patch)
+        await publish(patch)
+        XCTAssertEqual(model.settings.trayGroup, work.id)
         await wait("Empty group count", { controller.item?.button?.toolTip?.contains("0") == true && controller.item?.button?.toolTip?.contains("100") == false })
         for enabled in [false, true, false, true] {
             patch = DotistSettingsPatch(); patch.showMenubar = enabled
-            _ = try store.updateSettings(patch)
+            await publish(patch)
+            XCTAssertEqual(model.settings.showMenubar, enabled)
             await wait("showMenubar=\(enabled)", { enabled ? controller.item?.isVisible == true : controller.item == nil })
         }
         XCTAssertFalse(try store.settings().showDock, "Do not change user settings to recover the menu bar")

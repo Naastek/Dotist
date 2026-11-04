@@ -28,6 +28,7 @@ Most task managers assume a full window and a cloud account. Dotist takes a smal
 - A command palette with `⌘K`.
 - Calendar, board, and Gantt task views.
 - Native macOS appearance, Liquid Glass surfaces, configurable fonts, and reduced-motion/accessibility handling.
+  Switzer, Satoshi, Zodiak and Gambarino require a local font installation; unavailable choices are marked in Settings.
 - Local MCP access for compatible AI clients, disabled by default.
 
 <p align="center">

@@ -112,7 +112,7 @@ struct SettingsWindow: View {
                             } label: {
                                 HStack(alignment: .center, spacing: 9) {
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text(model.text(result.title)).font(font(12, searchTarget == result.target ? .semibold : .regular))
+                                        Text(result.isGroupName ? result.title : model.text(result.title)).font(font(12, searchTarget == result.target ? .semibold : .regular))
                                             .foregroundStyle(searchTarget == result.target ? DotistDesign.ink : DotistDesign.muted)
                                         Text(model.text(result.module.title)).font(font(11)).foregroundStyle(DotistDesign.muted)
                                     }
@@ -460,13 +460,15 @@ struct SettingsWindow: View {
         OpticalText(title: value, size: 13, language: model.language).monospacedDigit().frame(width: 56, alignment: .trailing).foregroundStyle(DotistDesign.muted)
     }
     private func fontRow(_ role: DotistFontRole) -> some View {
-        settingRow(role.title, stacked: true) {
-            OpticalText(title: model.text(DotistFontRole.previewText), size: 13, serif: role.isSerif,
+        let selected = role.value(in: model.settings)
+        let available = DotistDesign.localFontAvailable(selected)
+        return settingRow(role.title, stacked: true) {
+            OpticalText(title: available ? model.text(DotistFontRole.previewText) : SettingsFontAvailability.status(language: model.language), size: 13, serif: role.isSerif,
                         language: role == .serifCjk && role.value(in: model.settings) == "chiron-sung-hk" ? "zh-HK" : model.language)
                 .lineLimit(1).frame(width: SettingsFontPicker.previewWidth, alignment: .leading)
                 .accessibilityIdentifier("settings-font-preview-" + role.rawValue)
             SettingsFontPicker(selection: Binding(get: { role.value(in: model.settings) }, set: { value in update { role.set(value, in: &$0) } }),
-                               options: role.choices.map { ($0, model.text(role.label($0))) }, label: model.text(role.title))
+                               options: SettingsFontAvailability.options(role: role, language: model.language, translate: model.text), label: model.text(role.title))
                 .frame(width: SettingsFontPicker.columnWidth, height: 28).modifier(DotistFocusRing())
                 .accessibilityIdentifier("settings-font-" + role.rawValue)
         }

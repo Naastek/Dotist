@@ -472,6 +472,7 @@ final class SideTabsController: NSObject {
         var visibleMinX: (NSPanel) -> CGFloat = { ($0.screen ?? NSScreen.main)?.visibleFrame.minX ?? $0.frame.minX }
         var reduceMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
         var desktopEvents = true
+        var inputMonitors = true
     }
     private let environment: Environment
     private var entrance = SideTabEntrance()
@@ -543,7 +544,7 @@ final class SideTabsController: NSObject {
         displayTarget.controller = self
         displayLink = parent.displayLink(target: displayTarget, selector: #selector(SideTabDisplayTarget.tick(_:)))
         displayLink?.add(to: .main, forMode: .common)
-        if environment.desktopEvents {
+        if environment.desktopEvents && environment.inputMonitors {
             localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .leftMouseDown, .keyDown]) { [weak self] event in
                 guard let self else { return event }
                 if event.type == .keyDown, event.keyCode == 53, self.press != nil {
@@ -613,11 +614,11 @@ final class SideTabsController: NSObject {
         if let pendingOrder, pendingOrder == ids || !model.busy { self.pendingOrder = nil }
         let order = preview ?? pendingOrder ?? ids
         let names = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0.name) })
-        let items = [(id: "all", groupID: Optional<String>.none, name: "全部")] + order.compactMap { id in
+        let items = [(id: "all", groupID: Optional<String>.none, name: model.text("全部"))] + order.compactMap { id in
             names[id].map { (id: id, groupID: Optional(id), name: $0) }
         }
         let widths = items.map { item -> CGFloat in
-            let name = model.text(item.name)
+            let name = item.name
             let key = "\(DotistDesign.fontCacheKey)|\(model.language)|\(name)"
             if let measured = measuredWidths[key] { return measured }
             let measured = SideTabGeometry.expandedWidth(name: name, language: model.language)
@@ -680,7 +681,7 @@ final class SideTabsController: NSObject {
                 offsetY: lifted ? deltaY : 0)
             let interactive = visible && sample.opacities[index] > 0
             if interactive { hitRects.append(rect) }
-            return SideTabLayout(id: item.id, groupID: item.groupID, name: model.text(item.name),
+            return SideTabLayout(id: item.id, groupID: item.groupID, name: item.name,
                 rect: rect.offsetBy(dx: -bounds.minX, dy: -bounds.minY), fullWidth: widths[index], dragged: lifted,
                 opacity: sample.opacities[index], interactive: interactive)
         }

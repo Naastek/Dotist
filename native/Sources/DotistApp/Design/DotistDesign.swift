@@ -60,7 +60,7 @@ enum DotistDesign {
     /// Registers fonts for this process only; the user's installed fonts are never changed.
     static func registerFonts(in directory: URL? = nil) {
         guard let directory = directory ?? Bundle.main.resourceURL?.appendingPathComponent("Fonts", isDirectory: true) else { return }
-        for name in ["Newsreader", "AtkinsonHyperlegibleNext", "ChironSungHK", "SourceSans3", "SourceSerif4", "NotoSansSC", "NotoSansTC", "NotoSansJP", "NotoSerifSC", "NotoSerifTC", "NotoSerifJP"] {
+        for name in ["Newsreader", "AtkinsonHyperlegibleNext", "ChironSungHK", "SourceSans3", "SourceSerif4", "NotoSansSC", "NotoSansTC", "NotoSansJP", "NotoSerifSC", "NotoSerifTC", "NotoSerifJP", "Figtree", "Rubik", "WorkSans", "PublicSans", "Quicksand", "PlusJakartaSans", "Brygada1918", "PTSerif", "PTSerifBold", "PlayfairDisplay"] {
             let url = directory.appendingPathComponent("\(name).ttf")
             if FileManager.default.fileExists(atPath: url.path) { CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil) }
         }
@@ -83,12 +83,14 @@ enum DotistDesign {
         let preferences = preferences ?? fontPreferences
         let region = ["zh-HK", "zh-Hant-HK"].contains(where: { language.hasPrefix($0) }) ? "HK" : ["zh-TW", "zh-Hant"].contains(where: { language.hasPrefix($0) }) ? "TC" : "SC"
         let key = "\(preferences.cacheKey)|\(size)|\(weight.rawValue)|\(serif)|\(region)" as NSString
-        if let cached = fonts.object(forKey: key) { return cached }
+        let localSelection = localFontFamilies(serif ? preferences.serifLatin : preferences.sansLatin) != nil
+        if !localSelection, let cached = fonts.object(forKey: key) { return cached }
         let latin = serif ? preferences.serifLatin : preferences.sansLatin
         let source = serif ? "Source Serif 4" : "Source Sans 3"
         let primary = serif ? "Newsreader" : "Atkinson Hyperlegible Next"
         let system = systemFont(size, weight: weight, serif: serif)
-        let candidates = latin == "system" ? [] : latin == (serif ? "source-serif-4" : "source-sans-3") ? [source, primary] : [primary, source]
+        let families = ["newsreader": "Newsreader", "source-serif-4": "Source Serif 4", "atkinson-next": "Atkinson Hyperlegible Next", "source-sans-3": "Source Sans 3", "figtree": "Figtree", "rubik": "Rubik", "work-sans": "Work Sans", "public-sans": "Public Sans", "quicksand": "Quicksand", "plus-jakarta-sans": "Plus Jakarta Sans", "brygada-1918": "Brygada 1918", "pt-serif": "PT Serif", "playfair-display": "Playfair Display", "switzer": "Switzer", "satoshi": "Satoshi", "zodiak": "Zodiak", "gambarino": "Gambarino"]
+        let candidates = latin == "system" ? [] : (localFontFamilies(latin) ?? [families[latin] ?? primary]) + [source, primary]
         let base = candidates.lazy.compactMap { familyFont($0, size: size, weight: weight) }.first ?? system
         let cascade = cjkFamilies(serif: serif, region: region, preferences: preferences).compactMap {
             familyFont($0, size: size, weight: weight)?.fontDescriptor
@@ -97,6 +99,15 @@ enum DotistDesign {
         let font = NSFont(descriptor: descriptor, size: size) ?? base
         fonts.setObject(font, forKey: key)
         return font
+    }
+
+    static func localFontFamilies(_ id: String) -> [String]? {
+        ["switzer": ["Switzer", "Switzer Variable"], "satoshi": ["Satoshi", "Satoshi Variable"], "zodiak": ["Zodiak", "Zodiak Variable"], "gambarino": ["Gambarino"]][id]
+    }
+
+    static func localFontAvailable(_ id: String, check: (String) -> Bool = { familyFont($0, size: 13, weight: .regular) != nil }) -> Bool {
+        guard let families = localFontFamilies(id) else { return true }
+        return families.contains(where: check)
     }
 
     static func cjkFamilies(serif: Bool, region: String, preferences: DotistFontPreferences) -> [String] {

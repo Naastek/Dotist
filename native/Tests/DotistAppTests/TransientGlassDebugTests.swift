@@ -15,23 +15,26 @@ final class TransientGlassDebugTests: XCTestCase {
 
     func testStableCompleteCombinationAndAllParameterEnumsEncode() throws {
         let original = GlassDebugParameters()
-        XCTAssertEqual(original.combination, "glass-v1;style=regular;interactive=true;tint=original;container=false;spacing=24;shape=continuous;radius=24;removeOverlay=true;hasShadow=true;effectID=false")
+        XCTAssertEqual(original.combination, "glass-v1;style=regular;interactive=true;tint=original;container=false;spacing=24;shape=continuous;radius=24;tintLayer=0;hasShadow=true;effectID=false")
         var variants = GlassDebugParameters.Preset.allCases.map(\.parameters)
         for option in GlassDebugParameters.Style.allCases { var p = original; p.style = option; variants.append(p) }
         for option in GlassDebugParameters.Tint.allCases { var p = original; p.tint = option; variants.append(p) }
+        for option in GlassDebugParameters.TintLayer.allCases { var p = original; p.tintLayer = option; variants.append(p) }
         for option in GlassDebugParameters.Shape.allCases { var p = original; p.shape = option; variants.append(p) }
         for option in GlassDebugParameters.Spacing.allCases { var p = original; p.spacing = option; variants.append(p) }
         for option in GlassDebugParameters.Radius.allCases { var p = original; p.radius = option; variants.append(p) }
-        for key in [\GlassDebugParameters.interactive, \.container, \.removeOverlay, \.hasShadow, \.effectID] {
+        for key in [\GlassDebugParameters.interactive, \.container, \.hasShadow, \.effectID] {
             var p = original; p[keyPath: key].toggle(); variants.append(p)
         }
         for variant in variants {
             let decoded = try JSONDecoder().decode(GlassDebugParameters.self, from: JSONEncoder().encode(variant))
             XCTAssertEqual(decoded, variant)
+            XCTAssertEqual(GlassDebugParameters(combination: variant.combination), variant)
             XCTAssertEqual(decoded.combination, variant.combination)
             XCTAssertEqual(variant.combination == original.combination, variant == original)
             XCTAssertEqual(variant.combination.split(separator: ";").count, 11)
         }
+        XCTAssertNil(GlassDebugParameters(combination: original.combination.replacingOccurrences(of: "tintLayer=0", with: "tintLayer=7")))
         XCTAssertEqual(Set(GlassDebugParameters.Preset.allCases.map { $0.parameters.combination }).count, 3)
         XCTAssertEqual(GlassDebugParameters.Preset.production.parameters, original)
         XCTAssertEqual(GlassDebugParameters.Tint.allCases.map(\.scale), [0, 1.0 / 3, 2.0 / 3, 1])
@@ -70,9 +73,9 @@ final class TransientGlassDebugTests: XCTestCase {
     }
 
     func testCompactDebugOverridesRespectBothAccessibilityFallbacksAndExpandedSurface() throws {
-        // Exercise every override together, including the diagnostic paper layer.
+        // Exercise every override together, including the diagnostic tint layer.
         var parameters = GlassDebugParameters.Preset.clear.parameters
-        parameters.removeOverlay = false
+        parameters.tintLayer = .heavy
         parameters.radius = .small
         parameters.hasShadow = false
         for scheme in [ColorScheme.light, .dark] {
@@ -103,13 +106,49 @@ final class TransientGlassDebugTests: XCTestCase {
         }
     }
 
-    func testDebugOverlayActuallyReachesCompactSurface() throws {
+    func testTintLayerReachesCompactSurfaceAndRequiresGroupColor() throws {
         var parameters = GlassDebugParameters()
-        parameters.removeOverlay = false
         parameters.tint = .none
-        let debug = try bitmap(FloatingPanelSurface(opacity: 8, frost: 4, compact: true,
-            color: .none, solid: false, scheme: .light)
-            .frame(width: 160, height: 48).environment(\.glassDebugParameters, parameters))
-        XCTAssertGreaterThan(try XCTUnwrap(debug.colorAt(x: 160, y: 48)).alphaComponent, 0.1)
+        func render(_ color: DotistGroupColor, _ layer: GlassDebugParameters.TintLayer) throws -> NSBitmapImageRep {
+            var options = parameters
+            options.tintLayer = layer
+            return try bitmap(FloatingPanelSurface(opacity: 8, frost: 4, compact: true,
+                color: color, solid: false, scheme: .light)
+                .frame(width: 160, height: 48).environment(\.glassDebugParameters, options))
+        }
+        func center(_ image: NSBitmapImageRep) throws -> NSColor {
+            try XCTUnwrap(image.colorAt(x: 160, y: 48)?.usingColorSpace(.sRGB))
+        }
+        let production = try center(bitmap(FloatingPanelSurface(opacity: 8, frost: 4, compact: true,
+            color: .orange, solid: false, scheme: .light).frame(width: 160, height: 48)))
+        var defaultOptions = GlassDebugParameters()
+        defaultOptions.tintLayer = .none
+        let zero = try center(bitmap(FloatingPanelSurface(opacity: 8, frost: 4, compact: true,
+            color: .orange, solid: false, scheme: .light).frame(width: 160, height: 48)
+            .environment(\.glassDebugParameters, defaultOptions)))
+        XCTAssertEqual(production.alphaComponent, zero.alphaComponent, accuracy: 0.001)
+        for (a, b) in [(production.redComponent, zero.redComponent),
+                       (production.greenComponent, zero.greenComponent),
+                       (production.blueComponent, zero.blueComponent)] {
+            XCTAssertEqual(a * production.alphaComponent, b * zero.alphaComponent, accuracy: 0.001)
+        }
+        let baseline = try center(render(.orange, .none))
+        let tinted = try center(render(.orange, .heavy))
+        let differences = [(tinted.redComponent, baseline.redComponent),
+                           (tinted.greenComponent, baseline.greenComponent),
+                           (tinted.blueComponent, baseline.blueComponent)].map { tintedChannel, baselineChannel in
+            abs(tintedChannel * tinted.alphaComponent - baselineChannel * baseline.alphaComponent)
+        }
+        XCTAssertGreaterThan(try XCTUnwrap(differences.max()), 0.05)
+        let noColor = try center(render(.none, .none))
+        for layer in GlassDebugParameters.TintLayer.allCases {
+            let noColorTinted = try center(render(.none, layer))
+            XCTAssertEqual(noColor.alphaComponent, noColorTinted.alphaComponent, accuracy: 0.001)
+            for (a, b) in [(noColor.redComponent, noColorTinted.redComponent),
+                           (noColor.greenComponent, noColorTinted.greenComponent),
+                           (noColor.blueComponent, noColorTinted.blueComponent)] {
+                XCTAssertEqual(a * noColor.alphaComponent, b * noColorTinted.alphaComponent, accuracy: 0.001)
+            }
+        }
     }
 }

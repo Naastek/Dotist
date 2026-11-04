@@ -55,8 +55,15 @@ final class FeedbackFourRegressionTests: XCTestCase {
     private func ink(_ image: NSBitmapImageRep, rect: CGRect, threshold: CGFloat = 0.2) throws -> CGRect {
         let scale = CGFloat(image.pixelsWide) / image.size.width
         var x0 = image.pixelsWide, x1 = -1, y0 = image.pixelsHigh, y1 = -1
-        for y in max(0, Int(ceil(rect.minY * scale)))..<min(image.pixelsHigh, Int(floor(rect.maxY * scale))) {
-            for x in max(0, Int(ceil(rect.minX * scale)))..<min(image.pixelsWide, Int(floor(rect.maxX * scale))) {
+        let xMin = max(0, min(image.pixelsWide, Int(ceil(rect.minX * scale))))
+        let xMax = max(0, min(image.pixelsWide, Int(floor(rect.maxX * scale))))
+        let yMin = max(0, min(image.pixelsHigh, Int(ceil(rect.minY * scale))))
+        let yMax = max(0, min(image.pixelsHigh, Int(floor(rect.maxY * scale))))
+        guard xMin < xMax, yMin < yMax else {
+            throw NSError(domain: "DotistRenderingFixture", code: 1, userInfo: [NSLocalizedDescriptionKey: "Ink rectangle \(rect) lies outside bitmap \(image.pixelsWide)x\(image.pixelsHigh) at scale \(scale)"])
+        }
+        for y in yMin..<yMax {
+            for x in xMin..<xMax {
                 guard let c = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
                       c.alphaComponent * (1 - max(c.redComponent, c.greenComponent, c.blueComponent)) > threshold else { continue }
                 x0 = min(x0, x); x1 = max(x1, x); y0 = min(y0, y); y1 = max(y1, y)
@@ -536,8 +543,6 @@ final class FeedbackFourRegressionTests: XCTestCase {
                     DotistFontRole.allCases.contains { role in role.choices.contains { model.text(role.label($0)) == control.title } }
                 }
                 XCTAssertEqual(popups.count, 4)
-                if height == 540, let last = popups.last { last.scrollToVisible(last.bounds) }
-                let bitmap = try await fixture.capture(scale: 1)
                 let frames = popups.map { fixture.host.convert($0.bounds, from: $0) }
                 print("FEEDBACK FONT \(language), \(height): frames=\(frames), titles=\(popups.map(\.title))")
                 for frame in frames.dropFirst() {
@@ -545,7 +550,10 @@ final class FeedbackFourRegressionTests: XCTestCase {
                     XCTAssertEqual(frame.maxX, frames[0].maxX, accuracy: 0.5)
                 }
                 var pickerTextOrigins: [CGFloat] = []
-                for (popup, frame) in zip(popups, frames) {
+                for popup in popups {
+                    popup.scrollToVisible(popup.bounds)
+                    let bitmap = try await fixture.capture(scale: 1)
+                    let frame = fixture.host.convert(popup.bounds, from: popup)
                     let required = (popup.title as NSString).size(withAttributes: [.font: popup.font ?? NSFont.systemFont(ofSize: 13)]).width + 28
                     XCTAssertGreaterThanOrEqual(popup.bounds.width, required)
                     let preview = try ink(bitmap, rect: CGRect(x: frame.minX - 118, y: frame.minY, width: 110, height: frame.height))
@@ -556,6 +564,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
                     XCTAssertLessThan(frame.maxX, size.width - 20)
                 }
                 for x in pickerTextOrigins.dropFirst() { XCTAssertEqual(x, pickerTextOrigins[0], accuracy: 0.5) }
+                let bitmap = try await fixture.capture(scale: 1)
                 try save(bitmap, "settings-fonts-\(language)-\(Int(size.width))x\(Int(height))")
             }
         }

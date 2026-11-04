@@ -17,6 +17,7 @@ struct GlassDebugParameters: Codable, Equatable {
             }
         }
     }
+    enum TintLayer: Int, Codable, CaseIterable { case none = 0, light = 6, medium = 12, heavy = 18 }
     enum Shape: String, Codable, CaseIterable { case continuous, capsule }
     enum Spacing: Int, Codable, CaseIterable { case zero = 0, small = 12, medium = 24, large = 48 }
     enum Radius: Int, Codable, CaseIterable { case small = 16, original = 24, large = 32 }
@@ -28,13 +29,38 @@ struct GlassDebugParameters: Codable, Equatable {
     var spacing: Spacing = .medium
     var shape: Shape = .continuous
     var radius: Radius = .original
-    var removeOverlay = true
+    var tintLayer: TintLayer = .none
     var hasShadow = true
     var effectID = false
 
     /// Stable, complete encoding suitable for pasting into a review or bug report.
     var combination: String {
-        "glass-v1;style=\(style.rawValue);interactive=\(interactive);tint=\(tint.rawValue);container=\(container);spacing=\(spacing.rawValue);shape=\(shape.rawValue);radius=\(radius.rawValue);removeOverlay=\(removeOverlay);hasShadow=\(hasShadow);effectID=\(effectID)"
+        "glass-v1;style=\(style.rawValue);interactive=\(interactive);tint=\(tint.rawValue);container=\(container);spacing=\(spacing.rawValue);shape=\(shape.rawValue);radius=\(radius.rawValue);tintLayer=\(tintLayer.rawValue);hasShadow=\(hasShadow);effectID=\(effectID)"
+    }
+
+    init() {}
+
+    init?(combination: String) {
+        let parts = combination.split(separator: ";", omittingEmptySubsequences: false)
+        guard parts.count == 11, parts[0] == "glass-v1" else { return nil }
+        let entries = parts.dropFirst().map { $0.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false) }
+        guard entries.allSatisfy({ $0.count == 2 }) else { return nil }
+        let pairs = entries.map { (String($0[0]), String($0[1])) }
+        guard Set(pairs.map(\.0)).count == 10 else { return nil }
+        let fields = Dictionary(uniqueKeysWithValues: pairs)
+        guard let style = fields["style"].flatMap(Style.init(rawValue:)),
+              let interactive = fields["interactive"].flatMap(Bool.init),
+              let tint = fields["tint"].flatMap(Tint.init(rawValue:)),
+              let container = fields["container"].flatMap(Bool.init),
+              let spacing = fields["spacing"].flatMap(Int.init).flatMap(Spacing.init(rawValue:)),
+              let shape = fields["shape"].flatMap(Shape.init(rawValue:)),
+              let radius = fields["radius"].flatMap(Int.init).flatMap(Radius.init(rawValue:)),
+              let tintLayer = fields["tintLayer"].flatMap(Int.init).flatMap(TintLayer.init(rawValue:)),
+              let hasShadow = fields["hasShadow"].flatMap(Bool.init),
+              let effectID = fields["effectID"].flatMap(Bool.init) else { return nil }
+        self.style = style; self.interactive = interactive; self.tint = tint
+        self.container = container; self.spacing = spacing; self.shape = shape
+        self.radius = radius; self.tintLayer = tintLayer; self.hasShadow = hasShadow; self.effectID = effectID
     }
 
     enum Preset: String, CaseIterable {
@@ -47,7 +73,7 @@ struct GlassDebugParameters: Codable, Equatable {
                 value.style = .clear; value.tint = .none; value.container = true
                 value.shape = .capsule; value.effectID = true
             case .soft:
-                value.tint = .light; value.interactive = false
+                value.tint = .light; value.tintLayer = .light; value.interactive = false
                 value.container = true; value.spacing = .small
             }
             return value
@@ -158,10 +184,14 @@ private struct GlassDebugControls: View {
                 Picker("圆角", selection: $state.parameters.radius) {
                     ForEach(GlassDebugParameters.Radius.allCases, id: \.self) { Text("\($0.rawValue)").tag($0) }
                 }.pickerStyle(.segmented).disabled(state.parameters.shape == .capsule)
-                Toggle("去掉半透明叠层（生产已无）", isOn: $state.parameters.removeOverlay)
+                Picker("染色层", selection: $state.parameters.tintLayer) {
+                    ForEach(GlassDebugParameters.TintLayer.allCases, id: \.self) {
+                        Text($0 == .none ? "无" : "\($0.rawValue)").tag($0)
+                    }
+                }.pickerStyle(.segmented)
                 Toggle("窗口 hasShadow", isOn: $state.parameters.hasShadow)
                 Toggle("稳定 glassEffectID / 本地 namespace", isOn: $state.parameters.effectID)
-                Text("圆点与横条为同一连续变宽表面，共用当前窗口的容器；不会跨 NSPanel 融合。Tint 无分组颜色时无效。辅助功能实心回退优先。关闭“去掉叠层”添加 12% paper 对照。")
+                Text("圆点与横条为同一连续变宽表面，共用当前窗口的容器；不会跨 NSPanel 融合。Tint 无分组颜色时无效。染色层用分组实色叠加，无分组颜色时无效；辅助功能实心回退优先。")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Text(state.parameters.combination).font(.system(size: 10, design: .monospaced))
                     .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
@@ -208,10 +238,14 @@ struct GlassDebugOpticalSurface: View {
         if parameters.effectID {
             Color.clear.glassEffect(glass, in: shape)
                 .glassEffectID("compact-surface", in: namespace)
-                .overlay { if !parameters.removeOverlay { shape.fill(DotistDesign.paper.opacity(0.12)) } }
+                .overlay { if color != .none && parameters.tintLayer != .none {
+                    shape.fill(DotistTheme.swatch(color).opacity(Double(parameters.tintLayer.rawValue) / 100))
+                } }
         } else {
             Color.clear.glassEffect(glass, in: shape)
-                .overlay { if !parameters.removeOverlay { shape.fill(DotistDesign.paper.opacity(0.12)) } }
+                .overlay { if color != .none && parameters.tintLayer != .none {
+                    shape.fill(DotistTheme.swatch(color).opacity(Double(parameters.tintLayer.rawValue) / 100))
+                } }
         }
     }
 }

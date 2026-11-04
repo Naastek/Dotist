@@ -64,8 +64,8 @@ public enum DotistFontRole: String, CaseIterable, Sendable {
     case serifLatin, sansLatin, serifCjk, sansCjk
     public var choices: [String] {
         switch self {
-        case .serifLatin: return ["newsreader", "source-serif-4", "system"]
-        case .sansLatin: return ["atkinson-next", "source-sans-3", "system"]
+        case .serifLatin: return ["newsreader", "source-serif-4", "brygada-1918", "pt-serif", "playfair-display", "zodiak", "gambarino", "system"]
+        case .sansLatin: return ["atkinson-next", "source-sans-3", "figtree", "rubik", "work-sans", "public-sans", "quicksand", "plus-jakarta-sans", "switzer", "satoshi", "system"]
         case .serifCjk: return ["noto-serif", "chiron-sung-hk", "system"]
         case .sansCjk: return ["noto-sans", "system"]
         }

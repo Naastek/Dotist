@@ -28,6 +28,7 @@
 - 按 `⌘K` 打开命令面板。
 - 日历、看板和甘特任务视图。
 - 原生 macOS 外观、Liquid Glass、可配置字体，以及减少动态效果等无障碍处理。
+  Switzer、Satoshi、Zodiak 和 Gambarino 需要在本机安装字体；未安装的选项会在设置中标明。
 - 可选的本地 MCP 访问，默认关闭。
 
 <p align="center">

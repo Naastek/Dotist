@@ -11,6 +11,11 @@ import XCTest
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".cache/native-migration/fonts")
     }
+    private func fontArtifact(_ name: String) -> URL {
+        let root = fonts.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("font-expansion/test-artifacts")
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root.appendingPathComponent(name)
+    }
     override func setUp() async throws {
         _ = NSApplication.shared
         DotistDesign.fontPreferences = .init()
@@ -29,7 +34,7 @@ import XCTest
     }
 
     func testSettingsBackwardCompatibilityUnknownValuesAndSnakeCaseRoundTrip() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-font-settings-\(UUID().uuidString)")
+        let directory = fontArtifact("dotist-font-settings-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let settingsURL = directory.appendingPathComponent("settings.json")
@@ -55,6 +60,108 @@ import XCTest
         XCTAssertEqual(try decoder.decode(DotistSettings.self, from: JSONSerialization.data(withJSONObject: old)).fontPreferences, .init())
         patch.fontSerifLatin = "unknown"; patch.fontSansLatin = "unknown"; patch.fontSerifCjk = "unknown"; patch.fontSansCjk = "unknown"
         XCTAssertEqual(try store.updateSettings(patch).fontPreferences, .init())
+    }
+
+    func testExpandedLatinCatalogLoadsAndPersists() throws {
+        let serif = [("brygada-1918", "Brygada 1918"), ("pt-serif", "PT Serif"), ("playfair-display", "Playfair Display")]
+        let sans = [("figtree", "Figtree"), ("rubik", "Rubik"), ("work-sans", "Work Sans"), ("public-sans", "Public Sans"), ("quicksand", "Quicksand"), ("plus-jakarta-sans", "Plus Jakarta Sans")]
+        let directory = fontArtifact("dotist-font-catalog-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
+        for (role, entries) in [(DotistFontRole.serifLatin, serif), (.sansLatin, sans)] {
+            for (id, family) in entries {
+                XCTAssertTrue(role.choices.contains(id))
+                XCTAssertFalse((role == .serifLatin ? DotistFontRole.sansLatin : .serifLatin).choices.contains(id))
+                var patch = DotistSettingsPatch()
+                role.set(id, in: &patch)
+                _ = try store.updateSettings(patch)
+                XCTAssertEqual(role.value(in: try store.settings()), id)
+                let preferences = try store.settings().fontPreferences
+                for weight in [NSFont.Weight.regular, .semibold] {
+                    let font = DotistDesign.nativeFont(13, weight: weight, serif: role.isSerif, language: "en", preferences: preferences)
+                    XCTAssertEqual(font.familyName, family, "\(id) at \(weight)")
+                    if id != "pt-serif" { XCTAssertEqual(try axis(0x77676874, of: font as CTFont), weight == .regular ? 400 : 600, accuracy: 0.01) }
+                }
+                XCTAssertTrue(SettingsSearchIndex.entries.contains { $0.title == role.title && $0.keywords.joined(separator: " ").localizedCaseInsensitiveContains(family) })
+            }
+        }
+    }
+
+    func testInstalledOnlyAvailabilityAndPersistence() throws {
+        let serif = [("zodiak", "Zodiak"), ("gambarino", "Gambarino")]
+        let sans = [("switzer", "Switzer"), ("satoshi", "Satoshi")]
+        let directory = fontArtifact("local-catalog-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
+        for (role, entries) in [(DotistFontRole.serifLatin, serif), (.sansLatin, sans)] {
+            let unavailable = SettingsFontAvailability.options(role: role, language: "en", check: { _ in false })
+            let available = SettingsFontAvailability.options(role: role, language: "en", check: { _ in true })
+            for (id, family) in entries {
+                XCTAssertEqual(DotistDesign.localFontFamilies(id)?.first, family)
+                if id != "gambarino" { XCTAssertTrue(DotistDesign.localFontAvailable(id, check: { $0 == family + " Variable" })) }
+                XCTAssertTrue(role.choices.contains(id))
+                XCTAssertFalse((role == .serifLatin ? DotistFontRole.sansLatin : .serifLatin).choices.contains(id))
+                let absent = try XCTUnwrap(unavailable.first { $0.id == id })
+                XCTAssertFalse(absent.available)
+                XCTAssertTrue(absent.title.contains("Not installed"))
+                XCTAssertEqual(absent.explanation, "Not installed locally")
+                XCTAssertTrue(try XCTUnwrap(available.first { $0.id == id }).available)
+                XCTAssertFalse(DotistDesign.localFontAvailable(id, check: { _ in false }))
+                XCTAssertTrue(DotistDesign.localFontAvailable(id, check: { $0 == family }))
+                var patch = DotistSettingsPatch(); role.set(id, in: &patch)
+                _ = try store.updateSettings(patch)
+                XCTAssertEqual(role.value(in: try store.settings()), id)
+                XCTAssertTrue(SettingsSearchIndex.matches(family).contains { $0.title == role.title })
+            }
+        }
+        XCTAssertTrue(SettingsFontAvailability.options(role: .sansLatin, language: "fr", check: { _ in false }).first { $0.id == "switzer" }!.title.contains("Non installée"))
+    }
+
+    func testUnavailablePickerIsDisabledAndKeepsSelection() async throws {
+        let options = SettingsFontAvailability.options(role: .sansLatin, language: "en", check: { _ in false })
+        let host = NSHostingView(rootView: VStack(alignment: .leading) {
+            Text("Latin sans · Not installed locally")
+            SettingsFontPicker(selection: .constant("switzer"), options: options, label: "Latin sans")
+                .frame(width: SettingsFontPicker.columnWidth, height: 28)
+        }.padding(12).background(.white))
+        host.frame.size = NSSize(width: 300, height: 75)
+        host.layoutSubtreeIfNeeded()
+        await Task.yield()
+        host.layoutSubtreeIfNeeded()
+        func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+        let popup = try XCTUnwrap(descendants(host).compactMap { $0 as? NSPopUpButton }.first)
+        let index = try XCTUnwrap(options.firstIndex { $0.id == "switzer" })
+        XCTAssertEqual(popup.indexOfSelectedItem, index)
+        XCTAssertFalse(try XCTUnwrap(popup.item(at: index)).isEnabled)
+        XCTAssertTrue(try XCTUnwrap(popup.selectedItem).title.contains("Not installed"))
+        XCTAssertEqual(popup.toolTip, "Not installed locally")
+        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: fontArtifact("unavailable-picker.png"))
+    }
+
+    func testFontSettingsOffscreenEvidence() async throws {
+        let directory = fontArtifact("settings-evidence-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
+        var patch = DotistSettingsPatch(); patch.language = "en"; patch.fontSansLatin = "switzer"
+        _ = try store.updateSettings(patch)
+        let model = try AppModel(store: store)
+        for size in [CGSize(width: 880, height: 660), CGSize(width: 800, height: 540), CGSize(width: 800, height: 1900)] {
+            let view = SettingsWindow(model: model, updater: NativeUpdater(model: model), beginShortcutCapture: {}, endShortcutCapture: { _, _ in }, resetWindowSize: {}, initialModule: .appearance)
+            let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
+            host.frame = CGRect(origin: .zero, size: size)
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false; window.contentView = host
+            host.layoutSubtreeIfNeeded(); try await Task.sleep(for: .milliseconds(50)); host.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: fontArtifact("settings-fonts-\(Int(size.width))x\(Int(size.height)).png"))
+            window.close()
+        }
     }
 
     func testDefaultFamiliesWeightsOpticalSizeAndRegionalCascades() throws {
@@ -107,7 +214,7 @@ import XCTest
         let url = fonts.appendingPathComponent("Newsreader.ttf")
         XCTAssertTrue(CTFontManagerUnregisterFontsForURL(url as CFURL, .process, nil))
         defer { DotistDesign.registerFonts(in: fonts) }
-        let empty = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-no-fonts-\(UUID().uuidString)")
+        let empty = fontArtifact("dotist-no-fonts-\(UUID().uuidString)")
         DotistDesign.registerFonts(in: empty)
         XCTAssertEqual(DotistDesign.nativeFont(13, serif: true, language: "en").familyName, "Source Serif 4")
     }
@@ -116,7 +223,7 @@ import XCTest
         let originalKey = DotistDesign.fontCacheKey
         let originalFont = DotistDesign.nativeFont(17, weight: .medium, language: "en")
         let originalWidth = TaskDateFilterMetrics.slotWidth(title: "Tomorrow", language: "en")
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-font-model-\(UUID().uuidString)")
+        let directory = fontArtifact("dotist-font-model-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let model = try AppModel(store: TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path))
         let published = expectation(description: "Font publication")
@@ -214,7 +321,7 @@ import XCTest
                 }
                 print("Native font menu \(choice), \(title), font=\(font.fontName), plain/menu=\(centers), scale=\(scale), windowBacking=\(window.backingScaleFactor)")
                 if centers.contains(where: { abs($0 - 26) > 0.5 }) || abs(centers[0] - centers[1]) > 0.5 {
-                    let file = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-menu-\(choice)-\(title).png")
+                    let file = fontArtifact("dotist-menu-\(choice)-\(title).png")
                     try XCTUnwrap(image.representation(using: .png, properties: [:])).write(to: file)
                     print("Native menu failure capture: \(file.path)")
                 }
@@ -247,7 +354,7 @@ import XCTest
                 }
             }
         }
-        let output = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-wN4-font-optical.csv")
+        let output = fontArtifact("dotist-wN4-font-optical.csv")
         try report.joined(separator: "\n").write(to: output, atomically: true, encoding: .utf8)
         print("Font optical calibration: \(output.path), \(report.count - 1) measurements; tolerance 0.5pt")
     }

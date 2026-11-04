@@ -93,11 +93,23 @@ final class PanelShadowTests: XCTestCase {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         defer { panel.close() }
+        let evidence = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".cache/integration-install/pixel-evidence/panel-shadow")
+        try FileManager.default.createDirectory(at: evidence, withIntermediateDirectories: true)
+        var pixelEvidence = ["onRight,width,reveal,scale,x,y,red,green,blue,alpha,maskAlpha,neighborMaskMax"]
         let host = DotistHostingView(rootView: FloatingSurface(opacity: 73, frost: 22,
             compact: true, transitioning: false, onRight: true, size: CGSize(width: 280, height: 48), reveal: 0, color: .orange)
             .environment(\._accessibilityReduceTransparency, true))
         host.sizingOptions = []
         panel.contentView = host
+        let referencePanel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 280, height: 48),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        referencePanel.isReleasedWhenClosed = false; referencePanel.isOpaque = false
+        referencePanel.backgroundColor = .clear; referencePanel.hasShadow = true
+        defer { referencePanel.close() }
+        let referenceHost = DotistHostingView(rootView: AnyView(Color.clear))
+        referenceHost.sizingOptions = []
+        referencePanel.contentView = referenceHost
         for onRight in [false, true] {
             for (width, reveal) in [(CGFloat(280), CGFloat(0)), (320, 0.3), (250, 0.6), (280, 1), (48, 0)] {
                 let size = CGSize(width: width, height: 48)
@@ -110,17 +122,42 @@ final class PanelShadowTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(35))
                 host.layoutSubtreeIfNeeded()
                 let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                try XCTUnwrap(bitmap.bitmapData).initialize(repeating: 0, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
                 host.cacheDisplay(in: host.bounds, to: bitmap)
                 let scale = CGFloat(bitmap.pixelsWide) / width
                 let surfaceWidth = 48 + (width - 48) * reveal
                 let minX = onRight ? width - surfaceWidth : 0
-                let maskRenderer = ImageRenderer(content: Color.white
-                    .clipShape(FloatingPanelShape(compact: true, transitioning: false, onRight: onRight, reveal: reveal))
-                    .frame(width: size.width, height: size.height)
-                    .environment(\.displayScale, scale))
-                maskRenderer.scale = scale
-                let mask = NSBitmapImageRep(cgImage: try XCTUnwrap(maskRenderer.cgImage))
+                // Capture the independent shape through the same window-backed
+                // raster path and scale as the production surface. A separately
+                // rendered ImageRenderer mask has different corner coverage.
+                referencePanel.setFrame(NSRect(origin: .zero, size: size), display: false)
+                referenceHost.frame = CGRect(origin: .zero, size: size)
+                referenceHost.rootView = AnyView(FloatingPanelShape(compact: true, transitioning: false,
+                    onRight: onRight, reveal: reveal).fill(Color.white).frame(width: size.width, height: size.height))
+                referenceHost.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(35))
+                referenceHost.layoutSubtreeIfNeeded()
+                let mask = try XCTUnwrap(referenceHost.bitmapImageRepForCachingDisplay(in: referenceHost.bounds))
+                try XCTUnwrap(mask.bitmapData).initialize(repeating: 0, count: mask.bytesPerRow * mask.pixelsHigh)
+                referenceHost.cacheDisplay(in: referenceHost.bounds, to: mask)
+                XCTAssertEqual(mask.pixelsWide, bitmap.pixelsWide)
+                XCTAssertEqual(mask.pixelsHigh, bitmap.pixelsHigh)
+                let captureName = "right-\(onRight)-width-\(Int(width))-reveal-\(reveal)"
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: evidence.appendingPathComponent(captureName + "-actual.png"))
+                try XCTUnwrap(mask.representation(using: .png, properties: [:])).write(to: evidence.appendingPathComponent(captureName + "-mask.png"))
                 var maximumExteriorAlpha: CGFloat = 0
+                var plateControlAlpha: CGFloat = 0
+                let plateX = ((bitmap.pixelsWide - 6) / 3) * 3
+                let plateY = ((bitmap.pixelsHigh / 2) / 3) * 3
+                let control = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: bitmap.pixelsWide,
+                    pixelsHigh: bitmap.pixelsHigh, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                    isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+                try XCTUnwrap(control.bitmapData).initialize(repeating: 0, count: control.bytesPerRow * control.pixelsHigh)
+                for y in plateY..<min(plateY + 6, control.pixelsHigh) {
+                    for x in plateX..<min(plateX + 6, control.pixelsWide) {
+                        control.setColor(NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 1), atX: x, y: y)
+                    }
+                }
                 for y in stride(from: 0, to: bitmap.pixelsHigh, by: 3) {
                     for x in stride(from: 0, to: bitmap.pixelsWide, by: 3) {
                         // cacheDisplay and ImageRenderer may differ by one
@@ -133,15 +170,30 @@ final class PanelShadowTests: XCTestCase {
                             }
                         }
                         if !boundary {
-                            maximumExteriorAlpha = max(maximumExteriorAlpha, try XCTUnwrap(bitmap.colorAt(x: x, y: y)).alphaComponent)
+                            plateControlAlpha = max(plateControlAlpha, try XCTUnwrap(control.colorAt(x: x, y: y)).alphaComponent)
+                            let pixel = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                            maximumExteriorAlpha = max(maximumExteriorAlpha, pixel.alphaComponent)
+                            if pixel.alphaComponent > 0 {
+                                let maskAlpha = mask.colorAt(x: x, y: y)?.alphaComponent ?? 0
+                                let neighborMax = (-1...1).flatMap { dy in (-1...1).map { dx -> CGFloat in
+                                    let mx = x + dx, my = y + dy
+                                    guard mx >= 0, my >= 0, mx < mask.pixelsWide, my < mask.pixelsHigh else { return 0 }
+                                    return mask.colorAt(x: mx, y: my)?.alphaComponent ?? 0
+                                } }.max() ?? 0
+                                pixelEvidence.append("\(onRight),\(width),\(reveal),\(scale),\(x),\(y),\(pixel.redComponent),\(pixel.greenComponent),\(pixel.blueComponent),\(pixel.alphaComponent),\(maskAlpha),\(neighborMax)")
+                            }
                         }
                     }
+                }
+                if !onRight && width == 280 && reveal == 0 {
+                    XCTAssertEqual(plateControlAlpha, 1, "The same exterior detector must reject an injected opaque plate")
                 }
                 XCTAssertEqual(maximumExteriorAlpha, 0, "Window-backed compositing must not add an offset plate at reveal=\(reveal)")
                 XCTAssertGreaterThan(try XCTUnwrap(bitmap.colorAt(x: Int((minX + surfaceWidth / 2) * scale), y: Int(24 * scale))).alphaComponent, 0.05)
                 XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
             }
         }
+        try pixelEvidence.joined(separator: "\n").write(to: evidence.appendingPathComponent("exterior-pixels.csv"), atomically: true, encoding: .utf8)
     }
 
     func testAllTaskAndQuickPanelsUseSystemShadowWithoutShadowChildren() throws {

@@ -574,7 +574,15 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         defer { parent.close() }
         let motion = PanelMotion(model: model, panel: parent, size: parent.frame.size, title: { "test" })
         defer { motion.stop() }
-        let controller = SideTabsController(parent: parent, model: model, state: TaskPanelState(), motion: motion)
+        var testMouse = CGPoint(x: -10_000, y: -10_000)
+        var environment = SideTabsController.Environment()
+        environment.mouse = { testMouse }
+        environment.inputMonitors = false
+        let controller = SideTabsController(parent: parent, model: model, state: TaskPanelState(), motion: motion, environment: environment)
+        func moveMouse(_ point: CGPoint) {
+            testMouse = point
+            controller.synchronize()
+        }
         defer { controller.stop() }
         parent.orderFront(nil)
         let child = try XCTUnwrap(parent.childWindows?.first { $0.identifier?.rawValue == "dotist.side-tabs" })
@@ -582,9 +590,9 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         let container = try XCTUnwrap(parent.contentView)
         let resting = try XCTUnwrap(container.subviews.first { $0.identifier?.rawValue == "dotist.side-tabs-rest" })
         let outside = CGPoint(x: parent.frame.maxX - 20, y: parent.frame.minY + 20)
-        controller.synchronize(mouse: outside)
+        moveMouse(outside)
         try await Task.sleep(for: .milliseconds(500))
-        controller.synchronize(mouse: outside)
+        moveMouse(outside)
         XCTAssertTrue(parent.frame.contains(child.frame))
         XCTAssertEqual(child.frame.width, 15)
         try assertOrderedAbove(parent, child, "Resting child must be below its parent")
@@ -595,10 +603,10 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         XCTAssertEqual(String(describing: type(of: restingCapture)), "PointerView")
         let gap = CGPoint(x: mouse.x, y: ear.minY - 3)
         XCTAssertNil(hitTarget(in: resting, atWindowPoint: parent.convertPoint(fromScreen: gap)), "Six-point gaps must pass through to panel content")
-        controller.synchronize(mouse: mouse)
+        moveMouse(mouse)
         for _ in 0..<24 {
             try await Task.sleep(for: .milliseconds(10))
-            controller.synchronize(mouse: mouse)
+            moveMouse(mouse)
             XCTAssertEqual(child.frame.minX, parent.frame.minX, accuracy: 0.001)
             XCTAssertEqual(child.frame.maxY, parent.frame.maxY - 40, accuracy: 0.001)
             try assertOrderedAbove(child, parent, "Inward expansion must composite over the panel")
@@ -612,21 +620,22 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         XCTAssertEqual(actual.minX, parent.frame.minX, accuracy: 0.001)
         XCTAssertEqual(actual.width, SideTabGeometry.expandedWidth(name: model.text("全部"), language: model.language), accuracy: 0.001)
         // Toolbar and horizontal/vertical gaps stay outside native capture.
-        controller.synchronize(mouse: CGPoint(x: parent.frame.minX + 5, y: parent.frame.maxY - 20))
+        moveMouse(CGPoint(x: parent.frame.minX + 5, y: parent.frame.maxY - 20))
         XCTAssertTrue(child.ignoresMouseEvents)
         for _ in 0..<42 {
             try await Task.sleep(for: .milliseconds(10))
-            controller.synchronize(mouse: outside)
-            if child.frame.width > 10 { try assertOrderedAbove(child, parent) }
+            moveMouse(outside)
+            if child.frame.width > SideTabGeometry.selectedWidth + 0.001 { try assertOrderedAbove(child, parent) }
         }
-        XCTAssertEqual(child.frame.width, 10, accuracy: 0.001)
+        XCTAssertEqual(child.frame.width, SideTabGeometry.selectedWidth, accuracy: 0.001)
         try assertOrderedAbove(parent, child)
         XCTAssertFalse(resting.isHidden)
         for room: CGFloat in [4, 10, 40] {
             parent.setFrameOrigin(CGPoint(x: area.minX + room, y: parent.frame.minY))
-            controller.synchronize(mouse: outside)
+            moveMouse(outside)
             XCTAssertEqual(child.frame.minX, max(area.minX, parent.frame.minX - 10), accuracy: 0.001)
-            XCTAssertEqual(resting.isHidden, room >= 10)
+            XCTAssertGreaterThan(child.frame.maxX, parent.frame.minX, "The 15pt selected tab still overlaps the panel")
+            XCTAssertFalse(resting.isHidden, "The overlapping selected ear stays visible below the parent")
         }
         controller.stop()
         XCTAssertNil(resting.superview, "Stopping tabs must also remove the in-panel ear")

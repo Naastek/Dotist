@@ -26,6 +26,7 @@ struct SettingsSearchEntry: Identifiable, Equatable {
     let title: String
     let target: String
     let keywords: [String]
+    var isGroupName = false
     var id: String { target }
 
     static func rowID(_ module: SettingsModule, _ title: String) -> String { module.rawValue + "." + title }
@@ -76,7 +77,7 @@ enum SettingsSearchIndex {
 
     static func groupEntry(id: String, name: String) -> SettingsSearchEntry {
         SettingsSearchEntry(module: .appearance, title: name, target: "appearance.color-" + id,
-                            keywords: ["颜色主题 分组颜色 group color colour カラー グループの色 顏色主題 群組顏色", name])
+                            keywords: ["颜色主题 分组颜色 group color colour カラー グループの色 顏色主題 群組顏色", name], isGroupName: true)
     }
 
     private static func normalized(_ value: String) -> String {
@@ -95,8 +96,8 @@ enum SettingsSearchIndex {
         case "分组便签背景透明度": return ["transparency opacity alpha group tab 分组便签不透明度"] + translations("分组便签不透明度")
         case "失焦后整窗透明度": return ["transparency opacity alpha idle fade 淡出后的不透明度"] + translations("淡出后的不透明度")
         case "字体": return ["Fonts Typeface フォント 字型 字體"]
-        case "西文衬线": return ["Fonts Latin serif 西文襯線 欧文セリフ Newsreader Source Serif New York 系统 系統 システム system"]
-        case "西文无衬线": return ["Fonts Latin sans serif 西文無襯線 欧文サンセリフ Atkinson Hyperlegible Next Source Sans SF Pro 系统 系統 システム system"]
+        case "西文衬线": return ["Fonts Latin serif 西文襯線 欧文セリフ Newsreader Source Serif Brygada 1918 PT Serif Playfair Display Zodiak Gambarino New York 系统 系統 システム system"]
+        case "西文无衬线": return ["Fonts Latin sans serif 西文無襯線 欧文サンセリフ Atkinson Hyperlegible Next Source Sans Figtree Rubik Work Sans Public Sans Quicksand Plus Jakarta Sans Switzer Satoshi SF Pro 系统 系統 システム system"]
         case "中文衬线": return ["Fonts CJK serif 中文襯線 CJKセリフ 思源宋体 思源宋體 Noto Serif Chiron Sung HK 昭源宋体 昭源宋體 Songti 系统 系統 システム system"]
         case "中文无衬线": return ["Fonts CJK sans serif 中文無襯線 CJKサンセリフ 思源黑体 思源黑體 Noto Sans PingFang 苹方 蘋方 系统 系統 システム system"]
         case "恢复默认字体": return ["Restore default fonts フォントを初期設定に戻す 恢復預設字體"]
@@ -140,6 +141,19 @@ extension DotistFontRole {
     }
     func label(_ value: String) -> String {
         switch value {
+        case "switzer": return "Switzer"
+        case "satoshi": return "Satoshi"
+        case "zodiak": return "Zodiak"
+        case "gambarino": return "Gambarino"
+        case "brygada-1918": return "Brygada 1918"
+        case "pt-serif": return "PT Serif"
+        case "playfair-display": return "Playfair Display"
+        case "figtree": return "Figtree"
+        case "rubik": return "Rubik"
+        case "work-sans": return "Work Sans"
+        case "public-sans": return "Public Sans"
+        case "quicksand": return "Quicksand"
+        case "plus-jakarta-sans": return "Plus Jakarta Sans"
         case "newsreader": return "Newsreader"
         case "atkinson-next": return "Atkinson Hyperlegible Next"
         case "source-serif-4": return "Source Serif 4"
@@ -148,6 +162,38 @@ extension DotistFontRole {
         case "noto-sans": return "思源黑体"
         case "chiron-sung-hk": return "昭源宋体"
         default: return "系统"
+        }
+    }
+}
+
+struct SettingsFontOption {
+    let id: String
+    let title: String
+    let available: Bool
+    let explanation: String?
+}
+
+enum SettingsFontAvailability {
+    static func message(language: String) -> String {
+        if language.hasPrefix("zh-TW") || language.hasPrefix("zh-HK") || language.hasPrefix("zh-Hant") { return "未安裝，需先在本機安裝" }
+        if language.hasPrefix("zh") { return "未安装，需先在本机安装" }
+        if language.hasPrefix("ja") { return "未インストール（ローカルに必要）" }
+        if language.hasPrefix("fr") { return "Non installée sur cet appareil" }
+        if language.hasPrefix("de") { return "Lokal nicht installiert" }
+        return "Not installed locally"
+    }
+    static func status(language: String) -> String {
+        if language.hasPrefix("zh-TW") || language.hasPrefix("zh-HK") || language.hasPrefix("zh-Hant") { return "未安裝" }
+        if language.hasPrefix("zh") { return "未安装" }
+        if language.hasPrefix("ja") { return "未インストール" }
+        if language.hasPrefix("fr") { return "Non installée" }
+        if language.hasPrefix("de") { return "Nicht installiert" }
+        return "Not installed"
+    }
+    static func options(role: DotistFontRole, language: String, translate: (String) -> String = { $0 }, check: (String) -> Bool = { DotistDesign.familyFont($0, size: 13, weight: .regular) != nil }) -> [SettingsFontOption] {
+        role.choices.map { id in
+            let available = DotistDesign.localFontAvailable(id, check: check)
+            return SettingsFontOption(id: id, title: translate(role.label(id)) + (available ? "" : " — " + status(language: language)), available: available, explanation: available ? nil : message(language: language))
         }
     }
 }
@@ -296,7 +342,7 @@ struct SettingsFontPicker: NSViewRepresentable {
     static let previewWidth: CGFloat = 110
     static let columnWidth: CGFloat = 244
     @Binding var selection: String
-    let options: [(String, String)]
+    let options: [SettingsFontOption]
     let label: String
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSPopUpButton {
@@ -313,9 +359,15 @@ struct SettingsFontPicker: NSViewRepresentable {
     }
     func updateNSView(_ popup: NSPopUpButton, context: Context) {
         context.coordinator.parent = self
-        let titles = options.map(\.1)
+        let titles = options.map(\.title)
         if popup.itemTitles != titles { popup.removeAllItems(); popup.addItems(withTitles: titles) }
-        popup.selectItem(at: options.firstIndex { $0.0 == selection } ?? 0)
+        popup.menu?.autoenablesItems = false
+        popup.selectItem(at: options.firstIndex { $0.id == selection } ?? 0)
+        for (index, option) in options.enumerated() {
+            popup.item(at: index)?.isEnabled = option.available
+            popup.item(at: index)?.toolTip = option.explanation
+        }
+        popup.toolTip = options.first(where: { $0.id == selection && !$0.available })?.explanation
         popup.setAccessibilityLabel(label)
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSPopUpButton, context: Context) -> CGSize? {
@@ -325,8 +377,8 @@ struct SettingsFontPicker: NSViewRepresentable {
         var parent: SettingsFontPicker
         init(_ parent: SettingsFontPicker) { self.parent = parent }
         @objc func changed(_ popup: NSPopUpButton) {
-            guard parent.options.indices.contains(popup.indexOfSelectedItem) else { return }
-            parent.selection = parent.options[popup.indexOfSelectedItem].0
+            guard parent.options.indices.contains(popup.indexOfSelectedItem), parent.options[popup.indexOfSelectedItem].available else { return }
+            parent.selection = parent.options[popup.indexOfSelectedItem].id
         }
     }
 }
