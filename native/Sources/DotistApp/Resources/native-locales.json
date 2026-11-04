@@ -161,7 +161,16 @@
     "项": "items",
     "恢复": "Restore",
     "秒": "s",
-    "数据库路径": "Database path"
+    "数据库路径": "Database path",
+    "主面板材质": "Main panel material",
+    "仅影响展开的主面板，不影响悬浮球或悬浮横条。": "Only affects the expanded main panel. The floating bubble and bar keep their own material.",
+    "分组便签": "Group tabs",
+    "便签入场预览": "Tab entrance preview",
+    "已降低动态效果，显示静态终态。": "Reduce Motion is on. The final state is shown.",
+    "仅演示便签依次出现，不影响任务或设置。": "Shows tabs appearing in sequence. Tasks and settings are unchanged.",
+    "播放便签动画": "Play tab animation",
+    "正在播放": "Playing",
+    "预览就绪": "Preview ready"
   },
   "zh-TW": {
     "今日未完成（含逾期）": "今日未完成（含逾期）",
@@ -325,7 +334,16 @@
     "项": "項",
     "恢复": "還原",
     "秒": "秒",
-    "数据库路径": "資料庫路徑"
+    "数据库路径": "資料庫路徑",
+    "主面板材质": "主面板材質",
+    "仅影响展开的主面板，不影响悬浮球或悬浮横条。": "僅影響展開的主面板，不影響懸浮球或懸浮橫條。",
+    "分组便签": "群組便籤",
+    "便签入场预览": "便籤進場預覽",
+    "已降低动态效果，显示静态终态。": "已減少動態效果，顯示靜態終態。",
+    "仅演示便签依次出现，不影响任务或设置。": "僅示範便籤依序出現，不影響任務或設定。",
+    "播放便签动画": "播放便籤動畫",
+    "正在播放": "正在播放",
+    "预览就绪": "預覽就緒"
   },
   "fr": {
     "今日未完成（含逾期）": "Nombre restant aujourd’hui (retards inclus)",
@@ -489,7 +507,16 @@
     "项": "éléments",
     "恢复": "Restaurer",
     "秒": "s",
-    "数据库路径": "Chemin de la base de données"
+    "数据库路径": "Chemin de la base de données",
+    "主面板材质": "Matériau du panneau principal",
+    "仅影响展开的主面板，不影响悬浮球或悬浮横条。": "S’applique uniquement au panneau principal déployé. La bulle et la barre flottantes conservent leur propre matériau.",
+    "分组便签": "Onglets de groupes",
+    "便签入场预览": "Aperçu de l’apparition des onglets",
+    "已降低动态效果，显示静态终态。": "Les animations sont réduites. L’état final est affiché.",
+    "仅演示便签依次出现，不影响任务或设置。": "Montre l’apparition successive des onglets, sans modifier les tâches ni les réglages.",
+    "播放便签动画": "Lire l’animation des onglets",
+    "正在播放": "Lecture en cours",
+    "预览就绪": "Aperçu prêt"
   },
   "de": {
     "今日未完成（含逾期）": "Heute verbleibende Anzahl (einschließlich überfälliger)",
@@ -653,6 +680,15 @@
     "项": "Einträge",
     "恢复": "Wiederherstellen",
     "秒": "s",
-    "数据库路径": "Datenbankpfad"
+    "数据库路径": "Datenbankpfad",
+    "主面板材质": "Material des Hauptfensters",
+    "仅影响展开的主面板，不影响悬浮球或悬浮横条。": "Gilt nur für das ausgeklappte Hauptfenster. Schwebende Kugel und Leiste behalten ihr eigenes Material.",
+    "分组便签": "Gruppenreiter",
+    "便签入场预览": "Vorschau der Reitereinblendung",
+    "已降低动态效果，显示静态终态。": "Bewegung ist reduziert. Der Endzustand wird angezeigt.",
+    "仅演示便签依次出现，不影响任务或设置。": "Zeigt das nacheinander Einblenden der Reiter, ohne Aufgaben oder Einstellungen zu ändern.",
+    "播放便签动画": "Reiteranimation abspielen",
+    "正在播放": "Wiedergabe läuft",
+    "预览就绪": "Vorschau bereit"
   }
 }

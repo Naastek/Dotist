@@ -95,7 +95,7 @@ import XCTest
                 }
             }
         }
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-wK1-optical-metrics.csv")
+        let path = settingsTestArtifact("dotist-wK1-optical-metrics.csv")
         try rows.joined(separator: "\n").write(to: path, atomically: true, encoding: .utf8)
         print("Measured optical table: \(path.path), \(rows.count - 1) profiles")
     }
@@ -160,7 +160,7 @@ import XCTest
             }
             let height = TaskRowMetrics.height(depth, titleHeight: 20)
             let rep = try render(row, width: 332, height: height)
-            try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/private/tmp/dotist-wK1-row-\(depth).png"))
+            try rep.representation(using: .png, properties: [:])?.write(to: settingsTestArtifact("dotist-wK1-row-\(depth).png"))
             let circle = TaskRowMetrics.circleX(depth) - 16
             let text = TaskRowMetrics.textX(depth) - 16
             try aligned(rep, ranges: [circle..<(circle + 17), text..<(text + 65), 270..<332], center: height / 2)
@@ -196,7 +196,7 @@ import XCTest
             for field in fields(searchHost) {
                 print("SEARCH size=\(size), bounds=\(field.bounds), drawing=\(field.cell!.drawingRect(forBounds: field.bounds)), baseline=\(NSLayoutManager().defaultBaselineOffset(for: field.font!)), lineHeight=\(NSLayoutManager().defaultLineHeight(for: field.font!)), geometry=\(TextLineGeometry(font: field.font!, in: field.bounds))")
             }
-            try search.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/private/tmp/dotist-wK1-search-\(size).png"))
+            try search.representation(using: .png, properties: [:])?.write(to: settingsTestArtifact("dotist-wK1-search-\(size).png"))
             print("Search ink size=\(size): icon=\(try inkVerticalCenter(of: search, in: CGRect(x: 12, y: 0, width: 20, height: 44))), text=\(try inkVerticalCenter(of: search, in: CGRect(x: 44, y: 0, width: 176, height: 44)))")
             try aligned(search, ranges: [12..<32, 44..<220], center: 22)
         }

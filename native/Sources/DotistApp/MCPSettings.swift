@@ -31,7 +31,7 @@ struct MCPSettings: View {
                         var patch = DotistSettingsPatch(); patch.mcpEnabled = $0; model.updateSettings(patch)
                     })).labelsHidden().toggleStyle(.switch).controlSize(.small).tint(DotistDesign.accent)
                         .accessibilityIdentifier("settings-mcp-enabled")
-                }.id("mcp.启用本地 MCP")
+                }.settingsSearchAnchor("mcp.启用本地 MCP")
                 HStack(spacing: 7) {
                     Text(model.text(service.running ? "运行中" : service.starting ? "启动中…" : "已停止"))
                     Spacer()
@@ -50,7 +50,7 @@ struct MCPSettings: View {
                         options: [("codex", "Codex"), ("claude", "Claude Code"), ("json", model.text("其他客户端"))],
                         label: model.text("客户端"), language: model.language).frame(width: 280, height: 24)
                         .accessibilityIdentifier("settings-mcp-client")
-                }.id("mcp.客户端")
+                }.settingsSearchAnchor("mcp.客户端")
                 VStack(alignment: .leading, spacing: 12) {
                     Text(model.text(client == "json" ? "将配置加入客户端的 MCP 设置。" : "复制命令，在终端执行后重新连接客户端。"))
                         .font(DotistDesign.font(12, language: model.language)).foregroundStyle(DotistDesign.muted)
@@ -66,7 +66,7 @@ struct MCPSettings: View {
                     }.buttonStyle(DefaultButtonStyle())
                         .accessibilityIdentifier("settings-mcp-copy")
                         .accessibilityLabel(Text(model.text(client == "json" ? "复制客户端配置" : client == "codex" ? "复制 Codex 添加命令" : "复制 Claude Code 添加命令")))
-                }.id("mcp.复制")
+                }.settingsSearchAnchor("mcp.复制")
             }
         }.font(DotistDesign.font(13, language: model.language))
             .onChange(of: client) { _, _ in copied = false }

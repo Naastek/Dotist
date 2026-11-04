@@ -12,9 +12,12 @@ struct SettingsWindow: View {
     @ObservedObject private var toolbar = ToolbarConfig.shared
     @State private var active: SettingsModule
     @State private var query = ""
-    @State private var searchTarget: String?
-    @State private var searchRequest = UUID()
-    @State private var emphasized: String?
+    @StateObject private var searchFeedback = SettingsSearchFeedback()
+    @State private var searchAnchors: Set<String> = []
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var searchTarget: String? { searchFeedback.request?.target }
+    private var emphasized: String? { searchFeedback.emphasized }
+    private var motion: SettingsMotion { SettingsMotion(reduceMotion: reduceMotion) }
     @State private var manager: Manager?
     @State private var draggedToolbarItem: ToolbarItem?
     @State private var toolbarTranslation: CGFloat = 0
@@ -53,6 +56,10 @@ struct SettingsWindow: View {
         }.font(font(13)).foregroundStyle(DotistDesign.ink).controlSize(.small)
             .background(WindowDragArea()).modifier(DotistTheme(theme: model.settings.theme))
             .frame(minWidth: 800, minHeight: 540)
+            .background(SettingsWindowLifetime { searchFeedback.cancel() })
+            .onDisappear { searchFeedback.cancel() }
+            .onChange(of: query) { _, _ in searchFeedback.cancel() }
+            .onChange(of: reduceMotion, initial: true) { _, _ in searchFeedback.motion = motion }
             .sheet(item: $manager) { current in
                 Group {
                     switch current {
@@ -65,7 +72,9 @@ struct SettingsWindow: View {
     private var sidebar: some View {
         VStack(spacing: 12) {
             HStack(spacing: 7) {
-                SearchRow(text: $query, placeholder: model.text("搜索设置"), language: model.language, identifier: "settings-search")
+                SearchRow(text: $query, placeholder: model.text("搜索"), language: model.language, identifier: "settings-search")
+                    .accessibilityLabel(model.text("搜索设置"))
+                    .help(model.text("搜索设置"))
                     .accessibilityIdentifier("settings-search")
                 if !query.isEmpty {
                     Button { query = "" } label: {
@@ -81,7 +90,7 @@ struct SettingsWindow: View {
                     VStack(alignment: .leading, spacing: 3) {
                         ForEach(SettingsModule.allCases) { module in
                             Button {
-                                active = module; searchTarget = nil; emphasized = nil; searchRequest = UUID()
+                                searchFeedback.cancel(); active = module
                             } label: {
                                 SettingsNavRow(title: model.text(module.title), language: model.language, selected: active == module)
                             }.buttonStyle(.plain).modifier(DotistFocusRing())
@@ -99,8 +108,7 @@ struct SettingsWindow: View {
                         ForEach(searchResults) { result in
                             Button {
                                 active = result.module
-                                searchTarget = result.target
-                                searchRequest = UUID()
+                                searchFeedback.select(result.target)
                             } label: {
                                 HStack(alignment: .center, spacing: 9) {
                                     VStack(alignment: .leading, spacing: 2) {
@@ -130,12 +138,16 @@ struct SettingsWindow: View {
                     .frame(maxWidth: 760, alignment: .leading).frame(maxWidth: .infinity, alignment: .top)
                     .id(active)
             }.background(DotistDesign.paper)
-                .task(id: searchRequest) {
-                    guard let target = searchTarget else { return }
-                    do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return }
-                    withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(target, anchor: .center); emphasized = target }
-                    do { try await Task.sleep(nanoseconds: 1_200_000_000) } catch { return }
-                    withAnimation(.easeOut(duration: 0.2)) { emphasized = nil }
+                .onPreferenceChange(SettingsSearchAnchors.self) { anchors in
+                    searchAnchors = anchors
+                    searchFeedback.layoutReady(anchors) { target, animation in
+                        withAnimation(animation) { proxy.scrollTo(target, anchor: .center) }
+                    }
+                }
+                .onChange(of: searchFeedback.request) { _, _ in
+                    searchFeedback.layoutReady(searchAnchors) { target, animation in
+                        withAnimation(animation) { proxy.scrollTo(target, anchor: .center) }
+                    }
                 }
                 .onChange(of: active) { _, _ in
                     if searchTarget == nil { proxy.scrollTo(active, anchor: .top) }
@@ -163,6 +175,8 @@ struct SettingsWindow: View {
                                           options: [("system", model.text("跟随系统")), ("light", model.text("浅色")), ("dark", model.text("深色"))],
                                           label: model.text("主题"), language: model.language).frame(width: 244)
                 }
+            }
+            settingsGroup("主面板材质", footer: "仅影响展开的主面板，不影响悬浮球或悬浮横条。") {
                 settingRow("玻璃预设") {
                     SettingsSegmentedPicker(selection: Binding(get: { glassPreset }, set: { value in
                         let preset = value == "clear" ? (UInt8(38), UInt8(22)) : value == "ultra" ? (UInt8(8), UInt8(4)) : (UInt8(60), UInt8(40))
@@ -175,7 +189,11 @@ struct SettingsWindow: View {
                     numericValue("\(Int(transparency.rounded()))%")
                 }
                 numberRow("磨砂程度", value: Double(model.settings.frost), range: 0...100, unit: "%") { $0.frost = UInt8($1.rounded()) }
+            }
+            settingsGroup("分组便签") {
                 numberRow("分组便签背景透明度", value: DotistTransparency.value(opacity: model.settings.sideTabOpacity), range: 0...100, unit: "%") { $0.sideTabOpacity = DotistTransparency.opacity(value: $1) }
+                SettingsSideTabPreview(language: model.language, text: model.text, emphasized: emphasized == rowID("便签入场预览"))
+                    .settingsSearchAnchor(rowID("便签入场预览"))
             }
             settingsGroup("字体") {
                 ForEach(DotistFontRole.allCases, id: \.rawValue) { role in fontRow(role) }
@@ -186,7 +204,7 @@ struct SettingsWindow: View {
                         }
                     }.buttonStyle(.plain).foregroundStyle(DotistDesign.accent).modifier(DotistFocusRing())
                 }
-            }.id(rowID("字体"))
+            }.settingsSearchAnchor(rowID("字体"))
             settingsGroup("颜色主题", footer: "分组未设置颜色时使用「全部」的默认颜色。") {
                 settingRow("全部") {
                     SettingsColorPalette(model: model, selected: DotistGroupColor(rawValue: model.settings.allColor), identifier: "settings-all-color") { color in
@@ -196,7 +214,7 @@ struct SettingsWindow: View {
                 ForEach(model.visibleGroups) { group in
                     SettingsFormRow(title: group.name, language: model.language, emphasized: emphasized == "appearance.color-" + group.id, serif: true) {
                         SettingsColorPalette(model: model, selected: DotistGroupColor(rawValue: group.color), identifier: "settings-group-color-" + group.id) { model.setGroupColor(group.id, $0) }
-                    }.id("appearance.color-" + group.id)
+                    }.settingsSearchAnchor("appearance.color-" + group.id)
                 }
             }
             settingsGroup("失焦淡出") {
@@ -266,7 +284,7 @@ struct SettingsWindow: View {
                         Spacer()
                     }.padding(.horizontal, 14).frame(height: 44)
                 }
-            }.id(rowID("筛选器"))
+            }.settingsSearchAnchor(rowID("筛选器"))
         }
     }
     private var menubar: some View {
@@ -315,7 +333,7 @@ struct SettingsWindow: View {
                     let items = orderedToolbarItems
                     if let from = items.firstIndex(of: item) {
                         let to = min(max(from + Int((value.translation.height / 44).rounded()), 0), items.count - 1)
-                        if from != to { withAnimation(.easeInOut(duration: 0.18)) { toolbar.move(item, onto: items[to]) } }
+                        if from != to { withAnimation(motion.toolbar) { toolbar.move(item, onto: items[to]) } }
                     }
                     draggedToolbarItem = nil; toolbarTranslation = 0
                 })
@@ -341,7 +359,7 @@ struct SettingsWindow: View {
             .overlay(alignment: .bottom) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5).padding(.leading, 14) }
             .offset(y: draggedToolbarItem == item ? toolbarTranslation : 0)
             .zIndex(draggedToolbarItem == item ? 1 : 0)
-            .id(rowID(toolbarTitle(item)))
+            .settingsSearchAnchor(rowID(toolbarTitle(item)))
     }
     private func toolbarTitle(_ item: ToolbarItem) -> String {
         switch item {
@@ -434,15 +452,15 @@ struct SettingsWindow: View {
     private func settingsGroup<Content: View>(_ title: String, footer: String = "", @ViewBuilder content: @escaping () -> Content) -> some View {
         SettingsGroup(model.text(title), footer: footer.isEmpty ? "" : model.text(footer), language: model.language, emphasized: emphasized == rowID(title), content: content)
     }
-    private func settingRow<Content: View>(_ label: String, @ViewBuilder control: @escaping () -> Content) -> some View {
-        SettingsFormRow(title: model.text(label), language: model.language, emphasized: emphasized == rowID(label), control: control)
-            .id(rowID(label)).accessibilityIdentifier("settings-row-" + rowID(label))
+    private func settingRow<Content: View>(_ label: String, stacked: Bool = false, @ViewBuilder control: @escaping () -> Content) -> some View {
+        SettingsFormRow(title: model.text(label), language: model.language, emphasized: emphasized == rowID(label), stacked: stacked, control: control)
+            .settingsSearchAnchor(rowID(label)).accessibilityIdentifier("settings-row-" + rowID(label))
     }
     private func numericValue(_ value: String) -> some View {
         OpticalText(title: value, size: 13, language: model.language).monospacedDigit().frame(width: 56, alignment: .trailing).foregroundStyle(DotistDesign.muted)
     }
     private func fontRow(_ role: DotistFontRole) -> some View {
-        settingRow(role.title) {
+        settingRow(role.title, stacked: true) {
             OpticalText(title: model.text(DotistFontRole.previewText), size: 13, serif: role.isSerif,
                         language: role == .serifCjk && role.value(in: model.settings) == "chiron-sung-hk" ? "zh-HK" : model.language)
                 .lineLimit(1).frame(width: SettingsFontPicker.previewWidth, alignment: .leading)
@@ -551,6 +569,7 @@ private struct SettingsNavRow: View {
     let language: String
     let selected: Bool
     @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         HStack(spacing: 0) {
             OpticalText(title: title, size: 13, weight: selected ? .semibold : .regular, language: language)
@@ -562,6 +581,7 @@ private struct SettingsNavRow: View {
         .padding(.horizontal, 14)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.1), value: hovering)
+        .animation(SettingsMotion(reduceMotion: reduceMotion).hover, value: hovering)
+        .animation(SettingsMotion(reduceMotion: reduceMotion).selection, value: selected)
     }
 }

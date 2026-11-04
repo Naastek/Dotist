@@ -40,7 +40,7 @@ final class SettingsLayoutTests: XCTestCase {
                 host.cacheDisplay(in: host.bounds, to: rep)
                 let png = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
                 XCTAssertGreaterThan(png.count, 1000)
-                try png.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("dotist-wIC-settings-\(language)-\(theme).png"))
+                try png.write(to: settingsTestArtifact("dotist-wIC-settings-\(language)-\(theme).png"))
                 window.close()
             }
         }
@@ -68,7 +68,7 @@ final class SettingsLayoutTests: XCTestCase {
             host.cacheDisplay(in: host.bounds, to: rep)
             let png = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
             XCTAssertGreaterThan(png.count, 1000)
-            try png.write(to: URL(fileURLWithPath: "/private/tmp/dotist-shortcuts-\(theme).png"))
+            try png.write(to: settingsTestArtifact("dotist-shortcuts-\(theme).png"))
             window.close()
         }
     }

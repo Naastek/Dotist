@@ -310,7 +310,7 @@ private struct SideTabContent: View {
 
 /// The live host and raster snapshots share this entire tree, including surfaces,
 /// label clipping and absolute tab positions. Each tab has an independent surface.
-private struct SideTabsCanvas: View {
+struct SideTabsCanvas: View {
     let rows: [SideTabLayout]
     let size: CGSize
     let language: String

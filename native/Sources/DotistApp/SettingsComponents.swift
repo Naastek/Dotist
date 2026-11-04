@@ -36,7 +36,7 @@ struct SettingsSearchEntry: Identifiable, Equatable {
 enum SettingsSearchIndex {
     static let entries: [SettingsSearchEntry] = {
         let rows: [(SettingsModule, [String])] = [
-            (.appearance, ["主题", "玻璃预设", "主表面透明度", "磨砂程度", "字体", "西文衬线", "西文无衬线", "中文衬线", "中文无衬线", "恢复默认字体", "失焦淡出", "淡出前等待", "淡出用时", "失焦后整窗透明度", "全部", "分组便签背景透明度"]),
+            (.appearance, ["主题", "玻璃预设", "主表面透明度", "磨砂程度", "字体", "西文衬线", "西文无衬线", "中文衬线", "中文无衬线", "恢复默认字体", "失焦淡出", "淡出前等待", "淡出用时", "失焦后整窗透明度", "全部", "分组便签背景透明度", "便签入场预览"]),
             (.general, ["语言", "显示在 Dock", "显示在菜单栏", "开机启动", "悬停显示详情", "窗口大小", "固定窗口", "自动收起", "收起等待时间", "窗口置顶", "分组", "标签"]),
             (.filters, ["启动时打开", "筛选器"]),
             (.menubar, ["显示内容", "日期透视", "分组", "轮播间隔", "左键点击", "右键点击"]),
@@ -185,14 +185,34 @@ struct SettingsFormRow<Control: View>: View {
     let language: String
     var emphasized = false
     var serif = false
+    var stacked = false
     @ViewBuilder let control: () -> Control
+    private var label: some View {
+        OpticalText(title: title, size: 13, weight: emphasized ? .semibold : .regular, serif: serif, language: language)
+            .foregroundStyle(emphasized ? DotistDesign.accent : DotistDesign.ink)
+    }
+    private var controls: some View {
+        HStack(alignment: .opticalCenter, spacing: 8, content: control)
+    }
+    private var vertical: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            label.fixedSize(horizontal: false, vertical: true)
+            controls.frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
     var body: some View {
-        HStack(alignment: .opticalCenter, spacing: 12) {
-            OpticalText(title: title, size: 13, weight: emphasized ? .semibold : .regular, serif: serif, language: language)
-                .foregroundStyle(emphasized ? DotistDesign.accent : DotistDesign.ink)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
-            HStack(alignment: .opticalCenter, spacing: 8, content: control)
+        Group {
+            if stacked { vertical }
+            else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .opticalCenter, spacing: 12) {
+                        label.fixedSize()
+                        Spacer(minLength: 8)
+                        controls
+                    }
+                    vertical
+                }
+            }
         }.padding(.horizontal, 14).padding(.vertical, 6).frame(minHeight: 44)
             .overlay(alignment: .bottom) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5).padding(.leading, 14) }
     }
