@@ -119,18 +119,20 @@ final class TransientGlassDebugTests: XCTestCase {
         func center(_ image: NSBitmapImageRep) throws -> NSColor {
             try XCTUnwrap(image.colorAt(x: 160, y: 48)?.usingColorSpace(.sRGB))
         }
-        let production = try center(bitmap(FloatingPanelSurface(opacity: 8, frost: 4, compact: true,
-            color: .orange, solid: false, scheme: .light).frame(width: 160, height: 48)))
         var defaultOptions = GlassDebugParameters()
         defaultOptions.tintLayer = .none
         let zero = try center(bitmap(FloatingPanelSurface(opacity: 8, frost: 4, compact: true,
             color: .orange, solid: false, scheme: .light).frame(width: 160, height: 48)
             .environment(\.glassDebugParameters, defaultOptions)))
-        XCTAssertEqual(production.alphaComponent, zero.alphaComponent, accuracy: 0.001)
-        for (a, b) in [(production.redComponent, zero.redComponent),
-                       (production.greenComponent, zero.greenComponent),
-                       (production.blueComponent, zero.blueComponent)] {
-            XCTAssertEqual(a * production.alphaComponent, b * zero.alphaComponent, accuracy: 0.001)
+        // The debug default remains the historical regular-glass experiment;
+        // production compact controls now use a lighter tint and noninteractive glass.
+        let legacy = try center(bitmap(Color.clear.frame(width: 160, height: 48)
+            .glassEffect(.regular.tint(DotistTheme.tint(.orange, .light)).interactive(), in: .rect(cornerRadius: 24))))
+        XCTAssertEqual(legacy.alphaComponent, zero.alphaComponent, accuracy: 0.001)
+        for (a, b) in [(legacy.redComponent, zero.redComponent),
+                       (legacy.greenComponent, zero.greenComponent),
+                       (legacy.blueComponent, zero.blueComponent)] {
+            XCTAssertEqual(a * legacy.alphaComponent, b * zero.alphaComponent, accuracy: 0.001)
         }
         let baseline = try center(render(.orange, .none))
         let tinted = try center(render(.orange, .heavy))

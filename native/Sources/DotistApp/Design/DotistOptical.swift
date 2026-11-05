@@ -129,6 +129,17 @@ struct OpticalSymbol: View {
     }
 }
 
+private enum NativeRasterScale {
+    static func current(fallback: CGFloat) -> CGFloat {
+        guard let context = NSGraphicsContext.current?.cgContext else { return max(1, fallback) }
+        // Include the destination's implicit device transform, not just the
+        // user CTM. Preserve the denser axis for nonuniform destinations too.
+        // An explicit 1x bitmap must remain 1x even on a Retina window.
+        let transform = context.userSpaceToDeviceSpaceTransform
+        return max(1, max(hypot(transform.a, transform.b), hypot(transform.c, transform.d)))
+    }
+}
+
 /// Ordinary inline header ink. Its SwiftUI row inherits the same transaction
 /// as tasks; no animation-suppressing transaction is applied to the label.
 struct GroupHeaderInkLabel: NSViewRepresentable {
@@ -310,9 +321,7 @@ final class GroupHeaderInkView: NSView {
     }
     override func draw(_ dirtyRect: NSRect) {
         // cacheDisplay/PDF/bitmap contexts may differ from the screen backing.
-        let transform = NSGraphicsContext.current?.cgContext.ctm
-        let scale = transform.map { hypot($0.a, $0.b) } ?? window?.backingScaleFactor ?? 1
-        prepareRasters(scale: max(1, scale))
+        prepareRasters(scale: NativeRasterScale.current(fallback: window?.backingScaleFactor ?? 1))
         guard let titleImage else { return }
         let available = max(0, bounds.width - symbolSlotWidth - 6)
         // Preserve the single-line tail truncation of the SwiftUI title.
@@ -490,8 +499,7 @@ private final class NativeSearchIconView: NSView {
         raster = nil; needsDisplay = true
     }
     override func draw(_ dirtyRect: NSRect) {
-        let transform = NSGraphicsContext.current?.cgContext.ctm
-        let scale = transform.map { hypot($0.a, $0.b) } ?? window?.backingScaleFactor ?? 1
+        let scale = NativeRasterScale.current(fallback: window?.backingScaleFactor ?? 1)
         if raster == nil || rasterScale != scale {
             rasterScale = scale
             if let symbol = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)?

@@ -6,6 +6,13 @@ import DotistCore
 
 @MainActor
 final class GroupHeaderRenderingTests: XCTestCase {
+    private func artifact(_ name: String) throws -> URL {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".cache/font-pixel-fix/header-rendering")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent(name)
+    }
     override func setUp() async throws {
         _ = NSApplication.shared
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -33,7 +40,7 @@ final class GroupHeaderRenderingTests: XCTestCase {
     func testShortTitlesPaintWholeGlyphsIn364PointMainList() async throws {
         let savedFonts = DotistDesign.fontPreferences
         defer { DotistDesign.fontPreferences = savedFonts }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-header-" + UUID().uuidString)
+        let directory = try artifact("dotist-header-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
         _ = try store.addTask(title: "Header fixture", category: "work")
@@ -85,7 +92,7 @@ final class GroupHeaderRenderingTests: XCTestCase {
                             XCTAssertEqual(different, 0, "Rendered glyph mask differs from full title: " + message)
                         }
                         if scale == 1 && backingScale == 2 && latin == "newsreader" && cjk == "noto-serif" {
-                            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: "/private/tmp/dotist-header-current.png"))
+                            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: artifact("dotist-header-current.png"))
                         }
                     }
                 }
@@ -153,7 +160,7 @@ final class GroupHeaderRenderingTests: XCTestCase {
                         let arrow = try XCTUnwrap(inkBounds(bitmap, x: (frame.minX + glyphs.symbolInkFrame.minX)..<(frame.minX + glyphs.symbolInkFrame.maxX)))
                         if abs(arrow.midY - pixels.midY) > 0.5 / scale {
                             print("ROTATION AXIS title=\(title), collapsed=\(collapsed), hovered=\(hovered), delay=\(delay), fraction=\(glyphs.disclosureProgress), titleFrame=\(glyphs.titleInkFrame), symbolFrame=\(glyphs.symbolInkFrame), titlePixels=\(pixels), arrowPixels=\(arrow), glyphViewFrame=\(frame)")
-                            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: "/private/tmp/dotist-rotation-axis.png"))
+                            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: artifact("dotist-rotation-axis.png"))
                         }
                         XCTAssertEqual(arrow.midY, pixels.midY, accuracy: 0.5 / scale)
                     }
@@ -218,7 +225,7 @@ final class GroupHeaderRenderingTests: XCTestCase {
                                 // most half a pixel when ink heights have opposite parity.
                                 XCTAssertEqual(symbolInk.midY, titleInk.midY, accuracy: 0.5 / scale, message)
                                 if abs(symbolInk.midY - titleInk.midY) > 0.5 / scale {
-                                    let url = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-group-" + UUID().uuidString + ".png")
+                                    let url = try artifact("dotist-group-" + UUID().uuidString + ".png")
                                     try XCTUnwrap(image.representation(using: .png, properties: [:])).write(to: url)
                                     print("GROUP ACTUAL title=\(titleInk) symbol=\(symbolInk) artifact=\(url.path)")
                                 }
@@ -238,7 +245,7 @@ final class GroupHeaderRenderingTests: XCTestCase {
     func testDisclosureAxisFromIndependentWindowPixelSegmentation() async throws {
         let saved = DotistDesign.fontPreferences
         defer { DotistDesign.fontPreferences = saved }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-native-group-evidence")
+        let directory = try artifact("dotist-native-group-evidence")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var captures = ["profile,serif,title,collapsed,windowBacking,bitmapScale,drawScale,titleCenter,chevronCenter"]
         for (profileIndex, colorSpace) in [NSColorSpace.sRGB, .displayP3].enumerated() {

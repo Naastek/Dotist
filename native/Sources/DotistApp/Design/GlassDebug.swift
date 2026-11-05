@@ -64,7 +64,7 @@ struct GlassDebugParameters: Codable, Equatable {
     }
 
     enum Preset: String, CaseIterable {
-        case production = "生产", clear = "净透", soft = "柔和"
+        case production = "历史标准对照", clear = "净透", soft = "柔和"
         var parameters: GlassDebugParameters {
             var value = GlassDebugParameters()
             switch self {

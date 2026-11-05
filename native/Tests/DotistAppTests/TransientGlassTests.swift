@@ -12,30 +12,64 @@ final class TransientGlassTests: XCTestCase {
         return NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
     }
 
-    /// Expanded-window paper/opacity preferences must not wash out compact glass.
-    /// Compare to the native effect in the same renderer, never painted fake glass.
-    func testCompactSurfaceAddsNoPaintOverNativeGlassAcrossMainWindowPresets() throws {
+    /// Compact contrast treatment must remain independent of expanded-panel presets.
+    func testCompactGlassContrastBackingAndPresetIndependence() throws {
         for scheme in [ColorScheme.light, .dark] {
-            for color in [DotistGroupColor.none, .orange] {
-                let tint: Color? = color == .none ? nil : DotistTheme.tint(color, scheme)
-                let reference = try bitmap(Color.clear.frame(width: 180, height: 48)
-                    .glassEffect(.regular.tint(tint).interactive(), in: .rect(cornerRadius: 24)), scheme: scheme)
-                let presets: [(UInt8, UInt8)] = [(8, 4), (38, 22), (60, 40), (100, 100)]
-                for (opacity, frost) in presets {
-                    let actual = try bitmap(FloatingPanelSurface(opacity: opacity, frost: frost, compact: true,
-                        color: color, solid: false, scheme: scheme).frame(width: 180, height: 48), scheme: scheme)
-                    for point in [(90, 24), (24, 24), (90, 5)] {
-                        let a = try XCTUnwrap(actual.colorAt(x: point.0 * 2, y: point.1 * 2)?.usingColorSpace(.sRGB))
-                        let b = try XCTUnwrap(reference.colorAt(x: point.0 * 2, y: point.1 * 2)?.usingColorSpace(.sRGB))
-                        XCTAssertEqual(a.alphaComponent, b.alphaComponent, accuracy: 0.01, "Compact glass must have no paper wash or whole-effect opacity")
-                        // Compare associated color: transparent effect graphs may
-                        // have undefined unassociated RGB in offscreen rendering.
-                        for (left, right) in [(a.redComponent, b.redComponent), (a.greenComponent, b.greenComponent), (a.blueComponent, b.blueComponent)] {
-                            XCTAssertEqual(left * a.alphaComponent, right * b.alphaComponent, accuracy: 0.02)
-                        }
-                    }
+            for width in [48, 240] {
+                let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+                let reference = try bitmap(ZStack {
+                    Color.white
+                    Color.clear.glassEffect(.regular, in: shape)
+                    if scheme == .dark { shape.fill(Color.black.opacity(0.4)) }
+                }.frame(width: CGFloat(width), height: 48), scheme: scheme)
+                for (opacity, frost): (UInt8, UInt8) in [(8, 4), (60, 40), (100, 100)] {
+                    let actual = try bitmap(ZStack {
+                        Color.white
+                        FloatingPanelSurface(opacity: opacity, frost: frost, compact: true,
+                            color: .none, solid: false, scheme: scheme)
+                    }.frame(width: CGFloat(width), height: 48), scheme: scheme)
+                    let a = try XCTUnwrap(actual.colorAt(x: width, y: 48)?.usingColorSpace(.sRGB))
+                    let b = try XCTUnwrap(reference.colorAt(x: width, y: 48)?.usingColorSpace(.sRGB))
+                    XCTAssertEqual(a.redComponent, b.redComponent, accuracy: 0.025, "Center must use the compact contrast treatment")
                 }
             }
+        }
+    }
+
+    func testCompactAccessibilitySurfaceIsOpaqueAndThemeCorrectAtBothWidths() throws {
+        for scheme in [ColorScheme.light, .dark] {
+            for width in [48, 240] {
+                let image = try bitmap(FloatingPanelSurface(opacity: 8, frost: 4, compact: true,
+                    color: .none, solid: true, scheme: scheme).frame(width: CGFloat(width), height: 48), scheme: scheme)
+                let center = try XCTUnwrap(image.colorAt(x: width, y: 48)?.usingColorSpace(.sRGB))
+                XCTAssertEqual(center.alphaComponent, 1, accuracy: 0.01)
+                if scheme == .dark { XCTAssertLessThan(center.redComponent, 0.2) }
+                else { XCTAssertGreaterThan(center.redComponent, 0.9) }
+                XCTAssertLessThan(try XCTUnwrap(image.colorAt(x: 0, y: 0)).alphaComponent, 0.05)
+            }
+        }
+    }
+
+    func testCompactHighlightsAreDirectionalAndLeaveInteriorClear() throws {
+        for width in [48, 240] {
+            let image = try bitmap(CompactGlassHighlights(cornerRadius: 24)
+                .frame(width: CGFloat(width), height: 48), scheme: .dark)
+            func alpha(_ x: Int, _ y: Int) throws -> CGFloat {
+                try XCTUnwrap(image.colorAt(x: x * 2, y: y * 2)).alphaComponent
+            }
+            // Measure the top and bottom edges in opposite halves, avoiding
+            // antialiased corners. The highlight should survive either width.
+            var upperLeft: CGFloat = 0, lowerRight: CGFloat = 0
+            let start = width == 48 ? 17 : 32
+            let end = width == 48 ? 22 : 80
+            for x in start...end {
+                upperLeft += try alpha(x, 1)
+                lowerRight += try alpha(width - x - 1, 46)
+            }
+            XCTAssertGreaterThan(upperLeft, lowerRight * 1.3, "Upper light should lead the secondary reflection")
+            XCTAssertGreaterThan(lowerRight, CGFloat(end - start + 1) * 0.02, "The secondary reflection must remain visible")
+            XCTAssertGreaterThan(upperLeft, CGFloat(end - start + 1) * 0.2, "The edge must remain visible")
+            XCTAssertLessThan(try alpha(width / 2, 24), 0.01, "Reflection must not fill the glass interior")
         }
     }
 
@@ -99,8 +133,10 @@ final class TransientGlassTests: XCTestCase {
                         let fixture = NativeRenderingFixture(surface, size: CGSize(width: 260, height: 48))
                         let image = try await fixture.capture(scale: 2)
                         fixture.close()
-                        let reference = NativeRenderingFixture(Color.clear.frame(width: 260, height: 48)
-                            .glassEffect(.regular, in: .rect(cornerRadius: 24)).environment(\.colorScheme, scheme), size: CGSize(width: 260, height: 48))
+                        let reference = NativeRenderingFixture(ZStack {
+                            Color.clear.glassEffect(.regular, in: .rect(cornerRadius: 24))
+                            if scheme == .dark { RoundedRectangle(cornerRadius: 24, style: .continuous).fill(.black.opacity(0.4)) }
+                        }.frame(width: 260, height: 48).environment(\.colorScheme, scheme), size: CGSize(width: 260, height: 48))
                         let referenceImage = try await reference.capture(scale: 2)
                         reference.close()
                         let width = 48 + 212 * reveal

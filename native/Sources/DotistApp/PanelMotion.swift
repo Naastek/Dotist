@@ -629,7 +629,7 @@ struct FloatingSurface: View, Animatable {
 }
 
 /// The compact surface uses native glass directly. Expanded reading surfaces
-/// retain their independently configured paper, frost and background opacity.
+/// retain their independently configured tint density, frost and background opacity.
 struct FloatingPanelMaterial: View {
     let opacity: UInt8
     let frost: UInt8
@@ -659,7 +659,7 @@ struct FloatingPanelSurface: View {
 
     var body: some View {
         if compact {
-            TransientGlassSurface(cornerRadius: 24, color: color, interactive: true, solid: solid, scheme: scheme, debug: glassDebug)
+            TransientGlassSurface(cornerRadius: 24, color: color, interactive: true, compact: true, solid: solid, scheme: scheme, debug: glassDebug)
         } else {
             let shape = RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius, style: .continuous)
             Group {
@@ -667,18 +667,18 @@ struct FloatingPanelSurface: View {
                     DotistDesign.paper
                 } else {
                     Color.clear.glassEffect(.regular.tint(DotistTheme.tint(color, scheme)), in: shape)
-                        .overlay(paperOverlay)
+                        .overlay(tintDensityLayer)
                 }
             }
-            .overlay(DotistTheme.swatch(color).opacity(solid ? 0.08 : (scheme == .dark ? 0.18 : 0.16)))
+            .overlay(DotistTheme.swatch(color).opacity(solid ? GlassTintMaterial.accessibilityTint : (scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint)))
             .opacity(solid ? 1 : DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false))
             .clipShape(shape)
         }
     }
 
-    private var paperOverlay: some View {
+    private var tintDensityLayer: some View {
         DotistDesign.paper.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false))
-            .overlay(DotistDesign.paper.opacity(Double(frost) / 100 * 0.12))
+            .overlay(DotistDesign.paper.opacity(Double(frost) / 100 * GlassTintMaterial.expandedFrostScale))
     }
 }
 

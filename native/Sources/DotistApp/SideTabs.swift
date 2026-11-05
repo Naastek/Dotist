@@ -189,15 +189,15 @@ private final class SideTabPresentation: ObservableObject {
 }
 
 /// A detached, transparent child panel has no in-window backdrop to sample.
-/// Paper is the reliable default there and in ImageRenderer. A host with a real
+/// A tint fill is the reliable default there and in ImageRenderer. A host with a real
 /// backdrop can opt into glass; only the background enters that effect graph.
 enum SideTabSurfaceStyle {
-    case paper
+    case tint
     case glass
 }
 
 private struct SideTabSurfaceStyleKey: EnvironmentKey {
-    static let defaultValue = SideTabSurfaceStyle.paper
+    static let defaultValue = SideTabSurfaceStyle.tint
 }
 
 /// Explicit rendering context for offscreen snapshots. The live canvas reads
@@ -241,7 +241,7 @@ private struct SideTabBackground: View {
             // Resolve one fill before rasterizing its silhouette. Stacking two
             // antialiased shapes produces a darker seam at low background alpha.
             shape.fill(DotistDesign.paper.mix(with: color == .none ? DotistDesign.ink : DotistTheme.swatch(color),
-                by: selected ? (contrast == .increased ? 0.42 : 0.30) : 0.06, in: .device))
+                by: selected ? (contrast == .increased ? GlassTintMaterial.tabHighContrastSelectedTint : GlassTintMaterial.tabSelectedTint) : GlassTintMaterial.tabUnselectedTint, in: .device))
             if style == .glass && !reduceTransparency && contrast != .increased {
                 Color.clear
                     .glassEffect(.regular.tint(DotistTheme.tint(color, scheme).opacity(selected ? 1 : 0.5)), in: shape)
@@ -369,14 +369,14 @@ private struct SideTabsView: View {
             textOpacity: presentation.textOpacity, opacity: model.settings.sideTabOpacity,
             color: { model.themeColor(forGroup: $0) },
             pointer: pointer, select: { state.groupID = $0 })
-            .environment(\.sideTabSurfaceStyle, .paper)
+            .environment(\.sideTabSurfaceStyle, .tint)
             .modifier(DotistTheme(theme: model.settings.theme))
             .accessibilityHidden(!presentation.visible)
     }
 }
 
 /// Callable offscreen entry point. Rectangles use bitmap coordinates (top down).
-/// Rendering paper is intentional: ImageRenderer cannot sample Liquid Glass.
+/// Rendering the tint fill is intentional: ImageRenderer cannot sample Liquid Glass.
 @MainActor
 struct SideTabsSnapshot {
     let image: CGImage
@@ -399,7 +399,7 @@ struct SideTabsSnapshot {
         let content = SideTabsCanvas(rows: rows, size: sample.window.size, language: language,
             selectedGroupID: selectedIndex.map(String.init), hovered: nil, inward: inward, textOpacity: showLabels ? sample.textOpacity : 0,
             opacity: opacity, color: color)
-            .environment(\.sideTabSurfaceStyle, .paper)
+            .environment(\.sideTabSurfaceStyle, .tint)
             .environment(\.colorScheme, scheme)
             .environment(\.sideTabAccessibility, SideTabAccessibility(reduceTransparency: reduceTransparency, contrast: contrast))
             .transaction { $0.disablesAnimations = true }
