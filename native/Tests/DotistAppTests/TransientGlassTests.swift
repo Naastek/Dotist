@@ -51,25 +51,31 @@ final class TransientGlassTests: XCTestCase {
     }
 
     func testCompactHighlightsAreDirectionalAndLeaveInteriorClear() throws {
-        for width in [48, 240] {
-            let image = try bitmap(CompactGlassHighlights(cornerRadius: 24)
-                .frame(width: CGFloat(width), height: 48), scheme: .dark)
-            func alpha(_ x: Int, _ y: Int) throws -> CGFloat {
-                try XCTUnwrap(image.colorAt(x: x * 2, y: y * 2)).alphaComponent
+        for scheme in [ColorScheme.light, .dark] {
+            for width in [48, 240] {
+                let image = try bitmap(GlassEdge(cornerRadius: 24, compact: true, scheme: scheme)
+                    .frame(width: CGFloat(width), height: 48), scheme: scheme)
+                func light(_ x: Int, _ y: Int) throws -> CGFloat {
+                    let c = try XCTUnwrap(image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                    let luminance = 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
+                    return c.alphaComponent * luminance
+                }
+                var upperLight: CGFloat = 0, lowerLight: CGFloat = 0
+                let start = width == 48 ? 17 : 32
+                let end = width == 48 ? 22 : 80
+                for x in start...end {
+                    for y in 0..<6 {
+                        let top = try light(x * 2, y)
+                        let bottom = try light((width - x - 1) * 2, image.pixelsHigh - 1 - y)
+                        upperLight += top
+                        lowerLight += bottom
+                    }
+                }
+                XCTAssertGreaterThan(upperLight, lowerLight * 1.3, "Upper light must lead the secondary reflection: \(scheme), \(width)")
+                XCTAssertGreaterThan(upperLight, CGFloat(end - start + 1) * 0.2, "The upper reflection must be visible")
+                XCTAssertLessThan(try XCTUnwrap(image.colorAt(x: width, y: 48)).alphaComponent, 0.01,
+                    "Reflection must not fill the glass interior")
             }
-            // Measure the top and bottom edges in opposite halves, avoiding
-            // antialiased corners. The highlight should survive either width.
-            var upperLeft: CGFloat = 0, lowerRight: CGFloat = 0
-            let start = width == 48 ? 17 : 32
-            let end = width == 48 ? 22 : 80
-            for x in start...end {
-                upperLeft += try alpha(x, 1)
-                lowerRight += try alpha(width - x - 1, 46)
-            }
-            XCTAssertGreaterThan(upperLeft, lowerRight * 1.3, "Upper light should lead the secondary reflection")
-            XCTAssertGreaterThan(lowerRight, CGFloat(end - start + 1) * 0.02, "The secondary reflection must remain visible")
-            XCTAssertGreaterThan(upperLeft, CGFloat(end - start + 1) * 0.2, "The edge must remain visible")
-            XCTAssertLessThan(try alpha(width / 2, 24), 0.01, "Reflection must not fill the glass interior")
         }
     }
 

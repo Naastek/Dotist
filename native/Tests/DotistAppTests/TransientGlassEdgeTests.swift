@@ -10,7 +10,9 @@ final class TransientGlassEdgeTests: XCTestCase {
     /// evidence captures, not a visual acceptance test for desktop refraction.
     func testOffscreenProductionVersusBareNativeGlassMatrix() async throws {
         let phase = ProcessInfo.processInfo.environment["DOTIST_GLASS_PHASE"] ?? "after"
-        let output = URL(fileURLWithPath: "/tmp/dotist-glass").appendingPathComponent(phase)
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let output = root.appendingPathComponent(".cache/glass-edge-polish/native-edge").appendingPathComponent(phase)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         var records = ["scheme,width,backdrop,tint,variant,centerAlpha"]
         for scheme in [ColorScheme.light, .dark] {

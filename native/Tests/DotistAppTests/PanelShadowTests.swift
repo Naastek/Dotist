@@ -196,7 +196,7 @@ final class PanelShadowTests: XCTestCase {
         try pixelEvidence.joined(separator: "\n").write(to: evidence.appendingPathComponent("exterior-pixels.csv"), atomically: true, encoding: .utf8)
     }
 
-    func testAllTaskAndQuickPanelsUseSystemShadowWithoutShadowChildren() throws {
+    func testTaskPanelStateAndOtherPanelsUseExpectedShadowWithoutChildren() throws {
         let model = try model()
         let frame = NSRect(x: 100, y: 100, width: 364, height: 620)
         let panel = DotistPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -219,13 +219,16 @@ final class PanelShadowTests: XCTestCase {
         for _ in 0..<3 {
             motion.toggleBubble(in: area, animated: false)
             motion.setHover(true, in: area)
+            XCTAssertEqual(panel.hasShadow, !motion.bubble)
             motion.finishHover(true)
+            XCTAssertEqual(panel.hasShadow, !motion.bubble)
             panel.setFrameOrigin(NSPoint(x: 20, y: 20))
             _ = motion.finishBubbleMove()
             motion.setHover(false, in: area)
+            XCTAssertEqual(panel.hasShadow, !motion.bubble)
             motion.finishHover(false)
             motion.refreshShadow()
-            XCTAssertTrue(panel.hasShadow)
+            XCTAssertEqual(panel.hasShadow, !motion.bubble)
             XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
             XCTAssertTrue(group.window?.childWindows?.isEmpty ?? true)
         }
@@ -259,7 +262,7 @@ final class PanelShadowTests: XCTestCase {
             XCTAssertEqual(panel.frame.size, compact ? NSSize(width: 48, height: 48) : frame.size)
             XCTAssertEqual(panel.styleMask.contains(.resizable), !compact)
             XCTAssertFalse(panel.isVisible)
-            XCTAssertTrue(panel.hasShadow)
+            XCTAssertEqual(panel.hasShadow, !compact)
             XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
             XCTAssertEqual(durationRequests, 0, "Do not queue native animations for hidden windows")
             XCTAssertEqual(input.pendingFrameAnimationCount, 0)
@@ -268,7 +271,7 @@ final class PanelShadowTests: XCTestCase {
         XCTAssertEqual(remembered.first?.size, frame.size)
     }
 
-    func testControlledFrameAnimationsKeepSystemShadowAtIntermediateSizes() throws {
+    func testControlledFrameAnimationsUseTargetStateShadowAtIntermediateSizes() throws {
         let model = try model()
         let input = PanelMotionTestEnvironment()
         let frame = NSRect(x: 100, y: 100, width: 364, height: 620)
@@ -285,17 +288,73 @@ final class PanelShadowTests: XCTestCase {
             for progress in [CGFloat(0.25), 0.5, 0.75] {
                 try input.sampleFrameAnimation(for: panel, progress: progress)
                 XCTAssertTrue(motion.animationInProgress)
-                XCTAssertTrue(panel.hasShadow)
+                XCTAssertEqual(panel.hasShadow, !compact)
+                motion.refreshShadow()
+                XCTAssertEqual(panel.hasShadow, !compact)
                 XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
             }
             try input.completeFrameAnimation(for: panel)
             XCTAssertFalse(motion.animationInProgress)
             XCTAssertEqual(motion.bubble, compact)
             XCTAssertEqual(panel.frame.size, compact ? NSSize(width: 48, height: 48) : frame.size)
-            XCTAssertTrue(panel.hasShadow)
+            XCTAssertEqual(panel.hasShadow, !compact)
             XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
         }
         XCTAssertEqual(input.pendingFrameAnimationCount, 0)
+    }
+
+    func testGlassDebugChangesDoNotOverrideTaskPanelShadow() throws {
+        let model = try model()
+        let input = PanelMotionTestEnvironment()
+        let panel = DotistPanel(contentRect: NSRect(x: 100, y: 100, width: 364, height: 620),
+                                styleMask: [.borderless], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let debug = GlassDebugState.shared
+        let original = debug.parameters
+        let motion = PanelMotion(model: model, panel: panel, size: panel.frame.size, title: { "" }, environment: input.environment)
+        defer { debug.parameters = original; motion.stop(); panel.close() }
+        debug.parameters.hasShadow = false
+        XCTAssertTrue(panel.hasShadow)
+        motion.toggleBubble(in: input.area, animated: false)
+        XCTAssertFalse(panel.hasShadow)
+        debug.parameters.hasShadow = true
+        XCTAssertFalse(panel.hasShadow)
+        motion.toggleBubble(in: input.area, animated: false)
+        XCTAssertTrue(panel.hasShadow)
+    }
+
+    func testQueuedHoverToggleAndStoppedCompletionPreserveShadowPolicy() throws {
+        let model = try model()
+        let input = PanelMotionTestEnvironment()
+        var environment = input.environment
+        environment.frameAnimationDuration = { _ in 0 } // Reduce Motion path
+        let frame = NSRect(x: 100, y: 100, width: 364, height: 620)
+        let panel = DotistPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let motion = PanelMotion(model: model, panel: panel, size: frame.size, title: { "" }, environment: environment)
+        defer { motion.stop(); panel.close() }
+        XCTAssertTrue(panel.hasShadow)
+        motion.toggleBubble(in: input.area)
+        XCTAssertFalse(panel.hasShadow)
+        motion.toggleBubble(in: input.area) // ignored while the frame transition runs
+        XCTAssertFalse(panel.hasShadow)
+        XCTAssertEqual(try input.frameAnimationDuration(for: panel), 0)
+        try input.completeFrameAnimation(for: panel)
+        motion.setHover(true, in: input.area)
+        XCTAssertFalse(panel.hasShadow)
+        motion.toggleBubble(in: input.area) // queued until hover finishes
+        XCTAssertFalse(panel.hasShadow)
+        motion.finishHover(true)
+        XCTAssertFalse(motion.bubble)
+        XCTAssertTrue(panel.hasShadow)
+        try input.completeFrameAnimation(for: panel)
+        XCTAssertTrue(panel.hasShadow)
+        motion.toggleBubble(in: input.area)
+        XCTAssertFalse(panel.hasShadow)
+        motion.stop()
+        try input.completeFrameAnimation(for: panel)
+        motion.refreshShadow()
+        XCTAssertFalse(panel.hasShadow)
     }
 
     func testShadowRefreshContinuesAfterViewUpdatesAndStopsWhenRemoved() async throws {

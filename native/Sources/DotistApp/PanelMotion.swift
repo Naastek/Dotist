@@ -115,7 +115,7 @@ final class PanelMotion: ObservableObject {
         self.bubbleContent = bubbleContent
         self.rememberFrame = rememberFrame
         panel.hasShadow = true
-        GlassDebugState.shared.register(panel)
+        // Panel state owns the window shadow even when glass debugging is enabled.
         closeObservation = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stop() }
         }
@@ -126,7 +126,6 @@ final class PanelMotion: ObservableObject {
     }
     func stop() {
         guard !stopped else { return }
-        GlassDebugState.shared.unregister(panel)
         stopped = true
         hoverClose?.cancel(); hoverClose = nil
         pendingHover = nil
@@ -178,6 +177,7 @@ final class PanelMotion: ObservableObject {
             panel.minSize = NSSize(width: 48, height: 48)
             panel.styleMask.remove(.resizable)
             bubble = true
+            panel.hasShadow = false
         } else {
             let width = min(expandedSize.width, area.width)
             let height = min(expandedSize.height, area.height)
@@ -188,6 +188,7 @@ final class PanelMotion: ObservableObject {
             transitionSize = target.size
             hovering = false
             bubble = false
+            panel.hasShadow = true
         }
         refreshShadow()
         // Hidden windows have no visible movement to animate, and AppKit can
@@ -671,6 +672,9 @@ struct FloatingPanelSurface: View {
                 }
             }
             .overlay(DotistTheme.swatch(color).opacity(solid ? GlassTintMaterial.accessibilityTint : (scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint)))
+            .overlay {
+                if !solid { GlassEdge(cornerRadius: DotistDesign.windowCornerRadius, compact: false, scheme: scheme) }
+            }
             .opacity(solid ? 1 : DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false))
             .clipShape(shape)
         }

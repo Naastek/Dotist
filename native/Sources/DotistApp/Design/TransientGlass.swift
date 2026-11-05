@@ -48,30 +48,66 @@ struct TransientGlassSurface: View {
                     }
                 }
                 .overlay {
-                    if compact { CompactGlassHighlights(cornerRadius: cornerRadius) }
+                    if compact { GlassEdge(cornerRadius: cornerRadius, compact: true, scheme: scheme) }
                 }
         }
     }
 }
 
-/// Directional reflections only: the native glass remains the optical body.
-struct CompactGlassHighlights: View {
+/// A thin directional reflection and a confined inner light. Neither
+/// layer paints the interior or changes the native window shadow.
+struct GlassEdge: View {
     let cornerRadius: CGFloat
+    let compact: Bool
+    let scheme: ColorScheme
+
+    private struct Profile {
+        let highlight: Double
+        let secondary: Double
+        let line: CGFloat
+        let innerLight: Double
+        let innerWidth: CGFloat
+        let blur: CGFloat
+
+        func interpolated(to other: Profile, fraction: CGFloat) -> Profile {
+            let t = Double(fraction)
+            func mix(_ a: Double, _ b: Double) -> Double { a + (b - a) * t }
+            return Profile(highlight: mix(highlight, other.highlight), secondary: mix(secondary, other.secondary),
+                line: CGFloat(mix(Double(line), Double(other.line))), innerLight: mix(innerLight, other.innerLight),
+                innerWidth: CGFloat(mix(Double(innerWidth), Double(other.innerWidth))),
+                blur: CGFloat(mix(Double(blur), Double(other.blur))))
+        }
+    }
+
+    private func profile(width: CGFloat) -> Profile {
+        let dark = scheme == .dark
+        let ball = Profile(highlight: dark ? 0.78 : 0.68, secondary: dark ? 0.18 : 0.12,
+            line: 1.0, innerLight: dark ? 0.22 : 0.18, innerWidth: 3.0, blur: 1.2)
+        let strip = Profile(highlight: dark ? 0.72 : 0.62, secondary: dark ? 0.16 : 0.10,
+            line: 0.9, innerLight: dark ? 0.19 : 0.15, innerWidth: 2.5, blur: 1.0)
+        if compact { return ball.interpolated(to: strip, fraction: min(1, max(0, (width - 48) / 192))) }
+        return Profile(highlight: dark ? 0.58 : 0.48, secondary: dark ? 0.12 : 0.08,
+            line: 0.8, innerLight: dark ? 0.14 : 0.11, innerWidth: 2.0, blur: 1.0)
+    }
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        let light = LinearGradient(stops: [
-            .init(color: .white.opacity(0.85), location: 0),
-            .init(color: .white.opacity(0.55), location: 0.20),
-            .init(color: .white.opacity(0.04), location: 0.52),
-            .init(color: .white.opacity(0.12), location: 0.78),
-            .init(color: .white.opacity(0.38), location: 1)
-        ], startPoint: .topLeading, endPoint: .bottomTrailing)
-        ZStack {
-            shape.strokeBorder(light, lineWidth: 1.25)
-            shape.inset(by: 2).strokeBorder(light.opacity(0.38), lineWidth: 4)
-                .blur(radius: 2)
-                .clipShape(shape)
+        GeometryReader { geometry in
+            let p = profile(width: geometry.size.width)
+            let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            let light = LinearGradient(stops: [
+                .init(color: .white.opacity(p.highlight), location: 0),
+                .init(color: .white.opacity(p.highlight * 0.55), location: 0.20),
+                .init(color: .white.opacity(0.015), location: 0.55),
+                .init(color: .white.opacity(p.secondary), location: 1)
+            ], startPoint: .topLeading, endPoint: .bottomTrailing)
+            let innerLight = LinearGradient(stops: [.init(color: .white.opacity(p.innerLight), location: 0),
+                .init(color: .clear, location: 0.5)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            ZStack {
+                shape.inset(by: 1).strokeBorder(innerLight, lineWidth: p.innerWidth)
+                    .blur(radius: p.blur)
+                    .clipShape(shape)
+                shape.strokeBorder(light, lineWidth: p.line)
+            }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
