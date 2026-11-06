@@ -99,6 +99,15 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
         case original, reconstructed, noReadingOverlays, noWholeOpacity, noClips, noReadingOverlaysOrClips, productionCandidate
         case productionLowOpacity, productionLowFrost, productionHighFrost, productionNeutral
         case productionTransparent, productionOpaque, backdropControl
+        case focusNoManualEdge, focusNativeOnly, focusUniformNativeOpacity
+        var focusControl: Bool { self == .focusNoManualEdge || self == .focusNativeOnly || self == .focusUniformNativeOpacity }
+        var renderLabel: String {
+            switch self {
+            case .original: return "frozen-original"
+            case .productionCandidate: return "production-current-not-final"
+            default: return rawValue
+            }
+        }
         var overlays: Bool { self == .original || self == .reconstructed || self == .noClips || self == .noWholeOpacity }
         var clips: Bool { self == .original || self == .reconstructed || self == .noReadingOverlays || self == .noWholeOpacity }
         var productionInputs: (opacity: UInt8, frost: UInt8, color: DotistGroupColor)? {
@@ -112,6 +121,53 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
             case .productionOpaque: return (100, 40, .pink)
             default: return nil
             }
+        }
+    }
+
+    private enum FocusState: String, CaseIterable {
+        case unchanged, activeKey = "active-key", activeNonKey = "active-non-key", inactive = "inactive-non-key"
+        @MainActor
+        func matches(app: NSApplication, panel: NSWindow) -> Bool {
+            switch self {
+            case .unchanged: return true
+            case .activeKey: return app.isActive && panel.isKeyWindow
+            case .activeNonKey: return app.isActive && !panel.isKeyWindow
+            case .inactive: return !app.isActive && !panel.isKeyWindow
+            }
+        }
+    }
+
+    /// Diagnostic controls only. Production captures always use FloatingSurface.
+    /// Reconstruct the current composition to remove one contributor at a time.
+    private struct FocusControlSurface: View {
+        let variant: Variant
+        let scheme: ColorScheme
+        var body: some View {
+            let radius: CGFloat = 18
+            let native = Color.clear.glassEffect(.regular.tint(DotistTheme.tint(.pink, scheme)),
+                in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+            ZStack {
+                if variant == .focusNativeOnly {
+                    native.padding(2)
+                } else {
+                    if variant == .focusUniformNativeOpacity {
+                        native.opacity(0.8).padding(2)
+                    } else {
+                        native.padding(2).mask {
+                            Color.white.overlay {
+                                ExpandedReadingMaterial.interiorMask(cornerRadius: radius)
+                                    .padding(2).opacity(0.2).blendMode(.destinationOut)
+                            }.compositingGroup()
+                        }
+                    }
+                    ExpandedReadingMaterial(opacity: 80, frost: 40, color: .pink, scheme: scheme, cornerRadius: radius)
+                        .applyingBackgroundOpacity(0.8).padding(2)
+                    if variant != .focusNoManualEdge {
+                        GlassEdge(cornerRadius: radius, compact: false, scheme: scheme).padding(2)
+                    }
+                }
+            }
+            .clipShape(FloatingPanelShape(compact: false, transitioning: false, onRight: true, reveal: 1))
         }
     }
 
@@ -203,7 +259,7 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
     }
 
     /// Reconstructs the existing expanded branch so each switch changes only
-    /// one of the two suspected causes. The baseline is the production view.
+    /// one of the two suspected causes. The baseline is the frozen original.
     private struct Experiment: View {
         let variant: Variant
         let scheme: ColorScheme
@@ -267,7 +323,7 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["DOTIST_EXPANDED_GLASS_DESKTOP"] == "1" else {
             throw XCTSkip("Set DOTIST_EXPANDED_GLASS_DESKTOP=1 on the visual-review host")
         }
-        let trace = try Trace(kind: "captures")
+        let trace = try Trace(kind: "production-no-shadow")
         do {
             try await captureComparisons(trace: trace)
             trace.mark("test.completed")
@@ -277,14 +333,63 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
         }
     }
 
-    private func captureComparisons(trace: Trace, capturesEnabled: Bool = true) async throws {
+    func testProductionExpandedRealFocusStatesWithoutWindowShadow() async throws {
+        guard ProcessInfo.processInfo.environment["DOTIST_EXPANDED_GLASS_FOCUS"] == "1" else {
+            throw XCTSkip("Set DOTIST_EXPANDED_GLASS_FOCUS=1 on the desktop host")
+        }
+        let trace = try Trace(kind: "expanded-focus-no-shadow")
+        do {
+            try await captureComparisons(trace: trace, focusMode: true)
+            trace.mark("focus-captures.completed", facts: ["acceptance": "diagnostic evidence only; current material is not final"])
+        } catch {
+            trace.mark("focus-captures.failed", facts: ["error": String(reflecting: error)])
+            throw error
+        }
+    }
+
+    /// This establishes the diagnostic reconstruction's composition only. Real
+    /// focus and WindowServer glass behavior are checked by the opt-in capture.
+    func testFocusControlReconstructionMatchesProductionComposition() throws {
+        let size = CGSize(width: 364, height: 620)
+        for scheme in [ColorScheme.light, .dark] {
+            func image<V: View>(_ view: V) throws -> NSBitmapImageRep {
+                let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height).environment(\.colorScheme, scheme))
+                renderer.scale = 2
+                return NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+            }
+            let actual = try image(FloatingPanelSurface(opacity: 80, frost: 40, compact: false, color: .pink, solid: false, scheme: scheme)
+                .clipShape(FloatingPanelShape(compact: false, transitioning: false, onRight: true, reveal: 1)))
+            let control = try image(FocusControlSurface(variant: .productionCandidate, scheme: scheme))
+            for bitmap in [actual, control] {
+                let center = try XCTUnwrap(bitmap.colorAt(x: 364, y: 620)?.usingColorSpace(.deviceRGB))
+                XCTAssertGreaterThan(center.alphaComponent, 0.5, "Composition equality needs a rendered reading backing")
+            }
+            var maximum: CGFloat = 0
+            for y in stride(from: 0, to: 1240, by: 4) { for x in stride(from: 0, to: 728, by: 4) {
+                let a = try XCTUnwrap(actual.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                let b = try XCTUnwrap(control.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                maximum = max(maximum, abs(a.alphaComponent - b.alphaComponent))
+                for (aa, bb) in [(a.redComponent, b.redComponent), (a.greenComponent, b.greenComponent), (a.blueComponent, b.blueComponent)] {
+                    maximum = max(maximum, abs(aa * a.alphaComponent - bb * b.alphaComponent))
+                }
+            } }
+            XCTAssertLessThanOrEqual(maximum, 1.0 / 255, "Focus control reconstruction changed production composition: \(scheme)")
+        }
+    }
+
+    private func captureComparisons(trace: Trace, capturesEnabled: Bool = true, focusMode: Bool = false) async throws {
         trace.mark("application.init.begin")
-        _ = NSApplication.shared
+        let app = NSApplication.shared
+        let initiallyActive = app.isActive
+        defer { if focusMode && !initiallyActive { app.deactivate() } }
         trace.mark("application.init.end")
         if capturesEnabled {
             trace.mark("capture.preflight.begin")
             guard CGPreflightScreenCaptureAccess() else { throw CompactGlassDesktopEvidence.Failure("Screen Recording permission unavailable; no permission request was made") }
             trace.mark("capture.preflight.passed")
+        }
+        if focusMode, NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast {
+            throw CompactGlassDesktopEvidence.Failure("System accessibility requests an opaque fallback; native-glass focus comparison unavailable. No settings were changed")
         }
         trace.mark("screen.query.begin")
         let screen = try XCTUnwrap(NSScreen.screens.first)
@@ -318,18 +423,72 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
         trace.mark("backdrop.host.attach.end")
         let rect = NSRect(x: area.midX - 182, y: area.midY - 310, width: 364, height: 620)
         trace.mark("foreground.window.init.begin")
-        let panel = NSPanel(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let panel = DotistPanel(contentRect: rect, styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         trace.mark("foreground.window.init.end")
-        panel.isReleasedWhenClosed = false; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
+        panel.isReleasedWhenClosed = false; panel.isOpaque = false; panel.backgroundColor = .clear
+        panel.title = "Synthetic expanded glass fixture (not a Dotist instance)"
+        panel.minSize = NSSize(width: 320, height: 440)
+        panel.isMovableByWindowBackground = true
+        let productionHidesOnDeactivate = panel.hidesOnDeactivate
+        let store = try TaskStore(databasePath: trace.directory.appendingPathComponent("synthetic-fixture.sqlite").path)
+        let model = try AppModel(store: store)
+        let originalActivationPolicy = app.activationPolicy()
+        let productionActivationPolicy: NSApplication.ActivationPolicy = model.settings.showDock ? .regular : .accessory
+        if focusMode {
+            // Match DotistDelegate's isolated-default policy, never a running
+            // Dotist instance's preferences. This changes this test process only.
+            guard app.setActivationPolicy(productionActivationPolicy) else {
+                throw CompactGlassDesktopEvidence.Failure("Cannot establish the fixture process's production activation policy")
+            }
+        }
+        defer { if focusMode { app.setActivationPolicy(originalActivationPolicy) } }
+        var motionEnvironment = PanelMotion.Environment()
+        motionEnvironment.pointerEventsEnabled = false
+        motionEnvironment.mouseLocation = { NSPoint(x: -10000, y: -10000) }
+        let motion = PanelMotion(model: model, panel: panel, size: rect.size, title: { "Synthetic fixture" }, environment: motionEnvironment)
+        defer { motion.stop() }
+        let productionLevel: NSWindow.Level = model.settings.alwaysOnTop ? .floating : .normal
+        XCTAssertFalse(panel.hasShadow, "Use PanelMotion's actual production shadow policy")
+        let keySink = DotistPanel(contentRect: NSRect(x: screen.visibleFrame.minX + 12, y: screen.visibleFrame.minY + 12, width: 140, height: 60),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        keySink.isReleasedWhenClosed = false; keySink.hasShadow = false
+        keySink.title = "Synthetic focus control"
+        keySink.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
+        keySink.ignoresMouseEvents = true
+        keySink.contentView = NSHostingView(rootView: Text("Focus control").padding().frame(width: 140, height: 60))
+        defer { keySink.close() }
+        if focusMode, keySink.frame.intersects(area) {
+            throw CompactGlassDesktopEvidence.Failure("Display needs space outside the evidence region for an owned focus-control window")
+        }
+        func configureProductionPanel() {
+            CompactGlassDesktopEvidence.configure(panel, frame: rect)
+            // The generic capture helper forces test-only focus defaults. Restore
+            // the real DotistPanel defaults and production foreground behavior.
+            panel.hidesOnDeactivate = productionHidesOnDeactivate
+            panel.ignoresMouseEvents = false
+            panel.level = productionLevel
+            background.level = productionLevel
+        }
+        configureProductionPanel()
+        trace.mark("production-window-configuration", facts: ["class": "DotistPanel", "windowShadow": String(panel.hasShadow),
+            "hidesOnDeactivate": String(panel.hidesOnDeactivate), "canBecomeKey": String(panel.canBecomeKey),
+            "canBecomeMain": String(panel.canBecomeMain), "becomesKeyOnlyIfNeeded": String(panel.becomesKeyOnlyIfNeeded),
+            "isFloatingPanel": String(panel.isFloatingPanel), "level": String(panel.level.rawValue), "styleMask": String(panel.styleMask.rawValue),
+            "role": "production configuration; current rendering not final", "activationPolicy": String(app.activationPolicy().rawValue)])
         defer { trace.mark("foreground.window.close.begin"); panel.close(); trace.mark("foreground.window.close.end") }
         let surfaceSize = rect.size
         var nativeMeans: [Variant: [CGFloat]] = [:]
         var nativePixels: [Variant: [[CGFloat]]] = [:]
-        for variant in Variant.allCases {
+        var focusMeasurements: [String: Any] = [:]
+        let variants: [Variant] = focusMode ? [.original, .productionCandidate, .focusNoManualEdge, .focusNativeOnly, .focusUniformNativeOpacity]
+            : Variant.allCases.filter { !$0.focusControl }
+        for variant in variants {
             trace.mark("variant.begin", facts: ["variant": variant.rawValue])
             let surface: AnyView
             switch variant {
             case .original: surface = AnyView(OriginalExpandedSurface(scheme: scheme))
+            case .focusNoManualEdge, .focusNativeOnly, .focusUniformNativeOpacity:
+                surface = AnyView(FocusControlSurface(variant: variant, scheme: scheme))
             case .backdropControl: surface = AnyView(Color.clear)
             case .productionCandidate, .productionLowOpacity, .productionLowFrost, .productionHighFrost, .productionNeutral, .productionTransparent, .productionOpaque:
                 let inputs = try XCTUnwrap(variant.productionInputs)
@@ -353,144 +512,214 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
                 }.foregroundStyle(DotistDesign.ink).padding(24)
             }.frame(width: 364, height: 620).environment(\.colorScheme, scheme)
             trace.mark("foreground.host.init.begin")
-            let host = NSHostingView(rootView: content)
+            let host = DotistHostingView(rootView: content)
             trace.mark("foreground.host.init.end")
             host.sizingOptions = []; host.frame = NSRect(origin: .zero, size: rect.size)
             trace.mark("foreground.host.attach.begin")
-            panel.contentView = host
-            CompactGlassDesktopEvidence.configure(panel, frame: rect)
+            let container = NSView(frame: NSRect(origin: .zero, size: rect.size))
+            host.autoresizingMask = [.width, .height]
+            container.addSubview(host)
+            panel.contentView = container
+            configureProductionPanel()
             trace.mark("foreground.host.attach.end")
-            trace.mark("backdrop.order.begin")
-            background.orderFrontRegardless()
-            trace.mark("backdrop.order.end")
-            trace.mark("foreground.order.begin")
-            panel.orderFrontRegardless(); panel.invalidateShadow()
-            trace.mark("foreground.order.end")
-            trace.mark("render.flush.begin")
-            backdrop.layoutSubtreeIfNeeded(); host.layoutSubtreeIfNeeded()
-            background.displayIfNeeded(); panel.displayIfNeeded()
-            CATransaction.flush()
-            trace.mark("render.flush.end")
-            trace.mark("settle.begin")
-            try await Task.sleep(for: .milliseconds(500))
-            trace.mark("settle.end")
-            let captureRect = CompactGlassDesktopEvidence.screenRect(area, primaryFrame: primary.frame)
-            func checkWindows() throws {
-                guard background.frame == area, panel.frame == rect, background.isVisible, panel.isVisible,
-                      background.isOnActiveSpace, panel.isOnActiveSpace,
-                      let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] else {
-                    throw CompactGlassDesktopEvidence.Failure("Fixture windows unavailable or moved")
+            for focus in focusMode ? [FocusState.activeKey, .activeNonKey, .inactive] : [.unchanged] {
+                let captureName = focusMode ? "\(variant.renderLabel)-\(focus.rawValue)-no-shadow" : variant.rawValue
+                trace.mark("backdrop.order.begin")
+                background.orderFrontRegardless()
+                trace.mark("backdrop.order.end")
+                trace.mark("foreground.order.begin")
+                panel.orderFrontRegardless(); panel.invalidateShadow()
+                trace.mark("foreground.order.end")
+                if focusMode {
+                    // Only this XCTest process and its owned windows are activated,
+                    // resigned or deactivated. Never target another running app/PID.
+                    trace.mark("focus.transition.begin", facts: ["requested": focus.rawValue, "variant": variant.renderLabel])
+                    switch focus {
+                    case .activeKey:
+                        keySink.orderOut(nil)
+                        app.activate(ignoringOtherApps: true); panel.makeKeyAndOrderFront(nil)
+                    case .activeNonKey:
+                        app.activate(ignoringOtherApps: true); keySink.makeKeyAndOrderFront(nil)
+                    case .inactive:
+                        panel.resignKey(); keySink.resignKey(); keySink.orderOut(nil); app.deactivate()
+                    case .unchanged: break
+                    }
+                    for _ in 0..<20 {
+                        if focus.matches(app: app, panel: panel), focus != .activeNonKey || keySink.isKeyWindow { break }
+                        try await Task.sleep(for: .milliseconds(50))
+                    }
+                    trace.mark("focus.transition.end", facts: ["requested": focus.rawValue, "appActive": String(app.isActive),
+                        "panelKey": String(panel.isKeyWindow), "focusControlKey": String(keySink.isKeyWindow),
+                        "frontmostPID": String(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1)])
+                    guard focus.matches(app: app, panel: panel), focus != .activeNonKey || keySink.isKeyWindow else {
+                        throw CompactGlassDesktopEvidence.Failure("Could not establish actual native focus state \(focus.rawValue); no environment override was used")
+                    }
                 }
-                func number(_ item: [String: Any], _ key: CFString) -> Int { (item[key as String] as? NSNumber)?.intValue ?? -1 }
-                func bounds(_ item: [String: Any]) -> CGRect? {
-                    guard let b = item[kCGWindowBounds as String] as? [String: Any] else { return nil }
-                    return CGRect(dictionaryRepresentation: b as CFDictionary)
+                trace.mark("render.flush.begin")
+                backdrop.layoutSubtreeIfNeeded(); host.layoutSubtreeIfNeeded()
+                background.displayIfNeeded(); panel.displayIfNeeded()
+                CATransaction.flush()
+                trace.mark("render.flush.end")
+                trace.mark("settle.begin")
+                try await Task.sleep(for: .milliseconds(500))
+                trace.mark("settle.end")
+                let captureRect = CompactGlassDesktopEvidence.screenRect(area, primaryFrame: primary.frame)
+                func checkWindows() throws {
+                    guard !panel.hasShadow, panel.alphaValue == 1, background.alphaValue == 1 else {
+                        throw CompactGlassDesktopEvidence.Failure("Production no-shadow/alpha configuration changed")
+                    }
+                    guard focus.matches(app: app, panel: panel), focus != .activeNonKey || keySink.isKeyWindow else {
+                        throw CompactGlassDesktopEvidence.Failure("Actual native focus state changed during capture")
+                    }
+                    guard background.frame == area, panel.frame == rect, background.isVisible, panel.isVisible,
+                          background.isOnActiveSpace, panel.isOnActiveSpace,
+                          let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] else {
+                        trace.mark("ownership.fixture-unavailable", facts: ["backgroundVisible": String(background.isVisible),
+                            "panelVisible": String(panel.isVisible), "hidesOnDeactivate": String(panel.hidesOnDeactivate),
+                            "requestedFocus": focus.rawValue, "appActive": String(app.isActive), "panelKey": String(panel.isKeyWindow)])
+                        throw CompactGlassDesktopEvidence.Failure("Fixture windows unavailable or moved")
+                    }
+                    func number(_ item: [String: Any], _ key: CFString) -> Int { (item[key as String] as? NSNumber)?.intValue ?? -1 }
+                    func bounds(_ item: [String: Any]) -> CGRect? {
+                        guard let b = item[kCGWindowBounds as String] as? [String: Any] else { return nil }
+                        return CGRect(dictionaryRepresentation: b as CFDictionary)
+                    }
+                    guard let back = windows.firstIndex(where: { number($0, kCGWindowNumber) == background.windowNumber }),
+                          let front = windows.firstIndex(where: { number($0, kCGWindowNumber) == panel.windowNumber }), front < back,
+                          bounds(windows[back]) == captureRect,
+                          bounds(windows[front]) == CompactGlassDesktopEvidence.screenRect(rect, primaryFrame: primary.frame),
+                          [back, front].allSatisfy({ number(windows[$0], kCGWindowOwnerPID) == Int(ProcessInfo.processInfo.processIdentifier) }) else {
+                        throw CompactGlassDesktopEvidence.Failure("WindowServer fixture geometry, ownership or ordering differs")
+                    }
+                    let blockers = windows[..<back].filter { item in
+                        number(item, kCGWindowNumber) != panel.windowNumber &&
+                        ((item[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1) != 0 &&
+                        (bounds(item)?.intersects(captureRect) ?? true)
+                    }
+                    guard blockers.isEmpty else {
+                        trace.mark("ownership.external-occlusion", facts: ["blockers": blockers.map {
+                            "id=\(number($0, kCGWindowNumber)) pid=\(number($0, kCGWindowOwnerPID)) layer=\(number($0, kCGWindowLayer)) bounds=\(bounds($0).map(NSStringFromRect) ?? "unknown")"
+                        }.joined(separator: "; "), "action": "clear external interference and rerun on host; capture rejected"])
+                        throw CompactGlassDesktopEvidence.Failure("External window interference occludes the synthetic region; capture rejected. Clear the region and rerun on host")
+                    }
                 }
-                guard let back = windows.firstIndex(where: { number($0, kCGWindowNumber) == background.windowNumber }),
-                      let front = windows.firstIndex(where: { number($0, kCGWindowNumber) == panel.windowNumber }), front < back,
-                      bounds(windows[back]) == captureRect,
-                      bounds(windows[front]) == CompactGlassDesktopEvidence.screenRect(rect, primaryFrame: primary.frame),
-                      [back, front].allSatisfy({ number(windows[$0], kCGWindowOwnerPID) == Int(ProcessInfo.processInfo.processIdentifier) }) else {
-                    throw CompactGlassDesktopEvidence.Failure("WindowServer fixture geometry, ownership or ordering differs")
-                }
-                let blockers = windows[..<back].filter { item in
-                    number(item, kCGWindowNumber) != panel.windowNumber &&
-                    ((item[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1) != 0 &&
-                    (bounds(item)?.intersects(captureRect) ?? true)
-                }
-                guard blockers.isEmpty else {
-                    trace.mark("ownership.external-occlusion", facts: ["blockers": blockers.map {
-                        "id=\(number($0, kCGWindowNumber)) pid=\(number($0, kCGWindowOwnerPID)) layer=\(number($0, kCGWindowLayer)) bounds=\(bounds($0).map(NSStringFromRect) ?? "unknown")"
-                    }.joined(separator: "; "), "action": "clear external interference and rerun on host; capture rejected"])
-                    throw CompactGlassDesktopEvidence.Failure("External window interference occludes the synthetic region; capture rejected. Clear the region and rerun on host")
-                }
-            }
-            trace.mark("ownership.preCapture.begin")
-            try checkWindows()
-            trace.mark("ownership.preCapture.passed", facts: ["backgroundID": String(background.windowNumber), "foregroundID": String(panel.windowNumber),
-                "backgroundFrame": NSStringFromRect(area), "foregroundFrame": NSStringFromRect(rect), "key": String(panel.isKeyWindow), "active": String(NSApp.isActive),
-                "windowShadow": String(panel.hasShadow)])
-            if !capturesEnabled { trace.mark("window-smoke.variant.completed"); continue }
-            let path = output.appendingPathComponent(variant.rawValue + ".png")
-            let pending = output.appendingPathComponent(variant.rawValue + ".pending.png")
-            defer { try? FileManager.default.removeItem(at: pending) }
-            let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-            process.arguments = ["-x", "-R\(Int(captureRect.minX)),\(Int(captureRect.minY)),520,720", pending.path]
-            trace.mark("capture.process.run.begin")
-            try process.run()
-            trace.mark("capture.process.run.end")
-            process.waitUntilExit()
-            trace.mark("capture.process.wait.end", facts: ["status": String(process.terminationStatus)])
-            do {
-                guard process.terminationStatus == 0 else { throw CompactGlassDesktopEvidence.Failure("screencapture failed") }
-                trace.mark("ownership.postCapture.begin")
+                trace.mark("ownership.preCapture.begin")
                 try checkWindows()
-                trace.mark("ownership.postCapture.passed")
-                let image = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: pending)))
-                guard image.pixelsWide == 1040, image.pixelsHigh == 1440 else { throw CompactGlassDesktopEvidence.Failure("Unexpected screenshot dimensions") }
-                let cgImage = try XCTUnwrap(image.cgImage)
-                var samples: [[String: Any]] = []
-                var invalid: [String] = []
-                for marker in markerPoints {
-                    let x = Int(marker.point.x * 2), y = Int(marker.point.y * 2)
-                    let actual = try sRGBPixel(cgImage, x: x, y: y)
-                    let flipped = try sRGBPixel(cgImage, x: x, y: image.pixelsHigh - 1 - y)
-                    let matches = (0..<3).allSatisfy { abs(actual[$0] - marker.rgb[$0]) < 0.12 } && actual[3] > 0.98
-                    if !matches { invalid.append(marker.name) }
-                    samples.append(["marker": marker.name, "bitmapX": x, "bitmapY": y,
-                        "backdropPointX": marker.point.x, "backdropPointY": marker.point.y,
-                        "expectedSRGB": marker.rgb, "actualSRGBA": actual, "flippedYSRGBA": flipped, "matches": matches])
-                    trace.mark("capture.marker.sample", facts: ["marker": marker.name, "x": String(x), "y": String(y),
-                        "expectedSRGB": String(describing: marker.rgb), "actualSRGBA": String(describing: actual),
-                        "flippedYSRGBA": String(describing: flipped), "matches": String(matches)])
-                }
-                let report: [String: Any] = ["status": invalid.isEmpty ? "verified" : "rejected-not-visual-acceptance",
-                    "variant": variant.rawValue, "coordinateOrigin": "bitmap-top-left", "scale": 2,
-                    "imageWidth": image.pixelsWide, "imageHeight": image.pixelsHigh,
-                    "bitmapProfile": image.colorSpace.localizedName ?? "unknown",
-                    "cgImageProfile": cgImage.colorSpace?.name.map { $0 as String } ?? "unknown",
-                    "screenProfile": screen.colorSpace?.localizedName ?? "unknown", "samples": samples]
-                try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
-                    .write(to: output.appendingPathComponent(variant.rawValue + "-marker-samples.json"))
-                if !invalid.isEmpty {
-                    // Retain only four 32pt corner crops, wholly inside the
-                    // synthetic backdrop and outside the foreground/shadow.
-                    // Recheck ownership immediately before retaining them.
+                trace.mark("ownership.preCapture.passed", facts: ["backgroundID": String(background.windowNumber), "foregroundID": String(panel.windowNumber),
+                    "backgroundFrame": NSStringFromRect(area), "foregroundFrame": NSStringFromRect(rect), "key": String(panel.isKeyWindow), "active": String(NSApp.isActive),
+                    "windowShadow": String(panel.hasShadow)])
+                if !capturesEnabled { trace.mark("window-smoke.variant.completed"); continue }
+                let path = output.appendingPathComponent(captureName + ".png")
+                let pending = output.appendingPathComponent(captureName + ".pending.png")
+                defer { try? FileManager.default.removeItem(at: pending) }
+                let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                process.arguments = ["-x", "-R\(Int(captureRect.minX)),\(Int(captureRect.minY)),520,720", pending.path]
+                trace.mark("capture.process.run.begin")
+                try process.run()
+                trace.mark("capture.process.run.end")
+                process.waitUntilExit()
+                trace.mark("capture.process.wait.end", facts: ["status": String(process.terminationStatus)])
+                do {
+                    guard process.terminationStatus == 0 else { throw CompactGlassDesktopEvidence.Failure("screencapture failed") }
+                    trace.mark("ownership.postCapture.begin")
                     try checkWindows()
-                    for (name, x, y) in [("top-left", 0, 0), ("top-right", 976, 0),
-                                         ("bottom-left", 0, 1376), ("bottom-right", 976, 1376)] {
-                        let crop = try XCTUnwrap(cgImage.cropping(to: CGRect(x: x, y: y, width: 64, height: 64)))
-                        let data = try XCTUnwrap(NSBitmapImageRep(cgImage: crop).representation(using: .png, properties: [:]))
-                        try data.write(to: output.appendingPathComponent("rejected-not-visual-acceptance-\(variant.rawValue)-\(name).png"))
+                    trace.mark("ownership.postCapture.passed")
+                    let image = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: pending)))
+                    guard image.pixelsWide == 1040, image.pixelsHigh == 1440 else { throw CompactGlassDesktopEvidence.Failure("Unexpected screenshot dimensions") }
+                    let cgImage = try XCTUnwrap(image.cgImage)
+                    var samples: [[String: Any]] = []
+                    var invalid: [String] = []
+                    for marker in markerPoints {
+                        let x = Int(marker.point.x * 2), y = Int(marker.point.y * 2)
+                        let actual = try sRGBPixel(cgImage, x: x, y: y)
+                        let flipped = try sRGBPixel(cgImage, x: x, y: image.pixelsHigh - 1 - y)
+                        let matches = (0..<3).allSatisfy { abs(actual[$0] - marker.rgb[$0]) < 0.12 } && actual[3] > 0.98
+                        if !matches { invalid.append(marker.name) }
+                        samples.append(["marker": marker.name, "bitmapX": x, "bitmapY": y,
+                            "backdropPointX": marker.point.x, "backdropPointY": marker.point.y,
+                            "expectedSRGB": marker.rgb, "actualSRGBA": actual, "flippedYSRGBA": flipped, "matches": matches])
+                        trace.mark("capture.marker.sample", facts: ["marker": marker.name, "x": String(x), "y": String(y),
+                            "expectedSRGB": String(describing: marker.rgb), "actualSRGBA": String(describing: actual),
+                            "flippedYSRGBA": String(describing: flipped), "matches": String(matches)])
                     }
-                    trace.mark("capture.marker.rejected", facts: ["invalidMarkers": invalid.joined(separator: ","),
-                        "diagnostics": "four synthetic corner crops only; not visual acceptance"])
-                    throw CompactGlassDesktopEvidence.Failure("Backdrop marker missing at \(invalid.joined(separator: ",")); capture rejected; see marker-samples.json")
-                }
-                if variant.productionInputs != nil || variant == .backdropControl {
-                    // Blank interior ROI, in top-left backdrop points: avoids
-                    // text, rim and shadow. Compare RGB, never composite alpha.
-                    var sum = [CGFloat](repeating: 0, count: 3), count: CGFloat = 0
-                    var pixels: [[CGFloat]] = []
-                    for y in stride(from: 400, to: 560, by: 20) {
-                        for x in stride(from: 150, to: 370, by: 20) {
-                            let pixel = try sRGBPixel(cgImage, x: x * 2, y: y * 2)
-                            pixels.append(Array(pixel.prefix(3)))
-                            for channel in 0..<3 { sum[channel] += pixel[channel] }
-                            count += 1
+                    let report: [String: Any] = ["status": invalid.isEmpty ? "verified" : "rejected-not-visual-acceptance",
+                        "variant": variant.rawValue, "renderRole": variant.renderLabel,
+                        "actualFocus": focus.rawValue, "appActive": app.isActive, "panelKey": panel.isKeyWindow,
+                        "windowShadow": panel.hasShadow, "coordinateOrigin": "bitmap-top-left", "scale": 2,
+                        "imageWidth": image.pixelsWide, "imageHeight": image.pixelsHigh,
+                        "bitmapProfile": image.colorSpace.localizedName ?? "unknown",
+                        "cgImageProfile": cgImage.colorSpace?.name.map { $0 as String } ?? "unknown",
+                        "screenProfile": screen.colorSpace?.localizedName ?? "unknown", "samples": samples]
+                    try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+                        .write(to: output.appendingPathComponent(captureName + "-marker-samples.json"))
+                    if !invalid.isEmpty {
+                        // Retain only four 32pt corner crops, wholly inside the
+                        // synthetic backdrop and outside the foreground/shadow.
+                        // Recheck ownership immediately before retaining them.
+                        try checkWindows()
+                        for (name, x, y) in [("top-left", 0, 0), ("top-right", 976, 0),
+                                             ("bottom-left", 0, 1376), ("bottom-right", 976, 1376)] {
+                            let crop = try XCTUnwrap(cgImage.cropping(to: CGRect(x: x, y: y, width: 64, height: 64)))
+                            let data = try XCTUnwrap(NSBitmapImageRep(cgImage: crop).representation(using: .png, properties: [:]))
+                            try data.write(to: output.appendingPathComponent("rejected-not-visual-acceptance-\(captureName)-\(name).png"))
                         }
+                        trace.mark("capture.marker.rejected", facts: ["invalidMarkers": invalid.joined(separator: ","),
+                            "diagnostics": "four synthetic corner crops only; not visual acceptance"])
+                        throw CompactGlassDesktopEvidence.Failure("Backdrop marker missing at \(invalid.joined(separator: ",")); capture rejected; see marker-samples.json")
                     }
-                    let mean = sum.map { $0 / count }
-                    nativeMeans[variant] = mean
-                    nativePixels[variant] = pixels
-                    trace.mark("capture.production-interior-rgb", facts: ["variant": variant.rawValue,
-                        "meanSRGB": String(describing: mean), "samples": String(describing: count)])
-                }
-                try FileManager.default.moveItem(at: pending, to: path)
-                trace.mark("capture.validated", facts: ["image": path.lastPathComponent])
-            } catch { try? FileManager.default.removeItem(at: pending); throw error }
+                    if focusMode || variant.productionInputs != nil || variant == .backdropControl {
+                        // Blank interior ROI, in top-left backdrop points: avoids
+                        // text, rim and shadow. Compare RGB, never composite alpha.
+                        var sum = [CGFloat](repeating: 0, count: 3), count: CGFloat = 0
+                        var pixels: [[CGFloat]] = []
+                        for y in stride(from: 400, to: 560, by: 20) {
+                            for x in stride(from: 150, to: 370, by: 20) {
+                                let pixel = try sRGBPixel(cgImage, x: x * 2, y: y * 2)
+                                pixels.append(Array(pixel.prefix(3)))
+                                for channel in 0..<3 { sum[channel] += pixel[channel] }
+                                count += 1
+                            }
+                        }
+                        let mean = sum.map { $0 / count }
+                        nativeMeans[variant] = mean
+                        nativePixels[variant] = pixels
+                        if focusMode {
+                            var edgeRows: [[String: Any]] = []
+                            for offset in [-6, 0, 1, 2, 3, 4, 6, 8, 12] {
+                                var row = [CGFloat](repeating: 0, count: 3)
+                                for x in stride(from: 150, to: 370, by: 20) {
+                                    let pixel = try sRGBPixel(cgImage, x: x * 2, y: (50 + offset) * 2)
+                                    for channel in 0..<3 { row[channel] += pixel[channel] / 11 }
+                                }
+                                edgeRows.append(["pointsFromWindowTop": offset, "meanSRGB": row])
+                            }
+                            let luminance = pixels.map { $0[0] * 0.2126 + $0[1] * 0.7152 + $0[2] * 0.0722 }
+                            let average = luminance.reduce(0, +) / CGFloat(luminance.count)
+                            let deviation = sqrt(luminance.reduce(0) { $0 + pow($1 - average, 2) } / CGFloat(luminance.count))
+                            let measurement: [String: Any] = ["interiorMeanSRGB": mean, "interiorLuminanceDeviation": deviation,
+                                "topEdgeProfile": edgeRows, "appActive": app.isActive, "panelKey": panel.isKeyWindow,
+                                "windowShadow": panel.hasShadow, "role": variant.renderLabel]
+                            focusMeasurements[captureName] = measurement
+                            // Preserve each validated case's measurements if a
+                            // later focus transition encounters interference.
+                            try JSONSerialization.data(withJSONObject: measurement, options: [.prettyPrinted, .sortedKeys])
+                                .write(to: output.appendingPathComponent(captureName + "-measurements.json"))
+                        }
+                        trace.mark("capture.production-interior-rgb", facts: ["variant": variant.rawValue,
+                            "meanSRGB": String(describing: mean), "samples": String(describing: count)])
+                    }
+                    try FileManager.default.moveItem(at: pending, to: path)
+                    trace.mark("capture.validated", facts: ["image": path.lastPathComponent])
+                } catch { try? FileManager.default.removeItem(at: pending); throw error }
+            }
         }
-        if capturesEnabled {
+        if capturesEnabled && focusMode {
+            try JSONSerialization.data(withJSONObject: ["acceptance": "diagnostic only; current production is not final",
+                "purpose": "Separate native focus policy, manual edge and optical-band masking under production no-shadow window semantics",
+                "cases": focusMeasurements], options: [.prettyPrinted, .sortedKeys])
+                .write(to: output.appendingPathComponent("production-focus-measurements.json"))
+        }
+        if capturesEnabled && !focusMode {
             func distance(_ a: Variant, _ b: Variant) throws -> CGFloat {
                 let a = try XCTUnwrap(nativeMeans[a]), b = try XCTUnwrap(nativeMeans[b])
                 return zip(a, b).reduce(0) { $0 + abs($1.0 - $1.1) }

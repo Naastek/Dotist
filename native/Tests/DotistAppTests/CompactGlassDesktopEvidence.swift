@@ -170,12 +170,18 @@ enum CompactGlassDesktopEvidence {
                       let frontIndex = list.firstIndex(where: { number($0, kCGWindowNumber) == foreground.windowNumber }),
                       frontIndex < backIndex else { throw Failure("Fixture windows missing or reversed in WindowServer order") }
                 for (window, index) in [(background, backIndex), (foreground, frontIndex)] {
-                    guard window.isVisible, window.isOnActiveSpace, window.occlusionState.contains(.visible),
-                          window.alphaValue == 1,
-                          number(list[index], kCGWindowOwnerPID) == Int(ProcessInfo.processInfo.processIdentifier),
-                          bounds(list[index]) == screenRect(window.frame, primaryFrame: primary.frame),
-                          number(list[index], kCGWindowLayer) == window.level.rawValue else {
-                        throw Failure("Fixture \(window.windowNumber) hidden, on another Space, or WindowServer geometry/ownership differs")
+                    let checks: [(String, Bool)] = [
+                        ("visible", window.isVisible),
+                        ("onActiveSpace", window.isOnActiveSpace),
+                        ("occlusionVisible", window.occlusionState.contains(.visible)),
+                        ("alphaIsOne", window.alphaValue == 1),
+                        ("ownerPIDMatches", number(list[index], kCGWindowOwnerPID) == Int(ProcessInfo.processInfo.processIdentifier)),
+                        ("windowServerBoundsMatch", bounds(list[index]) == screenRect(window.frame, primaryFrame: primary.frame)),
+                        ("windowServerLayerMatches", number(list[index], kCGWindowLayer) == window.level.rawValue)
+                    ]
+                    let failed = checks.filter { !$0.1 }.map { $0.0 }
+                    guard failed.isEmpty else {
+                        throw Failure("Fixture \(window.windowNumber) failed: \(failed.joined(separator: ", "))")
                     }
                 }
                 guard background.frame == area, foreground.frame == expectedForegroundFrame else {
