@@ -4,10 +4,59 @@ import SwiftUI
 import XCTest
 @testable import DotistApp
 
+/// Owns logical time, environment policy and delivery of the production Timer
+/// callbacks. No wall-clock sleep is needed to obtain a date-filter frame.
+@MainActor
+private final class DateFilterTestClock {
+    private let time: LayoutMotionTestClock
+    private let savedInstaller = DateFilterSelectionMotion.installTimer
+    private let savedEnvironment = DateFilterSelectionMotion.testEnvironmentReduceMotion
+    private let savedTrace = DateFilterSelectionMotion.trace
+    private var timers: [Timer] = []
+    private(set) var events: [DateFilterSelectionMotion.Sample] = []
+
+    init(reduceMotion: Bool = false) {
+        time = LayoutMotionTestClock(reduceMotion: reduceMotion)
+        DateFilterSelectionMotion.testEnvironmentReduceMotion = reduceMotion
+        DateFilterSelectionMotion.installTimer = { [weak self] in self?.timers.append($0) }
+        DateFilterSelectionMotion.trace = { [weak self] in self?.events.append($0) }
+    }
+    func advance(by interval: TimeInterval) async throws {
+        time.advanceTime(by: interval)
+        timers.removeAll { !$0.isValid }
+        for timer in timers { timer.fire() }
+        await Task.yield()
+    }
+    func waitForEvent(since index: Int = 0, event: String, target: CGFloat) async throws -> DateFilterSelectionMotion.Sample {
+        let deadline = ProcessInfo.processInfo.systemUptime + 2
+        while !events.dropFirst(index).contains(where: { $0.event.hasPrefix(event) && $0.target == target }),
+              ProcessInfo.processInfo.systemUptime < deadline { await Task.yield() }
+        return try XCTUnwrap(events.dropFirst(index).first { $0.event.hasPrefix(event) && $0.target == target },
+                             "Missing lifecycle/selection acknowledgement: \(event), target=\(target)")
+    }
+    func restore() {
+        timers.forEach { $0.invalidate() }
+        DateFilterSelectionMotion.installTimer = savedInstaller
+        DateFilterSelectionMotion.testEnvironmentReduceMotion = savedEnvironment
+        DateFilterSelectionMotion.trace = savedTrace
+        time.restore()
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let output = repo.appendingPathComponent(".cache/cleanup-ci-worker-artifacts/date-motion")
+        do {
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            let lines = ["id\tevent\ttime\tfraction\ttarget"] + events.map {
+                "\($0.id)\t\($0.event)\t\($0.time)\t\($0.fraction)\t\($0.target)"
+            }
+            try lines.joined(separator: "\n").write(to: output.appendingPathComponent(UUID().uuidString + ".tsv"), atomically: true, encoding: .utf8)
+        } catch { XCTFail("Cannot save motion evidence: \(error)") }
+    }
+}
+
 @MainActor
 final class DateFilterAnimationTests: XCTestCase {
     func testSelectingDateKeepsFirstRowYBeforeTimedStripReturn() async throws {
-        let clock = LayoutMotionTestClock()
+        let clock = DateFilterTestClock()
         defer { clock.restore() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-selection-y-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -120,7 +169,7 @@ final class DateFilterAnimationTests: XCTestCase {
     }
 
     func testFullPanelGroupHeaderStaysBelowStripThroughPushAndReturn() async throws {
-        let clock = LayoutMotionTestClock()
+        let clock = DateFilterTestClock()
         defer { clock.restore() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-header-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -218,7 +267,7 @@ final class DateFilterAnimationTests: XCTestCase {
     }
 
     func testExpansionPushesRealRowsBelowHeader() async throws {
-        let clock = LayoutMotionTestClock()
+        let clock = DateFilterTestClock()
         defer { clock.restore() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-pushdown-red-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -256,7 +305,7 @@ final class DateFilterAnimationTests: XCTestCase {
         let previous = try XCTUnwrap(NSApp.accessibilityAttributeValue(enhanced) as? NSNumber)
         NSApp.accessibilitySetValue(true, forAttribute: enhanced)
         defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
-        let clock = LayoutMotionTestClock()
+        let clock = DateFilterTestClock()
         defer { clock.restore() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-pushdown-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -316,8 +365,15 @@ final class DateFilterAnimationTests: XCTestCase {
                 return [first.minY, summary, tag, offset, composer, scroll.contentView.bounds.height]
             }
             let before = try await snapshot("collapsed")
+            _ = try await clock.waitForEvent(event: "appear", target: 0)
+            let openingMark = clock.events.count
             presentation.toggle()
-            _ = try await snapshot("opening-start", save: false)
+            let openingStart = try await snapshot("opening-start", save: false)
+            let opening = try await clock.waitForEvent(since: openingMark, event: "select", target: 1)
+            XCTAssertEqual(opening.fraction, 0)
+            XCTAssertTrue(clock.events.prefix(openingMark).contains { $0.id == opening.id && $0.event == "appear" },
+                          "The pushdown must mount before it receives an opening")
+            for index in before.indices { XCTAssertEqual(openingStart[index], before[index], accuracy: 0.5) }
             try await clock.advance(by: 0.04)
             let middle = try await snapshot("opening-middle")
             try await clock.advance(by: 0.13)
@@ -336,14 +392,18 @@ final class DateFilterAnimationTests: XCTestCase {
             }
             presentation.dismiss()
             _ = try await snapshot("return-start", save: false)
+            _ = try await clock.waitForEvent(since: openingMark, event: "select", target: 0)
             try await clock.advance(by: 0.04)
             let returning = try await snapshot("return-middle")
             XCTAssertNotEqual(rendered["return-middle"], rendered["expanded"], "Return must also paint intermediate content")
             XCTAssertNotEqual(rendered["return-middle"], rendered["collapsed"])
             XCTAssertGreaterThan(returning[0], before[0])
             XCTAssertLessThan(returning[0], expanded[0])
+            let reversalMark = clock.events.count
             presentation.toggle()
             let reversed = try await snapshot("reopen-start", save: false)
+            let reversal = try await clock.waitForEvent(since: reversalMark, event: "select", target: 1)
+            XCTAssertEqual(reversal.id, opening.id, "Rapid reversal must retain its mounted motion")
             XCTAssertEqual(reversed[0], returning[0], accuracy: 0.5, "Reopening must continue from current geometry")
             try await clock.advance(by: 0.04)
             let reopening = try await snapshot("reopen-middle")
@@ -357,6 +417,8 @@ final class DateFilterAnimationTests: XCTestCase {
             try await clock.advance(by: 0.17)
             let after = try await snapshot("returned")
             for index in before.indices { XCTAssertEqual(after[index], before[index], accuracy: 0.5) }
+            XCTAssertFalse(clock.events.dropFirst(openingMark).contains { $0.id == opening.id && $0.event == "appear" },
+                           "A late mount must not silently snap an in-flight transition")
         }
         try records.joined(separator: "\n").write(toFile: "/tmp/dotist-filter-pushdown-geometry-20261103.tsv", atomically: true, encoding: .utf8)
     }
@@ -429,7 +491,7 @@ final class DateFilterAnimationTests: XCTestCase {
         let previous = try XCTUnwrap(NSApp.accessibilityAttributeValue(enhanced) as? NSNumber)
         NSApp.accessibilitySetValue(true, forAttribute: enhanced)
         defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
-        let clock = LayoutMotionTestClock()
+        let clock = DateFilterTestClock()
         defer { clock.restore() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-click-pass-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -500,7 +562,7 @@ final class DateFilterAnimationTests: XCTestCase {
     }
 
     func testReduceMotionPushdownChangesGeometryImmediately() async throws {
-        let clock = LayoutMotionTestClock(reduceMotion: true)
+        let clock = DateFilterTestClock(reduceMotion: true)
         defer { clock.restore() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-pushdown-reduce-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -532,7 +594,7 @@ final class DateFilterAnimationTests: XCTestCase {
         let previousEnhanced = try XCTUnwrap(NSApp.accessibilityAttributeValue(enhanced) as? NSNumber)
         NSApp.accessibilitySetValue(true, forAttribute: enhanced)
         defer { NSApp.accessibilitySetValue(previousEnhanced, forAttribute: enhanced) }
-        let clock = LayoutMotionTestClock()
+        let clock = DateFilterTestClock()
         defer { clock.restore() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-filter-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -615,14 +677,19 @@ final class DateFilterAnimationTests: XCTestCase {
     // A selection must start at the currently drawn label, including in an
     // unordered window. Advancing logical time then exposes actual ink changes.
     func testSelectionDoesNotJumpToNewFontBeforeAnimationClockAdvances() async throws {
-        let clock = LayoutMotionTestClock()
+        let clock = DateFilterTestClock()
         defer { clock.restore() }
         let selection = Selection()
         let fixture = NativeRenderingFixture(ButtonFixture(selection: selection), size: CGSize(width: 120, height: 34))
         defer { fixture.close() }
         let before = pixels(try await fixture.capture(scale: 2))
+        let appeared = try await clock.waitForEvent(event: "appear", target: 0)
+        let selectionMark = clock.events.count
         selection.selected = true
         let initial = pixels(try await fixture.capture(scale: 2))
+        let selecting = try await clock.waitForEvent(since: selectionMark, event: "select", target: 1)
+        XCTAssertEqual(selecting.id, appeared.id)
+        XCTAssertEqual(selecting.fraction, 0)
         XCTAssertTrue(initial == before, "Selection replaced the font immediately instead of starting from the presented label")
         try await clock.advance(by: 0.08)
         let middle = pixels(try await fixture.capture(scale: 2))
@@ -630,6 +697,8 @@ final class DateFilterAnimationTests: XCTestCase {
         let after = pixels(try await fixture.capture(scale: 2))
         XCTAssertNotEqual(middle, before)
         XCTAssertNotEqual(middle, after, "The selection must paint an intermediate appearance")
+        XCTAssertEqual(clock.events.last { $0.id == selecting.id }?.fraction, 1)
+        XCTAssertFalse(clock.events.dropFirst(selectionMark).contains { $0.id == selecting.id && $0.event == "appear" })
         XCTAssertFalse(fixture.window.isVisible, "The harness must never order a desktop window")
     }
 
@@ -697,7 +766,7 @@ final class DateFilterAnimationTests: XCTestCase {
         let saved = NSApp.accessibilityAttributeValue(enhanced)
         NSApp.accessibilitySetValue(true, forAttribute: enhanced)
         defer { NSApp.accessibilitySetValue(saved, forAttribute: enhanced) }
-        let motion = LayoutMotionTestClock(reduceMotion: true)
+        let motion = DateFilterTestClock(reduceMotion: true)
         defer { motion.restore() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-hover-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -818,7 +887,7 @@ final class DateFilterAnimationTests: XCTestCase {
     }
 
     func testRapidSelectionReversesFromCurrentFractionWithoutOvershoot() async throws {
-        let clock = LayoutMotionTestClock()
+        let clock = DateFilterTestClock()
         defer { clock.restore() }
         let motion = DateFilterSelectionMotion(selected: false)
         defer { motion.stop() }
@@ -826,6 +895,7 @@ final class DateFilterAnimationTests: XCTestCase {
         XCTAssertEqual(motion.fraction, 0)
         try await clock.advance(by: 0.04)
         let ascending = motion.fraction
+        XCTAssertEqual(ascending, 1 - pow(0.75, 3), accuracy: 0.000000001, "The requested tick must have been delivered")
         XCTAssertGreaterThan(ascending, 0)
         XCTAssertLessThan(ascending, 1)
         motion.setSelected(false, reduceMotion: false)
@@ -849,7 +919,7 @@ final class DateFilterAnimationTests: XCTestCase {
     }
 
     func testReduceMotionAndStopCancelInFlightSelection() async throws {
-        let clock = LayoutMotionTestClock()
+        let clock = DateFilterTestClock()
         defer { clock.restore() }
         let motion = DateFilterSelectionMotion(selected: false)
         motion.setSelected(true, reduceMotion: false)

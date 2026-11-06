@@ -101,12 +101,9 @@ def generate(destination):
     chunks = [code.encode('ascii') + struct.pack('>I', len(data) + 8) + data for code, data in elements]
     payload = b''.join(chunks)
     native_icon.write_bytes(b'icns' + struct.pack('>I', len(payload) + 8) + payload)
-    # Only mirrors referenced by the native packager and macOS Tauri config/source.
+    # Mirror referenced by the native packager.
     for source, target in (
         (LOGO / 'menubar-template@2x.png', Path('native/Assets/menubar.png')),
-        (Path('native/Assets/icon.icns'), Path('src-tauri/icons/icon.icns')),
-        (LOGO / 'app-icon-light-1024.png', Path('src-tauri/icons/icon.png')),
-        (LOGO / 'menubar-template@2x.png', Path('src-tauri/icons/tray/menubar@2x.png')),
     ):
         (destination / target).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(destination / source, destination / target)

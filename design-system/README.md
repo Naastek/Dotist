@@ -4,7 +4,7 @@
 
 轻、透、少：一扇贴在桌面右上角的待办小窗。
 
-**v3.1（2026-10-30）**：这一版设计系统按项目的实际代码重新整理。页面上所有窗口预览都来自 `?demo` 的真实界面，渲染用的就是 `src/dotist.css` + `src/app.css` + `src/views.css`，再叠加一份演进补丁 `evolution-v3.1.css`（v3 的补丁代码里已基本合并，见 app.css「Round 8」）。所以这里看到的就是 App 现在的样子，加上本轮建议的改动。
+**v3.1（2026-10-30，历史设计快照）**：这一版设计系统按当时 React 客户端的实际代码整理，窗口预览来自当时的 `?demo` 界面。客户端现已退役，四份样式原样保存在 `previews/styles/`（`tokens.css`、`dotist.css`、`app.css`、`views.css`），再叠加 `evolution-v3.1.css`。直接用浏览器打开 `previews/` 中的 HTML 即可查看，无需 Node/npm；这些快照不表示当前 Swift 原生应用的外观。
 
 ## v3.1（本轮）：去黄 + 选中不用色块
 
@@ -125,14 +125,14 @@
 
 ## Logo、菜单栏、悬浮球
 
-Logo 是「。.」：空心圈是中文句号，实心点是英文句号。App 图标、菜单栏模板图标、悬浮球都从这个图形来，文件在 `logo/`。项目里 `src-tauri/icons/` 的图标还没有替换。
+Logo 是「。.」：空心圈是中文句号，实心点是英文句号。App 图标、菜单栏模板图标、悬浮球都从这个图形来，文件在 `logo/`。当前原生图标由 `../native/scripts/generate-icons.py` 生成到 `../native/Assets/`。
 
 ## 本文件夹
 
-- `evolution-v3.1.css`：本轮补丁（去黄 + 选中不用色块）。在 `src/main.tsx` 里 `app.css` 之后引入即可试用；确认后建议直接改 `app.css` 里 Round 7 的颜色变量和各处 hover 底色，而不是长期保留 `!important` 补丁。
+- `evolution-v3.1.css`：本轮补丁（去黄 + 选中不用色块）。静态预览在 `previews/styles/app.css` 之后引入；保留当时的颜色与 hover 设计对照。
 - `evolution.css`：上一轮（v3）补丁，已基本合并进 `app.css` 的 Round 8，留作对照。
 - `tokens.json` / `tokens.css`：v3.1 的中性色与其余设计变量。
-- `previews/`：直接引用 `src/` 样式 + 本轮补丁渲染的真实界面，用浏览器打开即可。
+- `previews/`：引用 `previews/styles/` 保存的客户端样式 + 本轮补丁渲染的历史界面，用浏览器打开即可。
 - `mockups/`：现在 vs v3.1、上一轮 v3 的对比图。
-- `logo/`：中性色版的标志、App 图标、菜单栏模板图标（项目 `src-tauri/icons/` 尚未替换）。
+- `logo/`：中性色版的标志、App 图标、菜单栏模板图标（当前生成脚本见 `../native/scripts/generate-icons.py`）。
 - `_archive-v1/`、`_archive-v2/`：更早的方向稿与规范。

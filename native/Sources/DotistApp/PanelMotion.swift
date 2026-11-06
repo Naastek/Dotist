@@ -780,26 +780,14 @@ struct FloatingPanelView<Content: View>: View {
     }
 }
 
-/// Internal fixture seam only; production's environment supplies nil.
-private struct SurfaceInsetDiagnosticKey: EnvironmentKey {
-    static let defaultValue: (@MainActor (Bool, Bool) -> EdgeInsets)? = nil
-}
-extension EnvironmentValues {
-    var diagnosticSurfaceInset: (@MainActor (Bool, Bool) -> EdgeInsets)? {
-        get { self[SurfaceInsetDiagnosticKey.self] }
-        set { self[SurfaceInsetDiagnosticKey.self] = newValue }
-    }
-}
-
 struct FloatingSurface: View, Animatable {
     static let compactOpticalInset: CGFloat = 2
     static func opticalInsets(compact: Bool, reduceTransparency: Bool, increasedContrast: Bool,
-                              diagnostic: EdgeInsets? = nil) -> EdgeInsets {
+                              frameInsets: EdgeInsets? = nil) -> EdgeInsets {
         let inset = compact && !reduceTransparency && !increasedContrast ? compactOpticalInset : 0
         let normal = EdgeInsets(top: inset, leading: inset, bottom: inset, trailing: inset)
-        return !reduceTransparency && !increasedContrast ? diagnostic ?? normal : normal
+        return !reduceTransparency && !increasedContrast ? frameInsets ?? normal : normal
     }
-    @Environment(\.diagnosticSurfaceInset) private var diagnosticInset
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     let opacity: UInt8
@@ -819,7 +807,7 @@ struct FloatingSurface: View, Animatable {
 
     var body: some View {
         let opticalInset = Self.opticalInsets(compact: compact, reduceTransparency: reduceTransparency,
-            increasedContrast: contrast == .increased, diagnostic: diagnosticInset?(compact, transitioning) ?? frameInsets)
+            increasedContrast: contrast == .increased, frameInsets: frameInsets)
         let material = FloatingPanelMaterial(opacity: opacity, frost: frost, compact: compact, color: color)
             .padding(opticalInset)
             .frame(width: compact && !transitioning ? base + (size.width - base) * min(1, max(0, reveal)) : size.width, height: size.height)

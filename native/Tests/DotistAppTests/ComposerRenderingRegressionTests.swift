@@ -80,11 +80,12 @@ final class LayoutMotionTestClock {
         LayoutMotionInputs.testOverride = .init(now: { [unowned self] in self.time }, reduceMotion: reduceMotion)
     }
     func advance(by interval: TimeInterval) async throws {
-        time += interval
+        advanceTime(by: interval)
         // Let the unchanged production run-loop timers deliver this instant.
         // Logical time stays fixed even if this task resumes much later.
         try await Task.sleep(for: .milliseconds(25))
     }
+    func advanceTime(by interval: TimeInterval) { time += interval }
     func restore() { LayoutMotionInputs.testOverride = saved }
 }
 
@@ -100,6 +101,54 @@ final class ComposerRenderingRegressionTests: XCTestCase {
         let field: NSTextField
         func makeNSView(context: Context) -> NSTextField { field }
         func updateNSView(_ view: NSTextField, context: Context) {}
+    }
+    private final class ReferenceCanvas: NSView {
+        override var isFlipped: Bool { true }
+        override var isOpaque: Bool { true }
+        override func draw(_ dirtyRect: NSRect) { NSColor.white.setFill(); bounds.fill() }
+    }
+
+    /// Calibrate the fixed Hx baseline using only an ordinary AppKit field.
+    /// Never read the production field's drawing rect to position this oracle:
+    /// a production translation must fail the absolute-position comparison.
+    private func referenceBaseline(for reference: NSTextField, rowHeight: CGFloat, backing: CGFloat) throws -> CGFloat {
+        let font = try XCTUnwrap(reference.font)
+        let lineHeight = NSLayoutManager().defaultLineHeight(for: font)
+        let label = NSTextField(frame: CGRect(x: 0, y: 0, width: 280, height: lineHeight))
+        label.isBordered = false; label.isBezeled = false; label.drawsBackground = false
+        label.usesSingleLineMode = false; label.cell?.wraps = false; label.cell?.isScrollable = true
+        label.maximumNumberOfLines = 1; label.lineBreakMode = .byClipping; label.font = font
+        if reference.stringValue.isEmpty {
+            label.placeholderAttributedString = NSAttributedString(string: "Hx", attributes: [
+                .font: font, .foregroundColor: NSColor.gray])
+        } else { label.stringValue = "Hx"; label.textColor = reference.textColor }
+        let canvas = ReferenceCanvas(frame: CGRect(x: 0, y: 0, width: 280, height: lineHeight + 16))
+        canvas.appearance = reference.effectiveAppearance
+        canvas.addSubview(label)
+        func center(scale: CGFloat) throws -> CGFloat {
+            let raw = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+                pixelsWide: Int(ceil(canvas.bounds.width * scale)), pixelsHigh: Int(ceil(canvas.bounds.height * scale)),
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            let image = raw.retagging(with: reference.window?.colorSpace ?? .sRGB) ?? raw
+            image.size = canvas.bounds.size
+            image.bitmapData?.initialize(repeating: 0, count: image.bytesPerRow * image.pixelsHigh)
+            canvas.cacheDisplay(in: canvas.bounds, to: image)
+            return try XCTUnwrap(glyphMask(image)).visibleBounds.midY / scale
+        }
+        let nativeBaseline = NSLayoutManager().defaultBaselineOffset(for: font)
+        let center = try (center(scale: 1) + center(scale: max(2, backing))) / 2
+        return ((rowHeight / 2 + nativeBaseline - center) * backing).rounded() / backing
+    }
+
+    private func alignReference(_ reference: NSTextField, in fixture: NativeRenderingFixture<some View>,
+                                rowHeight: CGFloat) throws -> CGFloat {
+        let baseline = try referenceBaseline(for: reference, rowHeight: rowHeight, backing: fixture.window.backingScaleFactor)
+        let nativeBaseline = NSLayoutManager().defaultBaselineOffset(for: try XCTUnwrap(reference.font))
+        let line = fixture.host.convert(try XCTUnwrap(reference.cell).drawingRect(forBounds: reference.bounds), from: reference)
+        // The capture container is y-up; the hosting view's line coordinates are y-down.
+        fixture.host.frame.origin.y += line.minY - (baseline - nativeBaseline)
+        return baseline
     }
     private func field(value: String, placeholder: String, reference: Bool, size: CGFloat = 13, language: String = "en") -> NSTextField {
         let field: NSTextField = reference ? NSTextField(frame: .zero) : ComposerTextField()
@@ -238,7 +287,7 @@ final class ComposerRenderingRegressionTests: XCTestCase {
         XCTAssertEqual(actualMask.pixels.count, expected.pixels.count, message, file: file, line: line)
         XCTAssertEqual(differences, 0, message, file: file, line: line)
         if nativeScale {
-            XCTAssertEqual(actualMask.visibleBounds.midY / scale, fieldFrame.midY, accuracy: 2.0, message, file: file, line: line)
+            XCTAssertEqual(actualMask.bounds.origin, expected.bounds.origin, "Absolute native glyph position: " + message, file: file, line: line)
         }
         if differences != 0 || actualMask.bounds.size != expected.bounds.size {
             let path = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-composer-mismatch-" + UUID().uuidString)
@@ -302,12 +351,7 @@ final class ComposerRenderingRegressionTests: XCTestCase {
                     let a = NativeRenderingFixture(FieldHost(field: actual).frame(height: height).background(Color.white), size: CGSize(width: 280, height: height))
                     let b = NativeRenderingFixture(FieldHost(field: reference).frame(height: height).background(Color.white), size: CGSize(width: 280, height: height))
                     defer { a.close(); b.close() }
-                    // Compare two independent native painters at the same line
-                    // origin. SwiftUI centers the stock field's intrinsic height,
-                    // which can otherwise introduce a half-point raster phase.
-                    let actualLine = a.host.convert(actual.cell!.drawingRect(forBounds: actual.bounds), from: actual)
-                    let referenceLine = b.host.convert(reference.cell!.drawingRect(forBounds: reference.bounds), from: reference)
-                    b.host.frame.origin.y += actualLine.minY - referenceLine.minY
+                    let baseline = try alignReference(reference, in: b, rowHeight: height)
                     let alignment = actual.alignmentRect(forFrame: actual.frame)
                     XCTAssertEqual(alignment.height, height, accuracy: 0.01, "Native line padding must preserve the SwiftUI row")
                     XCTAssertNotNil(actual.hitTest(CGPoint(x: alignment.midX, y: alignment.midY)))
@@ -326,6 +370,9 @@ final class ComposerRenderingRegressionTests: XCTestCase {
                                 editor.setSelectedRange(NSRange(location: (value as NSString).length, length: 0))
                             } else { XCTAssertNil(field.currentEditor()) }
                         }
+                        let line = a.host.convert(actual.cell!.drawingRect(forBounds: actual.bounds), from: actual)
+                        XCTAssertEqual(line.minY + NSLayoutManager().defaultBaselineOffset(for: actual.font!), baseline,
+                                       accuracy: 0.01, "Fixed Hx baseline, independent of string and focus")
                         let backingScale = a.window.backingScaleFactor
                         // Inspect the actual UI raster before requesting any
                         // alternative sampling of that same native hierarchy.
@@ -370,9 +417,7 @@ final class ComposerRenderingRegressionTests: XCTestCase {
             let b = NativeRenderingFixture(FieldHost(field: reference).frame(height: 24).background(Color.white),
                 size: CGSize(width: 280, height: 24), simulatedBackingScale: backing)
             defer { a.close(); b.close() }
-            let actualLine = a.host.convert(actual.cell!.drawingRect(forBounds: actual.bounds), from: actual)
-            let referenceLine = b.host.convert(reference.cell!.drawingRect(forBounds: reference.bounds), from: reference)
-            b.host.frame.origin.y += actualLine.minY - referenceLine.minY
+            _ = try alignReference(reference, in: b, rowHeight: 24)
             for focused in [false, true, false] {
                 for (fixture, field) in [(a, actual as NSTextField), (b, reference)] {
                     XCTAssertTrue(fixture.window.makeFirstResponder(focused ? field : nil))

@@ -1,4 +1,4 @@
-/* Dotist 设计系统 v3 · 演进补丁（叠加在 src/app.css 之后即可试用；确认后再并回正式样式） */
+/* Dotist 设计系统 v3 · 演进补丁（叠加在 previews/styles/app.css 之后即可试用；确认后再并回正式样式） */
 
 /* 1 · 头部视图切换：所有标签同一字号，只靠颜色 + 下划线区分当前项 */
 .dt-tabs { gap: 16px !important; }

@@ -160,9 +160,9 @@ struct DateFilterPushdown<Content: View>: View {
             .frame(height: TaskDateFilterMetrics.rowHeight * motion.fraction, alignment: .top)
             .clipped().opacity(Double(motion.fraction))
             .allowsHitTesting(isOpen).accessibilityHidden(!isOpen)
-            .onAppear { motion.setSelected(isOpen, reduceMotion: true) }
-            .onChange(of: isOpen) { _, value in motion.setSelected(value, reduceMotion: reduceMotion) }
-            .onChange(of: reduceMotion) { _, _ in motion.setSelected(isOpen, reduceMotion: reduceMotion) }
+            .onAppear { motion.appear(selected: isOpen) }
+            .onChange(of: isOpen) { _, value in motion.setSelected(value, reduceMotion: DateFilterSelectionMotion.environmentReduceMotion(reduceMotion)) }
+            .onChange(of: reduceMotion) { _, _ in motion.setSelected(isOpen, reduceMotion: DateFilterSelectionMotion.environmentReduceMotion(reduceMotion)) }
             .onDisappear { motion.stop() }
     }
 }
@@ -224,18 +224,55 @@ final class DateFilterContentClickView: NSView {
 @MainActor
 final class DateFilterSelectionMotion: ObservableObject {
     static let duration = 0.16
+    #if DEBUG
+    struct Sample {
+        let id: ObjectIdentifier
+        let event: String
+        let time: TimeInterval
+        let fraction: CGFloat
+        let target: CGFloat
+    }
+    static var trace: ((Sample) -> Void)?
+    // Tests deliver the very same Timer callback explicitly instead of assuming
+    // a wall-clock sleep delivered a logical-time sample. Release uses RunLoop.
+    static var installTimer: ((Timer) -> Void)?
+    static var testEnvironmentReduceMotion: Bool?
+    private func record(_ event: String, target: CGFloat) {
+        Self.trace?(Sample(id: ObjectIdentifier(self), event: event, time: LayoutMotionInputs.now,
+                           fraction: fraction, target: target))
+    }
+    #endif
     @Published private(set) var fraction: CGFloat
     private var timer: Timer?
 
     init(selected: Bool) { fraction = selected ? 1 : 0 }
+    static func environmentReduceMotion(_ value: Bool) -> Bool {
+        #if DEBUG
+        if let testEnvironmentReduceMotion { return testEnvironmentReduceMotion }
+        #endif
+        return value
+    }
+    func appear(selected: Bool) {
+        stop()
+        publish(selected ? 1 : 0)
+        #if DEBUG
+        record("appear", target: selected ? 1 : 0)
+        #endif
+    }
     static func animation(reduceMotion: Bool) -> Animation? {
-        (reduceMotion || LayoutMotionInputs.shouldReduceMotion(false)) ? nil : .easeOut(duration: duration)
+        (environmentReduceMotion(reduceMotion) || LayoutMotionInputs.shouldReduceMotion(false)) ? nil : .easeOut(duration: duration)
     }
     func setSelected(_ selected: Bool, reduceMotion: Bool) {
         stop()
         let target: CGFloat = selected ? 1 : 0
+        #if DEBUG
+        record("select(environment=\(reduceMotion),system=\(LayoutMotionInputs.shouldReduceMotion(false)))", target: target)
+        #endif
         guard !reduceMotion, !LayoutMotionInputs.shouldReduceMotion(false), fraction != target else {
             publish(target)
+            #if DEBUG
+            record("snap", target: target)
+            #endif
             return
         }
         let start = fraction
@@ -246,10 +283,16 @@ final class DateFilterSelectionMotion: ObservableObject {
                 let t = min(1, max(0, (LayoutMotionInputs.now - began) / Self.duration))
                 let eased = 1 - pow(1 - t, 3)
                 self.publish(LayoutMotionInputs.shouldReduceMotion(false) ? target : start + (target - start) * eased)
+                #if DEBUG
+                self.record("tick(began=\(began))", target: target)
+                #endif
                 if t >= 1 || self.fraction == target { self.stop() }
             }
         }
         timer = clock
+        #if DEBUG
+        if let installTimer = Self.installTimer { installTimer(clock); return }
+        #endif
         RunLoop.main.add(clock, forMode: .common)
     }
     private func publish(_ value: CGFloat) {

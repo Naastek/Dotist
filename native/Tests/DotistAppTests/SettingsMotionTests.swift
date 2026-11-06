@@ -6,6 +6,11 @@ import XCTest
 
 @MainActor
 final class SettingsMotionTests: XCTestCase {
+    private func drainMainQueue() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
     /// A cancellation-insensitive suspended clock proves generation checks, not
     /// merely Task.sleep's cooperative cancellation, prevent stale feedback.
     private final class Sleeper {
@@ -131,8 +136,9 @@ final class SettingsMotionTests: XCTestCase {
             XCTAssertTrue(playback.isPlaying)
             if removal {
                 host.rootView = AnyView(Text("Other module"))
-                host.layoutSubtreeIfNeeded(); await Task.yield()
+                host.layoutSubtreeIfNeeded()
             } else { window.close() }
+            await drainMainQueue()
             XCTAssertFalse(playback.isPlaying, removal ? "Leaving module" : "Closing retained window")
             XCTAssertEqual(playback.values, [1, 1, 1])
             window.close()
@@ -141,5 +147,83 @@ final class SettingsMotionTests: XCTestCase {
     func testReducedMotionDisablesEverySettingsTransition() {
         let policy = SettingsMotion(reduceMotion: true)
         XCTAssertNil(policy.hover); XCTAssertNil(policy.selection); XCTAssertNil(policy.search); XCTAssertNil(policy.toolbar)
+    }
+
+    func testHostingViewReleaseDoesNotPublishDuringGraphDestruction() async throws {
+        _ = NSApplication.shared
+        for playing in [false, true] {
+            let playback = SettingsPreviewPlayback(time: { 10 })
+            var destroying = false
+            var synchronousPublications = 0
+            let observation = playback.objectWillChange.sink {
+                if destroying { synchronousPublications += 1 }
+            }
+            weak var releasedHost: NSView?
+            autoreleasepool {
+                var host: NSHostingView<AnyView>? = NSHostingView(rootView: AnyView(
+                    SettingsSideTabPreview(language: "en", text: { $0 }, playback: playback)
+                        .frame(width: 500)))
+                releasedHost = host
+                host!.frame.size = host!.fittingSize
+                host!.layoutSubtreeIfNeeded()
+                if playing { playback.play(reduceMotion: false) }
+                destroying = true
+                host = nil
+            }
+            destroying = false
+            XCTAssertNil(releasedHost, "Exercise NSHostingView.deinit, including its autorelease pool")
+            XCTAssertEqual(synchronousPublications, 0, "Teardown may stop resources, but cannot publish into a dying graph")
+            await drainMainQueue()
+            XCTAssertFalse(playback.isPlaying)
+            XCTAssertEqual(playback.values, [1, 1, 1])
+            withExtendedLifetime(observation) {}
+        }
+    }
+
+    func testPlayingRemovalStopsLinkImmediatelyAndOldCallbacksCannotAffectRemount() async throws {
+        var now = 10.0
+        let playback = SettingsPreviewPlayback(time: { now })
+        let fixture = NativeRenderingFixture(AnyView(SettingsSideTabPreview(language: "en", text: { $0 }, playback: playback)),
+                                             size: CGSize(width: 500, height: 210))
+        defer { fixture.close() }
+        await drainMainQueue()
+        let oldClock = try XCTUnwrap(fixture.descendants(SettingsSideTabPreview.PreviewClock.ClockView.self).first)
+        playback.play(reduceMotion: false)
+        let oldLink = try XCTUnwrap(oldClock.link)
+        now += 0.045
+        oldClock.tick(oldLink)
+        XCTAssertTrue(playback.values.contains { $0 > 0 && $0 < 1 })
+        var removing = true
+        var publications = 0
+        let observation = playback.objectWillChange.sink { if removing { publications += 1 } }
+        fixture.host.rootView = AnyView(Text("Other module"))
+        fixture.host.layoutSubtreeIfNeeded()
+        XCTAssertNil(oldClock.link, "Resource cleanup cannot wait for the deferred publication")
+        let stopped = playback.values
+        now += 0.1
+        oldClock.tick(oldLink)
+        playback.sample() // Even a previously queued sampler must be inert.
+        XCTAssertEqual(playback.values, stopped)
+        XCTAssertEqual(publications, 0)
+        removing = false
+
+        fixture.host.rootView = AnyView(SettingsSideTabPreview(language: "en", text: { $0 }, playback: playback))
+        fixture.host.layoutSubtreeIfNeeded()
+        let newClock = try XCTUnwrap(fixture.descendants(SettingsSideTabPreview.PreviewClock.ClockView.self).first)
+        XCTAssertFalse(oldClock === newClock)
+        playback.play(reduceMotion: false)
+        let restarted = playback.values
+        // A late dismantle of the old representable must not detach the new clock.
+        SettingsSideTabPreview.PreviewClock.dismantleNSView(oldClock, coordinator: ())
+        oldClock.tick(oldLink)
+        await drainMainQueue()
+        XCTAssertTrue(playback.isPlaying, "An old deferred reset cannot erase new playback")
+        XCTAssertEqual(playback.values, restarted)
+        XCTAssertNotNil(newClock.link)
+        playback.play(reduceMotion: true)
+        XCTAssertFalse(playback.isPlaying)
+        XCTAssertEqual(playback.values, [1, 1, 1])
+        XCTAssertNil(newClock.link)
+        withExtendedLifetime(observation) {}
     }
 }

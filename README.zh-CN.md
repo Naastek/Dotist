@@ -96,7 +96,7 @@ Dotist 内置可选的本地 MCP 服务，默认关闭，不包含 AI 模型。
 
 ## 开发
 
-当前 macOS 应用使用 SwiftUI、AppKit、GRDB/SQLite 和官方 Swift MCP SDK 构建，不链接 Rust、Tauri 或网页运行时。
+当前 macOS 应用使用 SwiftUI、AppKit、GRDB/SQLite 和官方 Swift MCP SDK 构建，不链接 Rust、Tauri 或网页运行时。 已移除退役的 React/Tauri/Rust 客户端及其构建工具。历史设计预览保留在 `design-system/`，共用 CSS 位于 `design-system/previews/styles/`。
 
 要求：macOS 26 或更高版本、Apple Silicon Mac、支持 macOS 26 或更新 SDK 的 Xcode、Swift 与 Python 3。
 

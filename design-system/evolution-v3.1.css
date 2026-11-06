@@ -1,4 +1,4 @@
-/* Dotist 设计系统 v3.1 · 演进补丁（叠加在 src/app.css、src/views.css 之后）
+/* Dotist 设计系统 v3.1 · 演进补丁（叠加在 previews/styles/app.css、previews/styles/views.css 之后）
    两件事：① 去黄 —— 全部改为不偏暖的中性色；② 选中 / 悬停不再出现圆角色块 —— 统一用“颜色 + 2px 竹青细线”。 */
 
 /* ========== ① 去黄：中性色 ========== */

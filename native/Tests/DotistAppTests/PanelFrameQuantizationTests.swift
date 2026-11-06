@@ -21,9 +21,14 @@ final class PanelFrameQuantizationTests: XCTestCase {
         return (PanelMotion(model: model, panel: panel, size: frame.size, title: { "Synthetic inset regression" },
                             environment: input.environment), panel, input)
     }
+    private func surfaceBounds(frame: NSRect, inset: EdgeInsets) -> NSRect {
+        NSRect(x: frame.minX + inset.leading, y: frame.minY + inset.bottom,
+               width: frame.width - inset.leading - inset.trailing, height: frame.height - inset.top - inset.bottom)
+    }
+
     private func productionSurfaceBounds(_ motion: PanelMotion, transparent: Bool = true, contrast: Bool = false) -> NSRect {
-        GTInsetAB.bounds(frame: motion.panel.frame, inset: FloatingSurface.opticalInsets(compact: motion.bubble,
-            reduceTransparency: !transparent, increasedContrast: contrast, diagnostic: motion.surfaceInsets))
+        surfaceBounds(frame: motion.panel.frame, inset: FloatingSurface.opticalInsets(compact: motion.bubble,
+            reduceTransparency: !transparent, increasedContrast: contrast, frameInsets: motion.surfaceInsets))
     }
 
     func testProductionInsetHandoffDoesNotJumpBeforeFirstWindowFrame() throws {
@@ -73,7 +78,7 @@ final class PanelFrameQuantizationTests: XCTestCase {
                 let target = try XCTUnwrap(requested)
                 XCTAssertEqual(panel.frame, start); XCTAssertEqual(productionSurfaceBounds(motion), before)
                 let endInsets = FloatingSurface.opticalInsets(compact: motion.bubble, reduceTransparency: false, increasedContrast: false)
-                let end = GTInsetAB.bounds(frame: target, inset: endInsets), right = motion.bubbleOnRight
+                let end = surfaceBounds(frame: target, inset: endInsets), right = motion.bubbleOnRight
                 let fromX = right ? before.maxX : before.minX, toX = right ? end.maxX : end.minX
                 var lastX = fromX, lastY = before.maxY
                 let driver = PanelFrameAnimation(window: panel, target: target, duration: 0.34) {}
@@ -155,63 +160,6 @@ final class PanelFrameQuantizationTests: XCTestCase {
         }
     }
 
-    func testInsetABMathematicalHandoffWithoutShowingWindow() throws {
-        _ = NSApplication.shared
-        let directory = outputRoot.appendingPathComponent("inset-math-\(UUID().uuidString)")
-        let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
-        let model = try AppModel(store: store)
-        let target = NSRect(x: 1219, y: 352, width: 454, height: 568)
-        let hover = NSRect(x: 1425, y: 874, width: 250, height: 48)
-        let ball = NSRect(x: 1627, y: 874, width: 48, height: 48)
-        let panel = DotistPanel(contentRect: target, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.isReleasedWhenClosed = false
-        let input = PanelMotionTestEnvironment(area: NSRect(x: 0, y: 0, width: 1728, height: 1117))
-        let motion = PanelMotion(model: model, panel: panel, size: target.size, title: { "Synthetic math" }, environment: input.environment)
-        defer { motion.stop(); panel.close() }
-        var rows: [[String: Any]] = []
-        func sample(_ phase: String) -> (NSRect, NSRect) {
-            let a = GTInsetAB.bounds(frame: panel.frame, inset: GTInsetAB.insets(frame: panel.frame, target: target,
-                compact: motion.bubble, transitioning: motion.animationInProgress, continuous: false))
-            let b = GTInsetAB.bounds(frame: panel.frame, inset: GTInsetAB.insets(frame: panel.frame, target: target,
-                compact: motion.bubble, transitioning: motion.animationInProgress, continuous: true))
-            rows.append(["phase": phase, "windowNS": raw(panel.frame), "bubble": motion.bubble,
-                         "baselineLayoutCG": cg(raw(a), primaryTop: 1117), "continuousLayoutCG": cg(raw(b), primaryTop: 1117)])
-            return (a, b)
-        }
-        motion.toggleBubble(in: input.area, animated: false)
-        XCTAssertEqual(panel.frame, ball); _ = sample("old-ball")
-        motion.setHover(true, in: input.area); panel.setFrame(hover, display: false); motion.finishHover(true)
-        let before = sample("stable-hover")
-        XCTAssertEqual(before.0.maxY, 920); XCTAssertEqual(before.0.maxX, 1673)
-        motion.toggleBubble(in: input.area)
-        XCTAssertFalse(motion.bubble); XCTAssertTrue(motion.animationInProgress); XCTAssertEqual(panel.frame, hover)
-        let handoff = sample("bubble-false-frame-not-moved")
-        XCTAssertEqual(handoff.0.maxY - before.0.maxY, 2); XCTAssertEqual(handoff.0.maxX - before.0.maxX, 2)
-        XCTAssertEqual(handoff.1.maxY, before.0.maxY); XCTAssertEqual(handoff.1.maxX, before.0.maxX)
-        let animation = PanelFrameAnimation(window: panel, target: target, duration: 0.34) {}
-        var first = true
-        for i in 1...1000 {
-            animation.currentProgress = Float(i) / 1000
-            if panel.frame != hover && first {
-                _ = sample("first-changed-frame-in-1000-progress-grid"); first = false
-            }
-            let inset = GTInsetAB.insets(frame: panel.frame, target: target, compact: false, transitioning: true, continuous: true)
-            let bounds = GTInsetAB.bounds(frame: panel.frame, inset: inset)
-            XCTAssertEqual(bounds.maxY, 920); XCTAssertEqual(bounds.maxX, 1673)
-        }
-        try input.completeFrameAnimation(for: panel)
-        let end = sample("expanded-end")
-        XCTAssertEqual(panel.frame, target); XCTAssertEqual(end.0, target); XCTAssertEqual(end.1, target)
-        XCTAssertFalse(first); XCTAssertFalse(panel.isVisible)
-        let override = EdgeInsets(top: 2, leading: 2, bottom: 2, trailing: 2)
-        XCTAssertEqual(FloatingSurface.opticalInsets(compact: false, reduceTransparency: true, increasedContrast: false, diagnostic: override).top, 0)
-        XCTAssertEqual(FloatingSurface.opticalInsets(compact: true, reduceTransparency: false, increasedContrast: true, diagnostic: override).top, 0)
-        try JSONSerialization.data(withJSONObject: ["scope": "mathematical padded layout bounds; no optical pixels", "baselineOutwardHandoff": 2,
-            "continuousAnchorDelta": 0, "rows": rows], options: [.prettyPrinted, .sortedKeys])
-            .write(to: directory.appendingPathComponent("math.json"))
-        print("INSET_AB_MATH=\(directory.appendingPathComponent("math.json").path)")
-    }
-
     private let axes = ["left", "right", "top", "bottom", "width", "height"]
     private var outputRoot: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -251,51 +199,6 @@ final class PanelFrameQuantizationTests: XCTestCase {
         XCTAssertEqual(found.count, 2)
         XCTAssertEqual(found.first { $0["axis"] as? String == "top" }?["delta"] as? Double, -1)
         XCTAssertEqual(found.first { $0["axis"] as? String == "right" }?["delta"] as? Double, 1)
-    }
-
-    func testSetFrameFractionalPointProbe() throws {
-        _ = NSApplication.shared
-        let panel = NSPanel(contentRect: NSRect(x: 217, y: 802, width: 278, height: 119),
-                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.isReleasedWhenClosed = false
-        defer { panel.close() }
-        var rows: [[String: Any]] = []
-        for offset in [0.0, 0.25, 0.5, 0.75, 1.0] {
-            let requested = NSRect(x: 217 + offset, y: 802 + offset, width: 278 + offset, height: 119 + offset)
-            panel.setFrame(requested, display: false)
-            rows.append(["requested": raw(requested), "actual": raw(panel.frame)])
-        }
-        print("FRAME_GRID_PROBE=\(String(decoding: try JSONSerialization.data(withJSONObject: rows, options: .sortedKeys), as: UTF8.self))")
-        XCTAssertFalse(panel.isVisible, "The probe must never order a window")
-    }
-
-    func testOptInRecordedJSONReplay() throws {
-        guard ProcessInfo.processInfo.environment["DOTIST_FRAME_QUANTIZATION_REPLAY"] == "1" else {
-            throw XCTSkip("Local diagnostic JSON replay is opt-in; normal tests contain their own samples")
-        }
-        var evidence: [[String: Any]] = []
-        for (name, expected) in [("mouseup-stable-geometry-6C1CF93B-5EA0-48F6-BB80-7A7F09E7822C.json", 2),
-                                 ("mouseup-during-hover-geometry-CD4FA4C3-100A-4FB4-AB9F-9A50F0032A0B.json", 1)] {
-            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: outputRoot.appendingPathComponent(name))) as? [String: Any])
-            let all = try XCTUnwrap(object["rows"] as? [[String: Any]])
-            let up = try XCTUnwrap(all.firstIndex { $0["event"] as? String == "CGEventType(rawValue: 2)" })
-            let rows = Array(all[up...])
-            let rects = try rows.map { row -> [Double] in
-                let f = try XCTUnwrap(row["frame"] as? [String: Double])
-                return try ["X", "Y", "Width", "Height"].map { try XCTUnwrap(f[$0]) }
-            }
-            let found = reversals(rects, start: [1425, 195, 250, 48], target: [1219, 197, 454, 568])
-            let top = found.filter { $0["axis"] as? String == "top" }
-            let right = found.filter { $0["axis"] as? String == "right" }
-            XCTAssertEqual(top.count, expected)
-            XCTAssertTrue(top.allSatisfy { $0["delta"] as? Double == -1 })
-            XCTAssertEqual(right.count, 1)
-            XCTAssertEqual(right.first?["delta"] as? Double, 1)
-            XCTAssertEqual(found.count, expected + 1)
-            evidence.append(["source": name, "reverseSteps": found, "hasNSRaw": false,
-                             "pairs": found.map { ["before": rows[$0["beforeIndex"] as! Int], "after": rows[$0["afterIndex"] as! Int]] }])
-        }
-        try write(["status": "detector-verified-against-recorded-CG-only", "evidence": evidence], name: "replay")
     }
 
     func testSeparateOriginAndHeightRoundingCanReverseTopDespiteMonotonicRawEdges() {
@@ -368,30 +271,21 @@ final class PanelFrameQuantizationTests: XCTestCase {
         XCTAssertFalse(cancelled.isAnimating)
     }
 
-    func testNativeBaselineDiagnostic() async throws {
-        guard ["baseline", "both"].contains(ProcessInfo.processInfo.environment["DOTIST_FRAME_QUANTIZATION_MODE"] ?? "") else {
-            throw XCTSkip("Original AppKit rect animator is a diagnostic; select baseline or both")
-        }
-        try await nativeFrames(baseline: true)
-    }
-
     func testNativeProductionEdgesAreMonotonic() async throws {
-        guard ProcessInfo.processInfo.environment["DOTIST_FRAME_QUANTIZATION_MODE"] != "baseline" else { throw XCTSkip("Baseline only") }
-        try await nativeFrames(baseline: false)
+        try await nativeFrames()
     }
 
-    private func nativeFrames(baseline: Bool) async throws {
+    private func nativeFrames() async throws {
         guard ProcessInfo.processInfo.environment["DOTIST_FRAME_QUANTIZATION_NATIVE"] == "1" else {
             throw XCTSkip("Opt in on host with DOTIST_FRAME_QUANTIZATION_NATIVE=1; geometry only")
         }
-        let mode = baseline ? "baseline" : "production"
-        var report: [String: Any] = ["status": "preflight", "mode": mode, "duration": 0.34, "timing": "easeInEaseOut",
+        var report: [String: Any] = ["status": "preflight", "mode": "production", "duration": 0.34, "timing": "easeInEaseOut",
             "os": ProcessInfo.processInfo.operatingSystemVersionString,
             "originalCGStart": [1425, 195, 250, 48], "originalCGTarget": [1219, 197, 454, 568],
             "originalPrimaryHeight": 1117, "originalScale": 2,
             "sampling": "2ms requested sleep; sequential NS-before/CG/NS-after reads; not compositor presentation timestamps",
             "interpretation": "CG bounds reversals alone do not prove visible jitter or AppKit rounding causality"]
-        defer { do { try write(report, name: "\(mode)-native") } catch { XCTFail("Cannot write geometry evidence: \(error)") } }
+        defer { do { try write(report, name: "production-native") } catch { XCTFail("Cannot write geometry evidence: \(error)") } }
         _ = NSApplication.shared
         report["appIsRunning"] = NSApp.isRunning
         guard let screen = NSScreen.screens.first else {
@@ -461,18 +355,10 @@ final class PanelFrameQuantizationTests: XCTestCase {
                 completed = true; completionAt = ProcessInfo.processInfo.systemUptime - began
             }
             defer { animation.cancel() }
-            if baseline {
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.34
-                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                    panel.animator().setFrame(target, display: true)
-                } completionHandler: { DispatchQueue.main.async {
-                    completed = true; completionAt = ProcessInfo.processInfo.systemUptime - began
-                } }
-            } else { animation.startMotion() }
+            animation.startMotion()
             sampledLink = animation.displayLink
             let preferred = sampledLink?.preferredFrameRateRange
-            if !baseline { XCTAssertNotNil(sampledLink, "Visible window must use its contentView display link") }
+            XCTAssertNotNil(sampledLink, "Visible window must use its contentView display link")
             while ProcessInfo.processInfo.systemUptime - began < 0.65 {
                 try await Task.sleep(for: .milliseconds(2))
                 try sample()
@@ -484,12 +370,12 @@ final class PanelFrameQuantizationTests: XCTestCase {
             }
             let valid = completed && panel.frame == target && cgRects.first! == startCG && cgRects.last! == targetCG
                 && Set(cgRects.map { String(describing: $0) }).count > 5 && panel.backingScaleFactor == 2
-                && (baseline || (preferred != nil && !animation.isAnimating && animation.displayLink == nil))
+                && preferred != nil && !animation.isAnimating && animation.displayLink == nil
             trials.append(["trial": trial, "rows": rows, "cgReversals": cgReverse, "nsReversals": nsReverse,
-                           "cgReversalRawPairs": pairs, "completionObserved": completed, "validBaseline": valid,
+                           "cgReversalRawPairs": pairs, "completionObserved": completed, "validTrial": valid,
                            "completionAt": completionAt.map { $0 as Any } ?? NSNull(),
                            "distinctCGFrames": Set(cgRects.map { String(describing: $0) }).count,
-                           "driver": baseline ? "appkit-rect-animator" : (preferred == nil ? "unexpected-fallback" : "content-view-display-link"),
+                           "driver": preferred == nil ? "unexpected-fallback" : "content-view-display-link",
                            "preferredFrameRateRange": preferred.map { [$0.minimum, $0.maximum, $0.preferred] as Any } ?? NSNull(),
                            "driverReleasedAfterCompletion": !animation.isAnimating && animation.displayLink == nil])
             report["trials"] = trials
@@ -500,17 +386,15 @@ final class PanelFrameQuantizationTests: XCTestCase {
             XCTAssertEqual(cgRects.first!, startCG)
             XCTAssertEqual(cgRects.last!, targetCG)
             XCTAssertGreaterThan(Set(cgRects.map { String(describing: $0) }).count, 5, "Require intermediate native frames; endpoint-only is inconclusive")
-            if !baseline {
-                XCTAssertNil(animation.displayLink)
-                XCTAssertFalse(animation.isAnimating)
-                XCTAssertTrue(nsReverse.isEmpty, "NS raw edge reversal: \(nsReverse)")
-                XCTAssertTrue(cgReverse.isEmpty, "CG edge reversal; raw before/after pairs are in QUANTIZATION_JSON: \(cgReverse)")
-            }
+            XCTAssertNil(animation.displayLink)
+            XCTAssertFalse(animation.isAnimating)
+            XCTAssertTrue(nsReverse.isEmpty, "NS raw edge reversal: \(nsReverse)")
+            XCTAssertTrue(cgReverse.isEmpty, "CG edge reversal; raw before/after pairs are in QUANTIZATION_JSON: \(cgReverse)")
         }
-        report["status"] = trials.contains { $0["validBaseline"] as? Bool != true } ? "inconclusive-invalid-baseline"
+        report["status"] = trials.contains { $0["validTrial"] as? Bool != true } ? "inconclusive-invalid-trial"
             : (trials.contains { !($0["cgReversals"] as! [[String: Any]]).isEmpty || !($0["nsReversals"] as! [[String: Any]]).isEmpty }
                ? "observed-reversal" : "observed-monotonic")
-        if !baseline { report["driverCleanup"] = try await verifyDisplayDriverCleanup(panel: panel, target: start) }
+        report["driverCleanup"] = try await verifyDisplayDriverCleanup(panel: panel, target: start)
     }
 
     private func verifyDisplayDriverCleanup(panel: NSPanel, target: NSRect) async throws -> [String: Bool] {

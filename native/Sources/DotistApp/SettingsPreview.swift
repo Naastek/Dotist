@@ -11,6 +11,9 @@ final class SettingsPreviewPlayback: ObservableObject {
     @Published private(set) var isPlaying = false
     private var entrance = SideTabEntrance()
     private let time: () -> TimeInterval
+    private var samplingEnabled = false
+    private var resetGeneration = UUID()
+    private var clockOwner: UUID?
     var startClock: (() -> Void)?
     var stopClock: (() -> Void)?
 
@@ -22,19 +25,52 @@ final class SettingsPreviewPlayback: ObservableObject {
         entrance = SideTabEntrance()
         entrance.update(ids: Self.ids, visible: true, at: started, reduceMotion: false)
         values = entrance.values(ids: Self.ids, at: started)
+        samplingEnabled = true
         isPlaying = true
         startClock?()
     }
     func sample() {
-        guard isPlaying else { return }
+        guard samplingEnabled, isPlaying else { return }
         let now = time()
         values = entrance.values(ids: Self.ids, at: now)
         if values.allSatisfy({ $0 == 1 }) { stop() }
     }
     func stop() {
+        resetGeneration = UUID()
+        samplingEnabled = false
         stopClock?()
+        resetPresentation()
+    }
+    private func resetPresentation() {
         isPlaying = false
         values = Array(repeating: 1, count: Self.ids.count)
+    }
+
+    /// Graph destruction must release native resources immediately without
+    /// sending objectWillChange back into the graph being invalidated.
+    func suspend() {
+        samplingEnabled = false
+        stopClock?()
+        let request = UUID()
+        resetGeneration = request
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.resetGeneration == request else { return }
+            self.resetPresentation()
+        }
+    }
+    func attachClock(owner: UUID, start: @escaping () -> Void, stop: @escaping () -> Void) {
+        if clockOwner != nil { suspend() }
+        clockOwner = owner
+        startClock = start; stopClock = stop
+    }
+    func detachClock(owner: UUID) {
+        guard clockOwner == owner else { return }
+        suspend()
+        clockOwner = nil
+        startClock = nil; stopClock = nil
+    }
+    func suspendClock(owner: UUID) {
+        if clockOwner == owner { suspend() }
     }
 }
 
@@ -87,34 +123,46 @@ struct SettingsSideTabPreview: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
         }.padding(14)
             .background(PreviewClock(playback: playback))
-            .background(SettingsWindowLifetime { playback.stop() })
+            .background(SettingsWindowLifetime { playback.suspend() })
             .onChange(of: reduceMotion) { _, _ in playback.stop() }
-            .onDisappear { playback.stop() }
+            .onDisappear { playback.suspend() }
     }
 
     /// Same native display-link/CACurrentMediaTime domain as SideTabsController.
     /// There is one sampler, no interpolating SwiftUI animation or sleeping task.
-    private struct PreviewClock: NSViewRepresentable {
+    struct PreviewClock: NSViewRepresentable {
         let playback: SettingsPreviewPlayback
         func makeNSView(context: Context) -> ClockView { ClockView(playback: playback) }
         func updateNSView(_ view: ClockView, context: Context) {}
-        static func dismantleNSView(_ view: ClockView, coordinator: ()) { view.playback.stop() }
+        static func dismantleNSView(_ view: ClockView, coordinator: ()) {
+            view.invalidate()
+            view.playback.detachClock(owner: view.owner)
+        }
         final class ClockView: NSView {
             let playback: SettingsPreviewPlayback
-            private var link: CADisplayLink?
+            let owner = UUID()
+            private(set) var link: CADisplayLink?
             init(playback: SettingsPreviewPlayback) {
                 self.playback = playback; super.init(frame: .zero)
-                playback.startClock = { [weak self] in self?.start() }
-                playback.stopClock = { [weak self] in self?.link?.invalidate(); self?.link = nil }
+                playback.attachClock(owner: owner, start: { [weak self] in self?.start() },
+                                     stop: { [weak self] in self?.invalidate() })
             }
             required init?(coder: NSCoder) { fatalError() }
             override func hitTest(_ point: NSPoint) -> NSView? { nil }
+            override func viewDidMoveToWindow() {
+                super.viewDidMoveToWindow()
+                if window == nil { playback.suspendClock(owner: owner) }
+            }
+            func invalidate() { link?.invalidate(); link = nil }
             private func start() {
-                link?.invalidate()
+                invalidate()
                 link = displayLink(target: self, selector: #selector(tick(_:)))
                 link?.add(to: .main, forMode: .common)
             }
-            @objc private func tick(_ link: CADisplayLink) { playback.sample() }
+            @objc func tick(_ source: CADisplayLink) {
+                guard source === link else { return }
+                playback.sample()
+            }
         }
     }
 }

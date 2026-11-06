@@ -1654,9 +1654,9 @@ struct DraggableFilterButton: View {
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).focused($focused).focusEffectDisabled().onHover { hovering = $0 }
             .accessibilityAddTraits(selected ? .isSelected : [])
-            .onAppear { motion.setSelected(selected, reduceMotion: true) }
-            .onChange(of: selected) { _, value in motion.setSelected(value, reduceMotion: reduceMotion) }
-            .onChange(of: reduceMotion) { _, _ in motion.setSelected(selected, reduceMotion: reduceMotion) }
+            .onAppear { motion.appear(selected: selected) }
+            .onChange(of: selected) { _, value in motion.setSelected(value, reduceMotion: DateFilterSelectionMotion.environmentReduceMotion(reduceMotion)) }
+            .onChange(of: reduceMotion) { _, _ in motion.setSelected(selected, reduceMotion: DateFilterSelectionMotion.environmentReduceMotion(reduceMotion)) }
             .onDisappear { motion.stop() }
             .highPriorityGesture(DragGesture(minimumDistance: 4)
                 .onChanged { value in

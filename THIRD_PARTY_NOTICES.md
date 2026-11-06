@@ -55,5 +55,6 @@ redistributed as part of this repository.
 
 ## Legacy source
 
-The retained web, Rust, and Tauri source is not part of the current native
-build or release and its dependencies are not included in this notice.
+The retired web, Rust, and Tauri clients have been removed. Historical design
+previews and documentation remain; their former runtime dependencies are not
+part of the current native build or release.

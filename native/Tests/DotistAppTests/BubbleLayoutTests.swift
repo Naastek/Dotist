@@ -50,13 +50,14 @@ final class BubbleLayoutTests: XCTestCase {
         let shape = FloatingPanelShape(compact: true, transitioning: false, onRight: onRight, reveal: reveal)
         let content = FloatingBubble(model: model, motion: motion, details: BubbleContent(model: model),
             groupName: nil, contextMenu: { _, _ in }, width: width, reveal: reveal)
+            // Production clips its content before adding the native glass shell.
+            .clipShape(shape)
             .background {
                 if surface {
                     FloatingSurface(opacity: 73, frost: 22, compact: true, transitioning: false,
                         onRight: onRight, size: size, reveal: reveal, color: .orange)
                 }
             }
-            .clipShape(shape)
             .environment(\.colorScheme, scheme)
             .environment(\.displayScale, scale)
         let host = DotistHostingView(rootView: content)
@@ -87,6 +88,7 @@ final class BubbleLayoutTests: XCTestCase {
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
         bitmap.size = host.bounds.size
+        bitmap.bitmapData?.initialize(repeating: 0, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
         host.cacheDisplay(in: host.bounds, to: bitmap)
         return bitmap
     }
@@ -240,6 +242,7 @@ final class BubbleLayoutTests: XCTestCase {
                         maskRenderer.scale = scale
                         let mask = NSBitmapImageRep(cgImage: try XCTUnwrap(maskRenderer.cgImage))
                         var exteriorAlpha: CGFloat = 0
+                        var exteriorPixels: [String] = []
                         for y in 0..<composite.pixelsHigh {
                             for x in 0..<composite.pixelsWide {
                                 let boundary = (-1...1).contains { dy in (-1...1).contains { dx in
@@ -247,8 +250,16 @@ final class BubbleLayoutTests: XCTestCase {
                                     return mx >= 0 && my >= 0 && mx < mask.pixelsWide && my < mask.pixelsHigh
                                         && (mask.colorAt(x: mx, y: my)?.alphaComponent ?? 0) > 0
                                 } }
-                                if !boundary { exteriorAlpha = max(exteriorAlpha, composite.colorAt(x: x, y: y)?.alphaComponent ?? 0) }
+                                if !boundary {
+                                    let alpha = composite.colorAt(x: x, y: y)?.alphaComponent ?? 0
+                                    exteriorAlpha = max(exteriorAlpha, alpha)
+                                    if alpha > 0 && exteriorPixels.count < 32 { exteriorPixels.append("\(x),\(y):\(alpha)") }
+                                }
                             }
+                        }
+                        if exteriorAlpha != 0 {
+                            print("Bubble exterior pixels \(label): \(exteriorPixels)")
+                            saveFailureDiagnostics(composite, motion: motion, scale: scale, label: label + "-exterior", output: output, expectedOnRight: onRight)
                         }
                         XCTAssertEqual(exteriorAlpha, 0, "No offset plate outside the real window-backed capsule: \(label)")
                         XCTAssertFalse(motion.panel.hasShadow, "Compact panels have no window shadow")

@@ -1,7 +1,0 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "main-window",
-  "description": "Allow the Dotist window to move and hide itself.",
-  "windows": ["main", "settings", "quick"],
-  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-start-resize-dragging", "core:window:allow-hide", "core:event:default"]
-}
