@@ -96,7 +96,7 @@ Available tools include `list_tasks`, `get_task`, `search_tasks`, `add_tasks`, `
 
 ## Development
 
-The current macOS app is built with SwiftUI, AppKit, GRDB/SQLite, and the official Swift MCP SDK. It does not link Rust, Tauri, or a web runtime. The retired React/Tauri/Rust clients and their build tools have been removed. Historical design previews remain in `design-system/`; their shared CSS is in `design-system/previews/styles/`.
+The current macOS app is built with SwiftUI, AppKit, GRDB/SQLite, and the official Swift MCP SDK. It does not link Rust, Tauri, or a web runtime. The retired React/Tauri/Rust clients and their build tools have been removed. Current design decisions are documented in `docs/ui-decisions.md`.
 
 Requirements: macOS 26 or later, an Apple Silicon Mac, Xcode with a macOS 26+ SDK, Swift, and Python 3.
 
