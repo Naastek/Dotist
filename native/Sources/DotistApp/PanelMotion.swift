@@ -276,8 +276,9 @@ final class PanelMotion: ObservableObject {
         self.title = title
         self.bubbleContent = bubbleContent
         self.rememberFrame = rememberFrame
-        panel.hasShadow = true
-        // Panel state owns the window shadow even when glass debugging is enabled.
+        // Match the bubble throughout the task panel lifecycle; native glass
+        // keeps its own optical edge without an extra AppKit window shadow.
+        panel.hasShadow = false
         closeObservation = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stop() }
         }
@@ -356,7 +357,6 @@ final class PanelMotion: ObservableObject {
             panel.minSize = NSSize(width: 48, height: 48)
             panel.styleMask.remove(.resizable)
             bubble = true
-            panel.hasShadow = false
         } else {
             let width = min(expandedSize.width, area.width)
             let height = min(expandedSize.height, area.height)
@@ -368,7 +368,6 @@ final class PanelMotion: ObservableObject {
             transitionSize = target.size
             hovering = false
             bubble = false
-            panel.hasShadow = true
         }
         refreshShadow()
         // Hidden windows have no visible movement to animate, and AppKit can

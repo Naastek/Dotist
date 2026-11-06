@@ -95,10 +95,12 @@ final class PanelMotionLifecycleTests: XCTestCase {
         let motion = PanelMotion(model: model, panel: panel, size: panel.frame.size, title: { "" },
                                  environment: PanelMotionTestEnvironment().environment)
         motion.refreshShadow()
+        XCTAssertFalse(panel.hasShadow)
         XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
         panel.close()
         XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
         motion.refreshShadow()
+        XCTAssertFalse(panel.hasShadow)
         XCTAssertTrue(panel.childWindows?.isEmpty ?? true, "A closed panel must not create a shadow window")
         motion.stop()
     }
@@ -217,6 +219,7 @@ final class PanelMotionLifecycleTests: XCTestCase {
                     motion = nil
                     currentPanel = nil
                 }
+                if let currentPanel { XCTAssertFalse(currentPanel.hasShadow, "Mixed transition \(step)") }
             }
             if step % 50 == 0 { try await Task.sleep(for: .milliseconds(1)) }
         }
@@ -408,6 +411,7 @@ final class PanelMotionLifecycleTests: XCTestCase {
         let frame = panel.frame
         motion?.stop()
         try input.completeFrameAnimation(for: panel)
+        XCTAssertFalse(panel.hasShadow)
         XCTAssertEqual(panel.frame, frame, "A late completion must not resize a stopped window")
         XCTAssertFalse(try XCTUnwrap(motion).animationInProgress)
 
@@ -419,6 +423,7 @@ final class PanelMotionLifecycleTests: XCTestCase {
         XCTAssertNil(released.value, "The retained driver callback must hold its motion owner weakly")
         try input.completeFrameAnimation(for: panel)
         XCTAssertEqual(panel.frame, frame)
+        XCTAssertFalse(panel.hasShadow)
         XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
         XCTAssertEqual(input.pendingFrameAnimationCount, 0)
     }

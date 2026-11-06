@@ -91,7 +91,7 @@ final class PanelShadowTests: XCTestCase {
         panel.isReleasedWhenClosed = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false
         defer { panel.close() }
         let evidence = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".cache/integration-install/pixel-evidence/panel-shadow")
@@ -105,7 +105,7 @@ final class PanelShadowTests: XCTestCase {
         let referencePanel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 280, height: 48),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         referencePanel.isReleasedWhenClosed = false; referencePanel.isOpaque = false
-        referencePanel.backgroundColor = .clear; referencePanel.hasShadow = true
+        referencePanel.backgroundColor = .clear; referencePanel.hasShadow = false
         defer { referencePanel.close() }
         let referenceHost = DotistHostingView(rootView: AnyView(Color.clear))
         referenceHost.sizingOptions = []
@@ -207,7 +207,7 @@ final class PanelShadowTests: XCTestCase {
         let group = GroupPanelController(model: model, groupID: "work", near: frame,
             showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, didClose: { _ in })
         defer { group.close() }
-        XCTAssertTrue(try XCTUnwrap(group.window).hasShadow)
+        XCTAssertFalse(try XCTUnwrap(group.window).hasShadow)
         XCTAssertFalse(try XCTUnwrap(group.window).isOpaque)
         for size in [NSSize(width: 560, height: 112), NSSize(width: 600, height: 372)] {
             let quick = QuickPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
@@ -219,18 +219,85 @@ final class PanelShadowTests: XCTestCase {
         for _ in 0..<3 {
             motion.toggleBubble(in: area, animated: false)
             motion.setHover(true, in: area)
-            XCTAssertEqual(panel.hasShadow, !motion.bubble)
+            XCTAssertFalse(panel.hasShadow)
             motion.finishHover(true)
-            XCTAssertEqual(panel.hasShadow, !motion.bubble)
+            XCTAssertFalse(panel.hasShadow)
             panel.setFrameOrigin(NSPoint(x: 20, y: 20))
             _ = motion.finishBubbleMove()
             motion.setHover(false, in: area)
-            XCTAssertEqual(panel.hasShadow, !motion.bubble)
+            XCTAssertFalse(panel.hasShadow)
             motion.finishHover(false)
             motion.refreshShadow()
-            XCTAssertEqual(panel.hasShadow, !motion.bubble)
+            XCTAssertFalse(panel.hasShadow)
             XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
             XCTAssertTrue(group.window?.childWindows?.isEmpty ?? true)
+        }
+    }
+
+    func testMainAndGroupTaskPanelCreationDisableWindowShadowBeforeMotionIsInstalled() throws {
+        // Launching the app delegate opens windows, reads real data and installs
+        // global shortcuts. Check only its task-panel construction assignments.
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        for file in ["DotistApp.swift", "TaskPanel.swift"] {
+            let source = try String(contentsOf: root.appendingPathComponent("Sources/DotistApp/" + file), encoding: .utf8)
+            let creation = try XCTUnwrap(source.range(of: "panel = DotistPanel("))
+            let motion = try XCTUnwrap(source.range(of: "motion = PanelMotion(", range: creation.upperBound..<source.endIndex))
+            let setup = source[creation.lowerBound..<motion.lowerBound]
+            XCTAssertTrue(setup.contains("panel.hasShadow = false"), file)
+            XCTAssertFalse(setup.contains("panel.hasShadow = true"), file)
+        }
+    }
+
+    func testGroupPanelShadowStaysDisabledThroughMotionHoverCancellationAndReduceMotion() throws {
+        let model = try model()
+        for reduceMotion in [false, true] {
+            let input = PanelMotionTestEnvironment()
+            let group = GroupPanelController(model: model, groupID: "work",
+                near: NSRect(x: 100, y: 100, width: 364, height: 620),
+                showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, didClose: { _ in })
+            let panel = try XCTUnwrap(group.window as? DotistPanel)
+            let motion = try XCTUnwrap(group.motion)
+            defer { group.close() }
+            motion.environment = input.environment
+            if reduceMotion { motion.environment.frameAnimationDuration = { _ in 0 } }
+            func check(_ phase: String) {
+                XCTAssertFalse(panel.hasShadow, "reduceMotion=\(reduceMotion), \(phase)")
+                XCTAssertFalse(panel.isVisible)
+                XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
+            }
+            check("initial expanded")
+            for compact in [true, false] {
+                motion.toggleBubble(in: input.area)
+                check("frame start")
+                XCTAssertEqual(try input.frameAnimationDuration(for: panel), reduceMotion ? 0 : (compact ? 0.28 : 0.34))
+                for progress in [CGFloat(0.25), 0.5, 0.75] {
+                    try input.sampleFrameAnimation(for: panel, progress: progress)
+                    check("frame middle")
+                }
+                try input.completeFrameAnimation(for: panel)
+                check("frame end")
+                if compact {
+                    for hover in [true, false] {
+                        motion.setHover(hover, in: input.area)
+                        check("hover start/middle")
+                        XCTAssertTrue(motion.hoverAnimating)
+                        motion.finishHover(hover)
+                        check("hover end")
+                    }
+                }
+            }
+            // Cancel expansion after a genuine intermediate-size sample.
+            motion.toggleBubble(in: input.area, animated: false)
+            motion.toggleBubble(in: input.area)
+            try input.sampleFrameAnimation(for: panel, progress: 0.5)
+            let frame = panel.frame
+            motion.stop()
+            check("cancelled expansion")
+            try input.completeFrameAnimation(for: panel)
+            motion.refreshShadow()
+            check("late completion")
+            XCTAssertEqual(panel.frame, frame)
         }
     }
 
@@ -262,7 +329,7 @@ final class PanelShadowTests: XCTestCase {
             XCTAssertEqual(panel.frame.size, compact ? NSSize(width: 48, height: 48) : frame.size)
             XCTAssertEqual(panel.styleMask.contains(.resizable), !compact)
             XCTAssertFalse(panel.isVisible)
-            XCTAssertEqual(panel.hasShadow, !compact)
+            XCTAssertFalse(panel.hasShadow)
             XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
             XCTAssertEqual(durationRequests, 0, "Do not queue native animations for hidden windows")
             XCTAssertEqual(input.pendingFrameAnimationCount, 0)
@@ -271,7 +338,7 @@ final class PanelShadowTests: XCTestCase {
         XCTAssertEqual(remembered.first?.size, frame.size)
     }
 
-    func testControlledFrameAnimationsUseTargetStateShadowAtIntermediateSizes() throws {
+    func testControlledFrameAnimationsKeepWindowShadowDisabledAtIntermediateSizes() throws {
         let model = try model()
         let input = PanelMotionTestEnvironment()
         let frame = NSRect(x: 100, y: 100, width: 364, height: 620)
@@ -279,25 +346,27 @@ final class PanelShadowTests: XCTestCase {
         panel.isReleasedWhenClosed = false
         let motion = PanelMotion(model: model, panel: panel, size: frame.size, title: { "" }, environment: input.environment)
         defer { motion.stop(); panel.close() }
+        XCTAssertFalse(panel.hasShadow)
         for compact in [true, false] {
             XCTAssertFalse(panel.isVisible)
             XCTAssertNotNil(motion.environment.animateFrame)
             motion.toggleBubble(in: input.area)
             XCTAssertTrue(motion.animationInProgress)
             XCTAssertEqual(input.pendingFrameAnimationCount, 1)
+            XCTAssertFalse(panel.hasShadow, "Animation start")
             for progress in [CGFloat(0.25), 0.5, 0.75] {
                 try input.sampleFrameAnimation(for: panel, progress: progress)
                 XCTAssertTrue(motion.animationInProgress)
-                XCTAssertEqual(panel.hasShadow, !compact)
+                XCTAssertFalse(panel.hasShadow)
                 motion.refreshShadow()
-                XCTAssertEqual(panel.hasShadow, !compact)
+                XCTAssertFalse(panel.hasShadow)
                 XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
             }
             try input.completeFrameAnimation(for: panel)
             XCTAssertFalse(motion.animationInProgress)
             XCTAssertEqual(motion.bubble, compact)
             XCTAssertEqual(panel.frame.size, compact ? NSSize(width: 48, height: 48) : frame.size)
-            XCTAssertEqual(panel.hasShadow, !compact)
+            XCTAssertFalse(panel.hasShadow)
             XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
         }
         XCTAssertEqual(input.pendingFrameAnimationCount, 0)
@@ -314,13 +383,13 @@ final class PanelShadowTests: XCTestCase {
         let motion = PanelMotion(model: model, panel: panel, size: panel.frame.size, title: { "" }, environment: input.environment)
         defer { debug.parameters = original; motion.stop(); panel.close() }
         debug.parameters.hasShadow = false
-        XCTAssertTrue(panel.hasShadow)
+        XCTAssertFalse(panel.hasShadow)
         motion.toggleBubble(in: input.area, animated: false)
         XCTAssertFalse(panel.hasShadow)
         debug.parameters.hasShadow = true
         XCTAssertFalse(panel.hasShadow)
         motion.toggleBubble(in: input.area, animated: false)
-        XCTAssertTrue(panel.hasShadow)
+        XCTAssertFalse(panel.hasShadow)
     }
 
     func testQueuedHoverToggleAndStoppedCompletionPreserveShadowPolicy() throws {
@@ -333,7 +402,7 @@ final class PanelShadowTests: XCTestCase {
         panel.isReleasedWhenClosed = false
         let motion = PanelMotion(model: model, panel: panel, size: frame.size, title: { "" }, environment: environment)
         defer { motion.stop(); panel.close() }
-        XCTAssertTrue(panel.hasShadow)
+        XCTAssertFalse(panel.hasShadow)
         motion.toggleBubble(in: input.area)
         XCTAssertFalse(panel.hasShadow)
         motion.toggleBubble(in: input.area) // ignored while the frame transition runs
@@ -346,9 +415,9 @@ final class PanelShadowTests: XCTestCase {
         XCTAssertFalse(panel.hasShadow)
         motion.finishHover(true)
         XCTAssertFalse(motion.bubble)
-        XCTAssertTrue(panel.hasShadow)
+        XCTAssertFalse(panel.hasShadow)
         try input.completeFrameAnimation(for: panel)
-        XCTAssertTrue(panel.hasShadow)
+        XCTAssertFalse(panel.hasShadow)
         motion.toggleBubble(in: input.area)
         XCTAssertFalse(panel.hasShadow)
         motion.stop()
