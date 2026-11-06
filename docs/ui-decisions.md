@@ -43,7 +43,7 @@
 
 - 窗口动画由 `PanelMotion` 持有的 `PanelFrameAnimation` 驱动：同一进度插值四条边后重建矩形，避免位置与尺寸分别量化造成顶边或右边逆向；可见窗口跟随显示刷新，保留展开 0.34 秒、折叠 0.28 秒及 easeInEaseOut，降低动态效果时同步完成。停止、关闭和释放时取消驱动，不允许晚到回调继续写窗口。
 - compact 的 2 pt 材质内缩与窗口几何共同过渡，不能在模式翻转时直接取消内缩、随后再移动窗口。`PanelSurfaceTransition` 根据实际 frame 推导 `surfaceInsets`，经同窗移动／缩放通知发布；左右锚点和屏幕夹限使用真实起终点，无独立内缩计时器。降低透明度或提高对比度仍使用零内缩实底。
-- 守护：`PanelFrameQuantizationTests.swift`、`PanelMotionLifecycleTests.swift`、`BubbleClickTransitionTests.swift`。窗口边缘与材质布局边缘的连续性分开检查；数学或原生几何通过不代表玻璃光学呈现通过。连续内缩诊断 B 获得现场“明显改善”反馈，用户已人工复现 baseline，并确认圆角外灰色矩形仅在展开动画期间出现；未观察 expansion-shadow A/B，不能声称 B 改善。统一关闭任务面板整窗阴影是用户明确要求的修复。主会话已检查 `.cache/rectangle-diagnostic/first-60fps.png` 和 `second-60fps.png`：白底、浅色分组面板的两轮连续 60 fps 展开中，未观察到原用户报告的直角灰底。计划的完整 7 轮录制在第三轮因外部窗口遮挡保护而中止，不能记为 7 轮全通过；该证据未覆盖主窗口或深色外观，也不能据此宣称所有场景的缺陷已消除。诊断测试原样归档于 `.cache/rectangle-diagnostic/archived-tests/`，原报告与视频保留，不纳入正式测试或提交。
+- 守护：`PanelFrameQuantizationTests.swift`、`PanelMotionLifecycleTests.swift`、`BubbleClickTransitionTests.swift`。窗口边缘与材质布局边缘的连续性分开检查；数学或原生几何通过不代表玻璃光学呈现通过。连续内缩诊断 B 获得现场“明显改善”反馈，用户已人工复现 baseline，并确认圆角外灰色矩形仅在展开动画期间出现；未观察 expansion-shadow A/B，不能声称 B 改善。统一关闭任务面板整窗阴影是用户明确要求的修复。历史录屏已清理，当时检查结论：白底、浅色分组面板的两轮连续 60 fps 展开中，未观察到原用户报告的直角灰底。计划的完整 7 轮录制在第三轮因外部窗口遮挡保护而中止，不能记为 7 轮全通过；该证据未覆盖主窗口或深色外观，也不能据此宣称所有场景的缺陷已消除。诊断测试与录像已删除，不纳入正式测试或提交。
 
 ## 常见回退陷阱
 
