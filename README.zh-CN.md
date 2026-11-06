@@ -35,9 +35,11 @@
 
 ## 安装与签名说明
 
-1. 前往 [GitHub Releases](https://github.com/Naastek/Dotist/releases/latest) 下载最新版本。
-2. 将 `Dotist.app` 移入 `/Applications`（应用程序目录）。
-3. 启动 Dotist，面板将默认出现在屏幕右上角。
+1. 前往 [GitHub Releases](https://github.com/Naastek/Dotist/releases/latest) 下载最新版本。若当前版本提供磁盘镜像，优先推荐下载 `Dotist-arm64.dmg`；若该版本暂未包含 DMG，可下载 `.tar.gz` 格式的应用归档。
+2. 安装应用：
+   - **DMG 镜像（推荐）**：打开磁盘镜像，将 `Dotist.app` 拖移至 `Applications`（应用程序目录）快捷方式，完成后推出磁盘镜像。
+   - **归档解压**：解压 `.tar.gz` 归档并将 `Dotist.app` 移入 `/Applications`。
+3. 启动安装好的 Dotist，面板将默认出现在屏幕右上角。
 
 > **系统要求**：搭载 Apple 芯片（M 系列）且运行 macOS 26 或更高版本的 Mac。
 
@@ -45,7 +47,7 @@
 
 - **Ad-hoc 签名**：当前打包脚本生成 Ad-hoc 签名包，不包含 Developer ID 签名或公证。
 - **首次启动被拦截**：若首次打开时被 macOS Gatekeeper 阻止，请前往 **系统设置 > 隐私与安全性**，点击 **仍要打开**。
-- **Sparkle 更新**：软件更新归档采用独立的 Sparkle 密钥进行签名，与 Apple 代码签名机制完全独立。自动检查更新默认开启，自动安装默认关闭。
+- **Sparkle 更新**：软件更新归档采用独立的 Sparkle 密钥进行签名，与 Apple 代码签名机制完全独立。构建发布流水线将继续保留 `.tar.gz` 归档与 `appcast.xml` 用于 Sparkle 更新。自动检查更新默认开启，自动安装默认关闭。
 
 > **提示**：GitHub 上的最新 Release 不一定与 `main` 分支的最新源码一致。本地候选包构建脚本不会自动发布为线上 Release。
 

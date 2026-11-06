@@ -35,9 +35,11 @@
 
 ## Installation & Code Signing
 
-1. Download the latest build from [GitHub Releases](https://github.com/Naastek/Dotist/releases/latest).
-2. Move `Dotist.app` into `/Applications`.
-3. Launch Dotist. The panel will open near the top-right corner of your screen.
+1. Download the latest build from [GitHub Releases](https://github.com/Naastek/Dotist/releases/latest). When available for a release, prefer downloading `Dotist-arm64.dmg`. If a release does not yet include a DMG, download the `.tar.gz` application archive instead.
+2. Install the application:
+   - **DMG (preferred)**: Open the disk image, drag `Dotist.app` to the `Applications` shortcut, and eject the image.
+   - **Archive fallback**: Extract the `.tar.gz` archive and move `Dotist.app` into `/Applications`.
+3. Launch the installed app. The panel will open near the top-right corner of your screen.
 
 > **Requirements**: macOS 26 or later on an Apple Silicon Mac (M-series).
 
@@ -45,7 +47,7 @@
 
 - **Ad-hoc signing**: Current packaging scripts produce ad-hoc signed bundles without Developer ID signing or notarization.
 - **First launch**: If macOS Gatekeeper blocks execution on first launch, open **System Settings > Privacy & Security** and choose **Open Anyway**.
-- **Sparkle updates**: Application update archives are signed independently with Sparkle cryptographic keys, separate from Apple code signing. Automatic update checks are enabled by default; automatic installation is off.
+- **Sparkle updates**: Application update archives are signed independently with Sparkle cryptographic keys, separate from Apple code signing. The release pipeline retains `.tar.gz` archives and the `appcast.xml` feed for Sparkle updates. Automatic update checks are enabled by default; automatic installation is off.
 
 > **Note**: The latest release on GitHub might not reflect the most recent commit on `main`. Local candidate build scripts do not automatically produce an uploaded release.
 

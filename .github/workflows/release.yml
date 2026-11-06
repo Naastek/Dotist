@@ -49,6 +49,11 @@ jobs:
         run: |
           python3 native/scripts/package-update.py "$DOTIST_RELEASE_APP" --output .cache/native-release
           python3 native/scripts/verify-update.py .cache/native-release
+      - name: Package and verify drag-to-Applications image
+        run: |
+          python3 native/scripts/test-dmg.py
+          python3 native/scripts/package-dmg.py "$DOTIST_RELEASE_APP" --output .cache/native-release
+          python3 native/scripts/verify-dmg.py .cache/native-release/Dotist-arm64.dmg --version "${{ steps.version.outputs.version }}"
       - name: Upload the complete draft and publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -57,7 +62,8 @@ jobs:
           version="$(python3 -c 'import json; print(json.load(open("native/app.json"))["version"])')"
           tag="v$version"
           gh release create "$tag" --draft --target "$GITHUB_SHA" --title "Dotist v$version" --notes-file docs/release-notes.md \
-            .cache/native-release/Dotist_darwin_aarch64.app.tar.gz .cache/native-release/appcast.xml
+            .cache/native-release/Dotist_darwin_aarch64.app.tar.gz .cache/native-release/appcast.xml \
+            .cache/native-release/Dotist-arm64.dmg .cache/native-release/Dotist-arm64.dmg.sha256
           current=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
           if [ "$current" != "$GITHUB_SHA" ]; then
             echo 'A newer commit is on main; leaving this release as a draft.'
@@ -65,4 +71,6 @@ jobs:
           fi
           gh release download "$tag" --dir "$RUNNER_TEMP/published-assets"
           python3 native/scripts/verify-update.py "$RUNNER_TEMP/published-assets"
+          cmp .cache/native-release/Dotist-arm64.dmg.sha256 "$RUNNER_TEMP/published-assets/Dotist-arm64.dmg.sha256"
+          python3 native/scripts/verify-dmg.py "$RUNNER_TEMP/published-assets/Dotist-arm64.dmg" --version "$version"
           gh release edit "$tag" --draft=false --latest
