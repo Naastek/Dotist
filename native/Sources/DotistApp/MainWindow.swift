@@ -71,6 +71,8 @@ struct MainWindow: View {
     @State private var listViewport = CGRect.zero
     @State private var dragCancelled = false
     @GestureState private var reorderGestureActive = false
+    @GestureState private var holdGestureActive = false
+    @State private var hold = TaskHoldTracker()
     @StateObject var reorderRuntime = TaskReorderRuntime()
     @State var dragMotion = TaskDragMotion()
     @StateObject var selection = TaskSelectionController()
@@ -142,6 +144,12 @@ struct MainWindow: View {
         .onPreferenceChange(ToolbarFrameKey.self) { toolbarFrames = $0 }
         .onChange(of: toolbarGestureActive) { active in if !active { toolbarDrag = nil } }
         .onPreferenceChange(TaskShelfFrameKey.self) { shelfFrames = $0 }
+        .onChange(of: holdGestureActive) { active in
+            if !active {
+                hold.finish()
+                DispatchQueue.main.async { if drag?.committing == false, !reorderGestureActive { cancelReorder() } }
+            }
+        }
         .onChange(of: reorderGestureActive) { active in
             traceReorder("swiftui.active-change", fields: ["newActive": "\(active)"])
             if !active {
@@ -635,6 +643,27 @@ struct MainWindow: View {
             .onEnded { value in
                 traceReorder("swiftui.ended", taskID: task.id, point: value.location)
                 reorderRuntime.send(.end(task.id, value.location))
+            }
+    }
+
+    /// Press-and-hold lifts the glass bar without displacement. A quick click still
+    /// edits; moving more than 6 pt before the hold elapses keeps the ordinary drag.
+    private func holdGesture(_ task: DotistTask) -> some Gesture {
+        LongPressGesture(minimumDuration: TaskHoldTracker.duration, maximumDistance: 6)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.listSpace)))
+            .updating($holdGestureActive) { value, active, _ in
+                if case .second = value { active = true }
+            }
+            .onChanged { value in
+                guard case .second(true, let dragValue) = value else { return }
+                hold.lifted = true
+                if drag == nil { reorderRuntime.send(.begin(task.id, dragValue?.startLocation ?? hold.pointer)) }
+                if let dragValue { reorderRuntime.send(.move(task.id, dragValue.location)) }
+            }
+            .onEnded { value in
+                guard case .second(true, let dragValue) = value else { return }
+                reorderRuntime.send(.end(task.id, dragValue?.location ?? hold.pointer))
+                hold.finish()
             }
     }
 
@@ -1157,8 +1186,12 @@ struct MainWindow: View {
         .onKeyPress(keys: [.return, .space, .tab, .escape, .upArrow, .downArrow], phases: .down) { press in
             handleRowKey(press, task: task, previous: previous, allTasks: allTasks)
         }
-        .onTapGesture { clickRow(task) }
+        .onTapGesture { if !hold.suppressesClick { clickRow(task) } }
         .gesture(reorderGesture(task), including: editing == nil && draftAfter == nil ? .all : .subviews)
+        .simultaneousGesture(holdGesture(task), including: editing == nil && draftAfter == nil ? .all : .subviews)
+        .onContinuousHover(coordinateSpace: .named(Self.listSpace)) { phase in
+            if case .active(let point) = phase { hold.pointer = point }
+        }
         .onHover { over in if over { hoveredTask = task.id } else if hoveredTask == task.id { hoveredTask = nil } }
         .popover(isPresented: Binding(get: { pickingTask == task.id }, set: { if !$0 && pickingTask == task.id { pickingTask = nil } })) {
             RangeCalendar(model: model, start: task.dueDate ?? "", end: task.dueDate ?? "", choose: { date, _ in
@@ -1619,6 +1652,25 @@ struct TaskEmptyStateContent<AddRow: View>: View {
             }.frame(maxWidth: .infinity)
             addRow()
         }
+    }
+}
+
+/// Non-observable bookkeeping for press-and-hold lift, so pointer updates never re-render the list.
+final class TaskHoldTracker {
+    static let duration = 0.3
+    var pointer = CGPoint.zero
+    var lifted = false
+    private var releasedAt: TimeInterval?
+    /// The mouse-up that ends a hold must not also count as a click-to-edit.
+    var suppressesClick: Bool {
+        if lifted { return true }
+        guard let releasedAt else { return false }
+        return ProcessInfo.processInfo.systemUptime - releasedAt < 0.3
+    }
+    func finish() {
+        guard lifted else { return }
+        lifted = false
+        releasedAt = ProcessInfo.processInfo.systemUptime
     }
 }
 

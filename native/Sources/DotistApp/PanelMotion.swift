@@ -811,7 +811,7 @@ struct FloatingSurface: View, Animatable {
             .padding(opticalInset)
             .frame(width: compact && !transitioning ? base + (size.width - base) * min(1, max(0, reveal)) : size.width, height: size.height)
             .frame(width: size.width, height: size.height, alignment: onRight ? .topTrailing : .topLeading)
-        if compact && !reduceTransparency && contrast != .increased {
+        if compact && !transitioning && !reduceTransparency && contrast != .increased {
             // The native material owns its shape at the animated width. Leave
             // its optical edge unmasked; no second glass/paint layer.
             material
