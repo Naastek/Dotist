@@ -182,6 +182,8 @@ final class SideTabEntranceControllerTests: XCTestCase {
         var time = 10.0
         var visible = false
         var reduceMotion = false
+        var mouse = CGPoint(x: -10_000, y: -10_000)
+        var mouseButtons = 0
     }
     @MainActor private final class Harness {
         let clock = Clock()
@@ -207,7 +209,8 @@ final class SideTabEntranceControllerTests: XCTestCase {
             let clock = clock
             var environment = SideTabsController.Environment()
             environment.time = { clock.time }
-            environment.mouse = { CGPoint(x: -10_000, y: -10_000) }
+            environment.mouse = { clock.mouse }
+            environment.mouseButtons = { clock.mouseButtons }
             environment.visible = { _ in clock.visible }
             environment.visibleMinX = { _ in -1000 }
             environment.reduceMotion = { clock.reduceMotion }
@@ -237,6 +240,46 @@ final class SideTabEntranceControllerTests: XCTestCase {
         let children = root.perform(selector)?.takeUnretainedValue() as? [NSObject] ?? []
         return children.filter { ($0 as? any NSAccessibilityElementProtocol)?.accessibilityIdentifier?().hasPrefix("side-tab:") == true }
             + children.flatMap(axRows)
+    }
+
+    func testParentDragAndResizeCrossingPointerDoNotStartHoverUntilRelease() throws {
+        for inward in [false, true] {
+            for reduceMotion in [false, true] {
+                let h = try Harness(inward: inward)
+                defer { h.close() }
+                h.clock.visible = true
+                h.clock.reduceMotion = reduceMotion
+                h.sample(10)
+                h.sample(10.5)
+                XCTAssertEqual(h.controller.renderedRows[0].rect.width, 15, accuracy: 0.001)
+
+                // Simulate a press elsewhere followed by fast parent frame and
+                // pointer updates, including crossings of the selected ear.
+                h.clock.mouseButtons = 1
+                for step in 0..<20 {
+                    let x: CGFloat = inward ? -1000 + CGFloat(step % 3) : 500 + CGFloat(step * 13)
+                    let frame = CGRect(x: x, y: 100 + CGFloat(step * 2),
+                        width: 364 + CGFloat(step), height: 620 - CGFloat(step))
+                    h.clock.mouse = step.isMultiple(of: 2) ? CGPoint(x: x + 200, y: frame.midY) :
+                        CGPoint(x: inward ? max(x - 10, -1000) + 5 : x - 5, y: frame.maxY - 50)
+                    h.panel.setFrame(frame, display: false)
+                    h.sample(10.51 + Double(step) * 0.01)
+                    XCTAssertEqual(h.controller.renderedRows[0].rect.width, 15, accuracy: 0.001)
+                }
+                // Releasing over the ear is a genuine hover, without requiring
+                // an additional mouse-moved event.
+                h.clock.mouseButtons = 0
+                h.sample(10.8)
+                h.sample(11.0)
+                XCTAssertGreaterThan(h.controller.renderedRows[0].rect.width, 15)
+                let expandedWidth = h.controller.renderedRows[0].rect.width
+                h.clock.mouseButtons = 1
+                h.clock.mouse = CGPoint(x: h.panel.frame.midX, y: h.panel.frame.midY)
+                h.panel.setFrameOrigin(CGPoint(x: h.panel.frame.minX + 1, y: h.panel.frame.minY + 10))
+                h.sample(11.2)
+                XCTAssertEqual(h.controller.renderedRows[0].rect.width, expandedWidth, accuracy: 0.001)
+            }
+        }
     }
 
     func testFirstOpenHasNoInstantRowsAndDelayedRowsCannotHitOrAppearInAX() async throws {

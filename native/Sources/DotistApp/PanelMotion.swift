@@ -3,6 +3,136 @@ import CoreText
 import DotistCore
 import SwiftUI
 
+/// The observed whole-rect animator produced integer frames with reversing
+/// edges. Align edges at one shared progress before deriving the rect, keeping
+/// those geometric invariants without assuming AppKit's internal rounding rule.
+@MainActor
+final class PanelFrameAnimation {
+    private weak var window: NSWindow?
+    private let start: NSRect
+    private let target: NSRect
+    private var previous: NSRect
+    private var completion: (() -> Void)?
+    let duration: TimeInterval
+    private var task: Task<Void, Never>?
+    private(set) var displayLink: CADisplayLink?
+    private var began: TimeInterval = 0
+    var isAnimating: Bool { task != nil || displayLink != nil }
+
+    init(window: NSWindow, target: NSRect, duration: TimeInterval, completion: @escaping () -> Void) {
+        self.window = window
+        start = window.frame
+        previous = window.frame
+        self.target = target
+        self.completion = completion
+        self.duration = duration
+    }
+    isolated deinit { stopDrivers() }
+
+    func startMotion() {
+        guard completion != nil, !isAnimating else { return }
+        if duration <= 0 { currentProgress = 1; return }
+        guard let window else { cancel(); return }
+        began = ProcessInfo.processInfo.systemUptime
+        if window.isVisible, window.screen != nil {
+            guard let view = window.contentView else { currentProgress = 1; return }
+            let link = view.displayLink(target: PanelFrameDisplayTarget(animation: self),
+                                        selector: #selector(PanelFrameDisplayTarget.tick(_:)))
+            displayLink = link
+            link.add(to: .main, forMode: .common)
+            return
+        }
+        // Unordered/no-screen fixtures have no display callbacks. This bounded
+        // fallback is never started alongside a visible window's display link.
+        let began = self.began
+        task = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let duration = self?.duration else { return }
+                let elapsed = ProcessInfo.processInfo.systemUptime - began
+                self?.advanceFrame()
+                if elapsed >= duration { self?.task = nil; return }
+                do { try await Task.sleep(for: .seconds(min(1.0 / 60, duration - elapsed))) }
+                catch { return }
+            }
+        }
+    }
+    func cancel() {
+        completion = nil
+        stopDrivers()
+    }
+    private func stopDrivers() {
+        task?.cancel(); task = nil
+        displayLink?.invalidate(); displayLink = nil
+    }
+    fileprivate func advanceFrame() {
+        guard completion != nil, duration > 0 else { return }
+        currentProgress = Float(min(1, (ProcessInfo.processInfo.systemUptime - began) / duration))
+    }
+    var currentProgress: Float = 0 {
+        didSet {
+            guard completion != nil else { return }
+            guard let window else { cancel(); return }
+            let progress = CGFloat(currentProgress)
+            let frame = Self.frame(from: start, to: target, progress: progress, previous: previous)
+            window.setFrame(frame, display: true)
+            previous = window.frame
+            if progress >= 1 {
+                let done = completion
+                completion = nil
+                stopDrivers()
+                done?()
+            }
+        }
+    }
+
+    /// Invert the x coordinate of CA's easeInEaseOut cubic (not smoothstep or
+    /// NSAnimation's differently defined easeInOut curve).
+    static func easedProgress(_ time: CGFloat) -> CGFloat {
+        if time <= 0 { return 0 }; if time >= 1 { return 1 }
+        let timing = CAMediaTimingFunction(name: .easeInEaseOut)
+        var a: [Float] = [0, 0], b: [Float] = [0, 0]
+        timing.getControlPoint(at: 1, values: &a)
+        timing.getControlPoint(at: 2, values: &b)
+        func cubic(_ u: CGFloat, _ p: Float, _ q: Float) -> CGFloat {
+            3 * (1 - u) * (1 - u) * u * CGFloat(p) + 3 * (1 - u) * u * u * CGFloat(q) + u * u * u
+        }
+        var low: CGFloat = 0, high: CGFloat = 1
+        for _ in 0..<30 {
+            let u = (low + high) / 2
+            if cubic(u, a[0], b[0]) < time { low = u } else { high = u }
+        }
+        return cubic((low + high) / 2, a[1], b[1])
+    }
+
+    static func frame(from start: NSRect, to target: NSRect, progress: CGFloat, previous: NSRect) -> NSRect {
+        if progress <= 0 { return start }; if progress >= 1 { return target }
+        let p = easedProgress(progress)
+        func axis(_ a: CGFloat, _ b: CGFloat, _ c: CGFloat, _ d: CGFloat,
+                  _ previousSize: CGFloat) -> (CGFloat, CGFloat) {
+            var low = (a + (c - a) * p).rounded(), high = (b + (d - b) * p).rounded()
+            // Edge rounding can otherwise reverse size when parallel edges move
+            // by different amounts. Advance the dominant edge to preserve size.
+            let size = min(max(high - low, min(previousSize, d - c)), max(previousSize, d - c))
+            if abs(c - a) >= abs(d - b) { low = high - size } else { high = low + size }
+            return (low, high - low)
+        }
+        let x = axis(start.minX, start.maxX, target.minX, target.maxX, previous.width)
+        let y = axis(start.minY, start.maxY, target.minY, target.maxY, previous.height)
+        return NSRect(x: x.0, y: y.0, width: x.1, height: y.1)
+    }
+}
+
+/// The link retains this target; its weak reference cannot retain the animation.
+@MainActor
+private final class PanelFrameDisplayTarget: NSObject {
+    weak var animation: PanelFrameAnimation?
+    init(animation: PanelFrameAnimation) { self.animation = animation }
+    @objc func tick(_ link: CADisplayLink) {
+        guard let animation else { link.invalidate(); return }
+        animation.advanceFrame()
+    }
+}
+
 /// One source for the strip's task, metadata, count and measured width. Group identity
 /// is an ID, never a display name (names can be empty, duplicated or renamed).
 @MainActor
@@ -49,6 +179,34 @@ struct BubbleContent {
     }
 }
 
+/// Insets interpolate along actual window anchors, not elapsed time. A clipped
+/// stationary anchor uses the other moving edges; an entirely stationary rect
+/// has no geometric progress and resolves directly to its endpoint padding.
+struct PanelSurfaceTransition {
+    let start: NSRect
+    let target: NSRect
+    let from: EdgeInsets
+    let to: EdgeInsets
+    let onRight: Bool
+
+    func insets(at frame: NSRect) -> EdgeInsets {
+        let a = [start.minX, start.maxX, start.minY, start.maxY]
+        let b = [target.minX, target.maxX, target.minY, target.maxY]
+        let c = [frame.minX, frame.maxX, frame.minY, frame.maxY]
+        var dot: CGFloat = 0, length: CGFloat = 0
+        for i in a.indices { dot += (c[i] - a[i]) * (b[i] - a[i]); length += (b[i] - a[i]) * (b[i] - a[i]) }
+        let fallback = length > 0 ? min(1, max(0, dot / length)) : 1
+        func progress(_ index: Int) -> CGFloat {
+            let distance = b[index] - a[index]
+            return distance == 0 ? fallback : min(1, max(0, (c[index] - a[index]) / distance))
+        }
+        let x = progress(onRight ? 1 : 0), y = progress(3)
+        func mix(_ a: CGFloat, _ b: CGFloat, _ p: CGFloat) -> CGFloat { a + (b - a) * p }
+        return EdgeInsets(top: mix(from.top, to.top, y), leading: mix(from.leading, to.leading, x),
+                          bottom: mix(from.bottom, to.bottom, y), trailing: mix(from.trailing, to.trailing, x))
+    }
+}
+
 /// All task panels share one motion implementation, with independent window state.
 @MainActor
 final class PanelMotion: ObservableObject {
@@ -68,13 +226,14 @@ final class PanelMotion: ObservableObject {
         var frameAnimationDuration: @MainActor (Bool) -> TimeInterval = { compact in
             NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : (compact ? 0.28 : 0.34)
         }
-        // nil uses production visibility rules and AppKit's animator. Only an
+        // nil uses production visibility rules and the edge animation. Only an
         // explicit fixture driver can animate hidden windows without display ticks.
         var animateFrame: FrameAnimation? = nil
     }
 
     var environment: Environment
     @Published private(set) var bubble = false
+    @Published private(set) var surfaceInsets = EdgeInsets()
     @Published private(set) var hovering = false
     @Published var bubbleOnRight = true
     /// Active-filter wording shown beside the collapsed ball (nil for "All").
@@ -104,6 +263,9 @@ final class PanelMotion: ObservableObject {
     private var bubbleMenuOpen = false
     private var stopped = false
     private var closeObservation: NSObjectProtocol?
+    private var frameAnimation: PanelFrameAnimation?
+    private var insetTransition: PanelSurfaceTransition?
+    private var insetObservations: [NSObjectProtocol] = []
 
     init(model: AppModel, panel: DotistPanel, size: NSSize, title: @escaping () -> String, bubbleContent: (() -> BubbleContent)? = nil, environment: Environment = Environment(), rememberFrame: @escaping (NSRect) -> Void = { _ in }) {
         self.model = model
@@ -119,14 +281,30 @@ final class PanelMotion: ObservableObject {
         closeObservation = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stop() }
         }
+        for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
+            insetObservations.append(NotificationCenter.default.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, !self.stopped, let transition = self.insetTransition else { return }
+                    // Publish even when size is unchanged: an anchor-only move
+                    // must invalidate FloatingPanelView's observed motion.
+                    self.surfaceInsets = transition.insets(at: self.panel.frame)
+                }
+            })
+        }
     }
     isolated deinit {
+        frameAnimation?.cancel()
         hoverClose?.cancel()
         if let closeObservation { NotificationCenter.default.removeObserver(closeObservation) }
+        insetObservations.forEach { NotificationCenter.default.removeObserver($0) }
     }
     func stop() {
         guard !stopped else { return }
         stopped = true
+        frameAnimation?.cancel(); frameAnimation = nil
+        insetTransition = nil
+        insetObservations.forEach { NotificationCenter.default.removeObserver($0) }
+        insetObservations.removeAll()
         hoverClose?.cancel(); hoverClose = nil
         pendingHover = nil
         pendingBubbleToggle = false
@@ -174,6 +352,7 @@ final class PanelMotion: ObservableObject {
             bubbleOnRight = ballX + 24 > area.midX
             let w = baseWidth
             target = NSRect(x: bubbleOnRight ? ballX + 48 - w : ballX, y: y, width: w, height: 48)
+            prepareSurfaceTransition(from: old, to: target, compact: true)
             panel.minSize = NSSize(width: 48, height: 48)
             panel.styleMask.remove(.resizable)
             bubble = true
@@ -185,6 +364,7 @@ final class PanelMotion: ObservableObject {
             let right = min(max(center + 22, area.minX + width), area.maxX)
             let top = min(max(old.midY + 22, area.minY + height), area.maxY)
             target = NSRect(x: right - width, y: top - height, width: width, height: height)
+            prepareSurfaceTransition(from: old, to: target, compact: false)
             transitionSize = target.size
             hovering = false
             bubble = false
@@ -209,20 +389,24 @@ final class PanelMotion: ObservableObject {
             animate(panel, target, duration, complete)
             return
         }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            panel.animator().setFrame(target, display: true)
-        } completionHandler: {
-            // AppKit owns the animator's target. A late completion must neither
-            // keep its motion owner alive nor revive a closed panel's shadow.
-            DispatchQueue.main.async {
-                complete()
-            }
+        let animation = PanelFrameAnimation(window: panel, target: target, duration: duration) { [weak self] in
+            self?.frameAnimation = nil
+            complete()
         }
+        frameAnimation = animation
+        animation.startMotion()
+    }
+
+    private func prepareSurfaceTransition(from frame: NSRect, to target: NSRect, compact: Bool) {
+        let end = FloatingSurface.opticalInsets(compact: compact, reduceTransparency: false, increasedContrast: false)
+        let transition = PanelSurfaceTransition(start: frame, target: target, from: surfaceInsets, to: end, onRight: bubbleOnRight)
+        insetTransition = transition
+        surfaceInsets = transition.insets(at: frame)
     }
 
     private func finishBubbleTransition() {
+        insetTransition = nil
+        surfaceInsets = FloatingSurface.opticalInsets(compact: bubble, reduceTransparency: false, increasedContrast: false)
         animationInProgress = false
         refreshShadow()
         if bubble {
@@ -564,7 +748,8 @@ struct FloatingPanelView<Content: View>: View {
                 debug: glassDebug.enabled && !reduceTransparency && contrast != .increased ? glassDebug.parameters : nil))
             .background(FloatingSurface(opacity: model.settings.opacity, frost: model.settings.frost,
                 compact: motion.bubble, transitioning: motion.animationInProgress, onRight: motion.bubbleOnRight,
-                size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID), base: 48 + extra))
+                size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID), base: 48 + extra,
+                frameInsets: motion.surfaceInsets))
             .background(WindowShadowInvalidation())
         }
         .environment(\.glassDebugParameters, glassDebug.enabled ? glassDebug.parameters : nil)
@@ -595,7 +780,26 @@ struct FloatingPanelView<Content: View>: View {
     }
 }
 
+/// Internal fixture seam only; production's environment supplies nil.
+private struct SurfaceInsetDiagnosticKey: EnvironmentKey {
+    static let defaultValue: (@MainActor (Bool, Bool) -> EdgeInsets)? = nil
+}
+extension EnvironmentValues {
+    var diagnosticSurfaceInset: (@MainActor (Bool, Bool) -> EdgeInsets)? {
+        get { self[SurfaceInsetDiagnosticKey.self] }
+        set { self[SurfaceInsetDiagnosticKey.self] = newValue }
+    }
+}
+
 struct FloatingSurface: View, Animatable {
+    static let compactOpticalInset: CGFloat = 2
+    static func opticalInsets(compact: Bool, reduceTransparency: Bool, increasedContrast: Bool,
+                              diagnostic: EdgeInsets? = nil) -> EdgeInsets {
+        let inset = compact && !reduceTransparency && !increasedContrast ? compactOpticalInset : 0
+        let normal = EdgeInsets(top: inset, leading: inset, bottom: inset, trailing: inset)
+        return !reduceTransparency && !increasedContrast ? diagnostic ?? normal : normal
+    }
+    @Environment(\.diagnosticSurfaceInset) private var diagnosticInset
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     let opacity: UInt8
@@ -607,13 +811,17 @@ struct FloatingSurface: View, Animatable {
     var reveal: CGFloat
     let color: DotistGroupColor
     var base: CGFloat = 48
+    var frameInsets: EdgeInsets? = nil
     var animatableData: CGFloat {
         get { reveal }
         set { reveal = newValue }
     }
 
     var body: some View {
+        let opticalInset = Self.opticalInsets(compact: compact, reduceTransparency: reduceTransparency,
+            increasedContrast: contrast == .increased, diagnostic: diagnosticInset?(compact, transitioning) ?? frameInsets)
         let material = FloatingPanelMaterial(opacity: opacity, frost: frost, compact: compact, color: color)
+            .padding(opticalInset)
             .frame(width: compact && !transitioning ? base + (size.width - base) * min(1, max(0, reveal)) : size.width, height: size.height)
             .frame(width: size.width, height: size.height, alignment: onRight ? .topTrailing : .topLeading)
         if compact && !reduceTransparency && contrast != .increased {

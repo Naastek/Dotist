@@ -26,6 +26,7 @@ struct TransientGlassSurface: View {
     let solid: Bool
     let scheme: ColorScheme
     var debug: GlassDebugParameters? = nil
+    @Environment(\.appearsActive) private var appearsActive
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -36,12 +37,13 @@ struct TransientGlassSurface: View {
         } else if let debug {
             GlassDebugOpticalSurface(parameters: debug, color: color, scheme: scheme)
         } else {
-            // One native glass surface; compact ink needs a contrast-bearing
-            // backing in dark appearance and a reflection independent of focus.
+            // Preserve the previous compact surface. The local environment
+            // override does not prevent WindowServer's non-key graying.
             let tint = color == .none ? nil : DotistTheme.tint(color, scheme).opacity(compact ? GlassTintMaterial.compactTintScale : 1)
             Color.clear
                 .glassEffect(Glass.regular.tint(tint)
                     .interactive(compact ? false : interactive), in: shape)
+                .environment(\.appearsActive, compact || appearsActive)
                 .overlay {
                     if compact && scheme == .dark {
                         shape.fill(.black.opacity(GlassTintMaterial.compactDarkProtection)).allowsHitTesting(false).accessibilityHidden(true)
@@ -54,8 +56,8 @@ struct TransientGlassSurface: View {
     }
 }
 
-/// A thin directional reflection and a confined inner light. Neither
-/// layer paints the interior or changes the native window shadow.
+/// A thin directional reflection with a continuous compact rim and a confined
+/// inner light. Neither layer paints the interior or changes the window shadow.
 struct GlassEdge: View {
     let cornerRadius: CGFloat
     let compact: Bool
@@ -97,7 +99,7 @@ struct GlassEdge: View {
             let light = LinearGradient(stops: [
                 .init(color: .white.opacity(p.highlight), location: 0),
                 .init(color: .white.opacity(p.highlight * 0.55), location: 0.20),
-                .init(color: .white.opacity(0.015), location: 0.55),
+                .init(color: .white.opacity(compact ? p.secondary : 0.015), location: 0.55),
                 .init(color: .white.opacity(p.secondary), location: 1)
             ], startPoint: .topLeading, endPoint: .bottomTrailing)
             let innerLight = LinearGradient(stops: [.init(color: .white.opacity(p.innerLight), location: 0),

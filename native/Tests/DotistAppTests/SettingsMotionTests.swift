@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 @testable import DotistApp
@@ -49,8 +50,13 @@ final class SettingsMotionTests: XCTestCase {
         XCTAssertEqual(located, ["appearance.字体"])
         XCTAssertEqual(feedback.emphasized, "appearance.字体")
         await fulfillment(of: [sleeping], timeout: 2)
-        await fulfillment(of: sleeper.releaseFirst(), timeout: 2)
+        let cleared = expectation(description: "Feedback emphasis cleared")
+        let observation = feedback.$emphasized.dropFirst().filter { $0 == nil }
+            .receive(on: DispatchQueue.main)
+            .sink { _ in cleared.fulfill() }
+        await fulfillment(of: sleeper.releaseFirst() + [cleared], timeout: 2)
         XCTAssertNil(feedback.emphasized)
+        withExtendedLifetime(observation) {}
     }
     func testRapidSearchAndCancellationCannotResurrectOrEraseNewFeedback() async {
         for reason in ["query edit", "clear", "navigation", "close"] {

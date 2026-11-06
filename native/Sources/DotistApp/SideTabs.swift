@@ -468,6 +468,7 @@ final class SideTabsController: NSObject {
     struct Environment {
         var time: () -> TimeInterval = { CACurrentMediaTime() }
         var mouse: () -> CGPoint = { NSEvent.mouseLocation }
+        var mouseButtons: () -> Int = { NSEvent.pressedMouseButtons }
         var visible: (NSPanel) -> Bool = { $0.isVisible && $0.isOnActiveSpace }
         var visibleMinX: (NSPanel) -> CGFloat = { ($0.screen ?? NSScreen.main)?.visibleFrame.minX ?? $0.frame.minX }
         var reduceMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
@@ -545,7 +546,7 @@ final class SideTabsController: NSObject {
         displayLink = parent.displayLink(target: displayTarget, selector: #selector(SideTabDisplayTarget.tick(_:)))
         displayLink?.add(to: .main, forMode: .common)
         if environment.desktopEvents && environment.inputMonitors {
-            localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .leftMouseDown, .keyDown]) { [weak self] event in
+            localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .leftMouseDown, .leftMouseUp, .keyDown]) { [weak self] event in
                 guard let self else { return event }
                 if event.type == .keyDown, event.keyCode == 53, self.press != nil {
                     self.cancelDrag(); self.synchronize(); return nil
@@ -555,7 +556,7 @@ final class SideTabsController: NSObject {
                 self.synchronize(mouse: point)
                 return event
             }
-            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in self?.synchronize() }
+            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .leftMouseDown, .leftMouseUp]) { [weak self] _ in self?.synchronize() }
         }
         synchronize()
     }
@@ -647,6 +648,11 @@ final class SideTabsController: NSObject {
         let overTab = zip(current.tabs, current.opacities).contains { $0.1 > 0 && $0.0.contains(mouse) }
         if !visible {
             expanded = false; collapseWork?.cancel(); collapseWork = nil; cancelDrag()
+        } else if press == nil && environment.mouseButtons() != 0 {
+            // A moving or resizing parent can carry its tabs across a held pointer.
+            // Preserve the target until release; captured tab gestures still follow
+            // the normal press path below.
+            collapseWork?.cancel(); collapseWork = nil
         } else if press != nil || overTab || (expanded && sensor.contains(mouse)) {
             expanded = true; collapseWork?.cancel(); collapseWork = nil
         } else if expanded && collapseWork == nil {

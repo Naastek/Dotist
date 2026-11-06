@@ -44,6 +44,51 @@ final class PanelMotionLifecycleTests: XCTestCase {
         XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
     }
 
+    func testEdgeAnimationClockCompletesAndCancellationStopsFurtherWrites() async throws {
+        let panel = panel()
+        defer { panel.close() }
+        let start = panel.frame, target = NSRect(x: 150, y: 180, width: 48, height: 48)
+        var completions = 0
+        let animation = PanelFrameAnimation(window: panel, target: target, duration: 0.34) { completions += 1 }
+        animation.startMotion()
+        XCTAssertTrue(animation.isAnimating)
+        XCTAssertNil(animation.displayLink, "Hidden clock tests use only the bounded fallback")
+        try await Task.sleep(for: .milliseconds(450))
+        XCTAssertEqual(panel.frame, target)
+        XCTAssertEqual(completions, 1)
+        XCTAssertFalse(animation.isAnimating)
+        XCTAssertNil(animation.displayLink)
+
+        panel.setFrame(start, display: false)
+        let cancelled = PanelFrameAnimation(window: panel, target: target, duration: 0.28) { completions += 1 }
+        cancelled.startMotion()
+        try await Task.sleep(for: .milliseconds(30))
+        cancelled.cancel()
+        let stopped = panel.frame
+        try await Task.sleep(for: .milliseconds(320))
+        XCTAssertEqual(panel.frame, stopped)
+        XCTAssertEqual(completions, 1)
+        XCTAssertFalse(cancelled.isAnimating)
+        XCTAssertNil(cancelled.displayLink)
+    }
+
+    func testReleasingHiddenFrameDriverCancelsItsTaskWithoutRetainingAnimation() async throws {
+        let panel = panel()
+        defer { panel.close() }
+        let start = panel.frame
+        var completions = 0
+        var animation: PanelFrameAnimation? = PanelFrameAnimation(window: panel,
+            target: NSRect(x: 150, y: 180, width: 48, height: 48), duration: 0.28) { completions += 1 }
+        weak var released = animation
+        animation?.startMotion()
+        XCTAssertNil(animation?.displayLink)
+        animation = nil
+        XCTAssertNil(released, "The bounded task must not keep its owner alive")
+        try await Task.sleep(for: .milliseconds(320))
+        XCTAssertEqual(panel.frame, start)
+        XCTAssertEqual(completions, 0)
+    }
+
     func testClosingPanelStopsMotionWithoutCreatingShadowWindows() throws {
         let model = try model()
         let panel = panel()

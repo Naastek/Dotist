@@ -25,7 +25,7 @@ final class BubbleGroupSelectionTests: XCTestCase {
         _ = try store.addTask(title: "Child", category: "life", parentId: life.id)
         let done = try store.addTask(title: "Done life", category: "life")
         _ = try store.patchTask(id: done.id, completed: true)
-        let db = try DatabaseQueue(path: store.databasePath())
+        let db = store.database
         try db.write { db in
             try db.execute(sql: "UPDATE tasks SET position=100 WHERE category='life'")
             try db.execute(sql: "UPDATE tasks SET position=50 WHERE category='life' AND id<>?", arguments: [life.id])
@@ -89,7 +89,7 @@ final class BubbleGroupSelectionTests: XCTestCase {
 
     func testEmptySelectedGroupNeverFallsBackToGlobalWorkTaskOrTitle() throws {
         let (initial, work, _) = try fixture()
-        let db = try DatabaseQueue(path: initial.databasePath)
+        let db = initial.core.database
         try db.write { db in try db.execute(sql: "DELETE FROM tasks WHERE category='life'") }
         let model = try AppModel(store: initial.core)
         let view = view(model, state())
@@ -136,7 +136,7 @@ final class BubbleGroupSelectionTests: XCTestCase {
 
     func testBlankAndDuplicateGroupNamesNeverDetermineIdentity() throws {
         let (initial, work, life) = try fixture()
-        let db = try DatabaseQueue(path: initial.databasePath)
+        let db = initial.core.database
         for name in ["", "Same name"] {
             try db.write { db in
                 try db.execute(sql: "UPDATE task_groups SET name=? WHERE id IN ('work','life')", arguments: [name])
