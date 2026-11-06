@@ -2,6 +2,12 @@
 set -euo pipefail
 project_dir="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$project_dir"
+for resource in locales.json native-locales.json; do
+  if [[ ! -f "native/Sources/DotistApp/Resources/$resource" ]]; then
+    printf 'Missing required localization resource: %s\n' "$resource" >&2
+    exit 1
+  fi
+done
 cache_dir="$project_dir/.cache/native-migration"
 scratch_dir="$project_dir/.cache/native-consolidation/swift-build"
 sdk_path="${DOTIST_MACOS_SDK:-$(xcrun --sdk macosx --show-sdk-path)}"
@@ -14,7 +20,15 @@ export SWIFTPM_MODULECACHE_OVERRIDE="$project_dir/.cache/native-consolidation/sw
 bash native/scripts/prepare-fonts.sh >/dev/null
 sparkle_framework="$(bash native/scripts/prepare-sparkle.sh)"
 export DOTIST_SPARKLE_XCFRAMEWORK='../.cache/native-migration/deps/Sparkle-2.9.6/Sparkle.xcframework'
-swift build --disable-sandbox --build-system native --triple "arm64-apple-macosx$minimum" --sdk "$sdk_path" --configuration "$profile" --package-path native --scratch-path "$scratch_dir" --disable-automatic-resolution
+# SwiftPM passes these flags to the app and source dependencies. The linker
+# otherwise embeds absolute source and object paths in its debug map, even in
+# release builds. Keep those entries out of the distributable executable.
+DOTIST_PACKAGED_BUILD=1 swift build --disable-sandbox --build-system native --triple "arm64-apple-macosx$minimum" --sdk "$sdk_path" --configuration "$profile" --package-path native --scratch-path "$scratch_dir" --disable-automatic-resolution \
+  -Xswiftc -debug-prefix-map -Xswiftc "$project_dir=/dotist" \
+  -Xswiftc -file-prefix-map -Xswiftc "$project_dir=/dotist" \
+  -Xcc "-ffile-prefix-map=$project_dir=/dotist" \
+  -Xcxx "-ffile-prefix-map=$project_dir=/dotist" \
+  -Xlinker -S
 product="$scratch_dir/arm64-apple-macosx/$profile"
 qa_dir="$(mktemp -d "$cache_dir/qa-build-XXXXXXXX")"
 app="$qa_dir/Dotist-Native-QA.app"
@@ -25,7 +39,7 @@ cp LICENSE "$app/Contents/Resources/Licenses/Dotist-LICENSE.txt"
 cp THIRD_PARTY_NOTICES.md "$app/Contents/Resources/Licenses/THIRD_PARTY_NOTICES.md"
 cp third_party/Tic-LICENSE.txt "$app/Contents/Resources/Licenses/Tic-LICENSE.txt"
 cp "$product/DotistNative" "$app/Contents/MacOS/dotist"
-cp native/Sources/DotistApp/Resources/*.json "$app/Contents/Resources/"
+cp native/Sources/DotistApp/Resources/locales.json native/Sources/DotistApp/Resources/native-locales.json "$app/Contents/Resources/"
 cp native/Assets/menubar.png "$app/Contents/Resources/menubar.png"
 cp native/Assets/icon.icns "$app/Contents/Resources/icon.icns"
 while read -r name checksum path license_checksum license_url; do

@@ -2,122 +2,102 @@
 
 <p align="right"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
 
-**A local-first task window for macOS.** Dotist stays within reach as a small floating panel, keeps tasks in a local SQLite database, and exposes the same task service to the native UI and local MCP clients.
+**A native, local-first task window for macOS.** Dotist stays within reach as a lightweight floating panel, stores tasks in a local SQLite database, and exposes the same task service to the native UI and an optional local MCP interface.
 
 <p align="center">
-  <img src="docs/images/dotist-main-en.png" width="360" alt="Dotist main task panel">
+  <img src="docs/images/dotist-main-en.png" width="360" alt="Dotist floating task panel">
 </p>
 
-<p align="center"><sub>The main panel keeps groups, dates, and quick entry together without taking over the desktop.</sub></p>
+<p align="center"><sub>The floating task panel keeps groups, dates, and quick entry together (fictional English sample data).</sub></p>
 
 ## Why Dotist
 
-Most task managers assume a full window and a cloud account. Dotist takes a smaller approach:
-
-- **Local first.** Tasks and settings live on your Mac in SQLite and a local settings file.
-- **Always close by.** Use a floating panel, a menu bar entry, or a compact bubble that expands on hover.
-- **Keyboard friendly.** Add, indent, select, move, complete, and undo without reaching for the mouse.
-- **One task service.** The SwiftUI interface and the built-in MCP server read and write through the same Swift task core.
-
-## Features
-
-- Nested tasks up to five levels, multi-select, drag-and-drop ordering, and undo/redo.
-- Date filters for today, tomorrow, this week, next week, the next seven days, overdue, undated, completed, and custom ranges.
-- Group tabs, per-group floating panels, group colors, and collapsible group sections.
-- A compact floating bubble showing the remaining task count, with the next task revealed on hover.
-- A command palette with `⌘K`.
-- Calendar, board, and Gantt task views.
-- Native macOS appearance, Liquid Glass surfaces, configurable fonts, and reduced-motion/accessibility handling.
-  Switzer, Satoshi, Zodiak and Gambarino require a local font installation; unavailable choices are marked in Settings.
-- Local MCP access for compatible AI clients, disabled by default.
+- **Native interface**: Built with SwiftUI and AppKit exclusively for Apple Silicon Macs running macOS 26+. Liquid Glass surfaces, keyboard-first navigation, and accessible motion controls.
+- **Floating panel & compact bubble**: Keep your task list on your screen edge, or collapse it into a minimal floating bubble that reveals the next task on hover.
+- **Hierarchical organization**: Up to 5 levels of nested tasks, multi-select, drag-and-drop reordering, and side group tabs.
+- **Multiple perspectives**: Switch smoothly across List, Calendar, Board, and Gantt task views.
+- **Local-first SQLite storage**: Tasks and preferences live on your Mac. No account sign-ups, and no cloud lock-in.
+- **Optional local MCP interface**: Off by default, with no bundled AI models. Connect local AI tools directly through a stdio proxy.
 
 <p align="center">
-  <img src="docs/images/dotist-calendar-en.png" width="900" alt="Dotist calendar, board, and Gantt task views">
+  <img src="docs/images/dotist-calendar-en.png" width="900" alt="Dotist task views">
 </p>
 
-<p align="center"><sub>Calendar, board, and Gantt views share the same tasks and dates as the floating panel.</sub></p>
+<p align="center"><sub>Task views provide Calendar, Board, and Gantt layouts for scheduled work (fictional English sample data).</sub></p>
 
-## Install
+## Quick Start
 
-1. Download the latest app from [GitHub Releases](https://github.com/Naastek/Dotist/releases/latest).
-2. Move `Dotist.app` to **Applications** or another local folder.
-3. Launch Dotist. The panel opens near the top-right corner of the screen.
+- **Add tasks**: Type in the bottom input bar and press `Return`. Press `Return` again to keep adding sibling tasks. Use `Tab` to indent, `Shift-Tab` to outdent, or `Esc` to cancel.
+- **Edit & complete**: Click any task title to edit it inline. Press `Space` or `⌘Return` to complete a task.
+- **Organize**: Drag tasks or subtrees to reorder. Use `Shift`-click or `⌘`-click for multi-selection. Switch between categories using the left-hand group tabs. Undo and redo anytime with `⌘Z` and `Shift-⌘Z`.
+- **Search & focus**: Press `⌘K` to open the command search palette. Click the toolbar collapse button to switch the panel to a floating bubble.
+- **Settings**: Press `⌘,` to configure appearance, custom fonts, materials, and MCP settings.
 
-Requirements: **macOS 26 or later** on an **Apple Silicon Mac**. Intel builds are not published.
+## Installation & Code Signing
 
-The current app is ad-hoc signed and is not notarized by Apple. If macOS blocks the first launch, open **System Settings → Privacy & Security** and choose **Open Anyway**.
+1. Download the latest build from [GitHub Releases](https://github.com/Naastek/Dotist/releases/latest).
+2. Move `Dotist.app` into `/Applications`.
+3. Launch Dotist. The panel will open near the top-right corner of your screen.
 
-## Usage
+> **Requirements**: macOS 26 or later on an Apple Silicon Mac (M-series).
 
-### Add and edit tasks
+### Gatekeeper & Security
 
-- Type in the bottom input and press `Return` to add a task.
-- Press `Return` again to keep adding siblings.
-- Press `Tab` to indent, `Shift-Tab` to outdent, and `Esc` to cancel.
-- Press `Space` or `⌘Return` to complete a task.
-- Click a task title to edit it.
+- **Ad-hoc signing**: Current packaging scripts produce ad-hoc signed bundles without Developer ID signing or notarization.
+- **First launch**: If macOS Gatekeeper blocks execution on first launch, open **System Settings > Privacy & Security** and choose **Open Anyway**.
+- **Sparkle updates**: Application update archives are signed independently with Sparkle cryptographic keys, separate from Apple code signing. Automatic update checks are enabled by default; automatic installation is off.
 
-### Organize
+> **Note**: The latest release on GitHub might not reflect the most recent commit on `main`. Local candidate build scripts do not automatically produce an uploaded release.
 
-- Use the group tabs along the left edge to switch groups.
-- Drag tasks or whole subtrees to reorder or change nesting.
-- Use `Shift` or `⌘` click for multi-select.
-- Right-click a group for actions such as opening it in its own panel or changing its color.
-- Use `⌘Z` and `Shift-⌘Z` for undo and redo.
+## Data, Privacy, and MCP
 
-### Find and focus
+### Local Storage & Privacy
 
-- Press `⌘K` to open the command palette.
-- Use the date filters to narrow the list.
-- Click the toolbar’s collapse button to turn the panel into a floating bubble.
-- Open **Task views** for calendar, board, and Gantt layouts.
-- Open Settings with `⌘,` or the menu bar item.
+Dotist requires no user accounts or online registration. Application data is stored locally on your machine:
+- **Tasks database**: `~/Library/Application Support/com.dotist.app/tasks.sqlite`
+- **Preferences**: `~/Library/Application Support/com.dotist.app/settings.json`
 
-## Local MCP
+- **Sync**: There is no iCloud, CloudKit, or Android synchronization.
 
-Dotist includes an optional local MCP server. It is off by default and does not include an AI model.
+Update checks contact GitHub.
 
-Enable it in **Settings → MCP**, then copy the generated command or JSON configuration into your MCP client. The client launches the app executable in stdio proxy mode:
+### Optional Local MCP (Model Context Protocol)
 
-```sh
-~/Applications/Dotist.app/Contents/MacOS/dotist --mcp
+Dotist provides a local MCP interface that is **disabled by default** and includes **no bundled AI models**. When enabled in **Settings > MCP**, external MCP clients can connect directly to the application executable via stdio:
+
+```bash
+/Applications/Dotist.app/Contents/MacOS/dotist --mcp
 ```
 
-The proxy connects to the app’s local Unix socket service. Ordinary reads and writes do not steal keyboard focus; only `focus_task` brings the app forward. Each client gets its own MCP session while sharing the same task database and change notifications.
-
-Available tools include `list_tasks`, `get_task`, `search_tasks`, `add_tasks`, `update_task`, `delete_task`, `restore_task`, date and parent operations, group operations, and `focus_task`.
-
-## Data and privacy
-
-- Tasks are stored in `~/Library/Application Support/com.dotist.app/tasks.sqlite`.
-- Preferences are stored in `settings.json` next to the database.
-- Dotist does not require an account and does not send tasks to a cloud service.
-- Android and iCloud/CloudKit sync are not implemented. The SQLite schema reserves local change metadata for future work, but it is not an active sync feature.
+- **Focus & sessions**: Standard task read and write calls operate silently without stealing window focus; only `focus_task` brings the app forward. Each client runs an isolated MCP session against the shared SQLite database.
+- **Network disclosure**: While Dotist itself operates locally without user accounts, connected MCP clients can read and modify tasks and may transmit data to their own upstream AI providers. Using MCP is therefore not a zero-network guarantee.
 
 ## Development
 
-The current macOS app is built with SwiftUI, AppKit, GRDB/SQLite, and the official Swift MCP SDK. It does not link Rust, Tauri, or a web runtime. The retired React/Tauri/Rust clients and their build tools have been removed. Current design decisions are documented in `docs/ui-decisions.md`.
+Dotist is built with SwiftUI, AppKit, GRDB/SQLite, and the official Swift MCP SDK. It does not use Rust, Tauri, or web runtimes.
 
-Requirements: macOS 26 or later, an Apple Silicon Mac, Xcode with a macOS 26+ SDK, Swift, and Python 3.
+### Prerequisites
 
-```sh
-bash native/scripts/test-native.sh   # Swift core, MCP, and window tests
-bash native/scripts/build-qa.sh      # isolated QA app
-bash native/scripts/build-local.sh   # local release candidate
+- Apple Silicon Mac running macOS 26 or later
+- Xcode with macOS 26 SDK
+- Swift
+- Python 3
+
+### Build Commands
+
+```bash
+# Run Swift core, MCP, and window test suites
+bash native/scripts/test-native.sh
+
+# Build isolated QA app
+bash native/scripts/build-qa.sh
+
+# Build local release candidate (does not publish a release)
+bash native/scripts/build-local.sh
 ```
-
-SwiftPM dependencies are locked by `native/Package.resolved`. Versioning, minimum macOS, and public update configuration live in `native/app.json`.
-
-## Updates and release
-
-Dotist uses Sparkle with GitHub Releases and the native `appcast.xml`. Automatic update checks are enabled by default; automatic installation is off by default. A downloaded update is installed when the app exits normally and takes effect on the next launch.
-
-A push to `main` runs native tests, builds the app, creates a complete draft release, downloads and verifies the published assets, checks the current `main` SHA, and then publishes the release. The CI signing key must match the public Sparkle key in `native/app.json`.
-
-The application bundle is currently ad-hoc signed. Apple Developer ID signing and notarization are separate from the Sparkle update trust root and have not yet been completed.
 
 ## Documentation
 
-- [UI decisions](docs/ui-decisions.md): current interaction and visual contracts.
-- [Native macOS app](docs/native-macos.md): data, windows, build, QA, signing, and updating.
-- [Native architecture](docs/native-consolidation.md): Swift task service, MCP, and release architecture.
+- [UI decisions](docs/ui-decisions.md): Interaction guidelines and visual contracts.
+- [Native macOS app](docs/native-macos.md): Data layers, window architecture, QA, signing, and updates.
+- [Native consolidation](docs/native-consolidation.md): Technical architecture, Swift task service, and MCP contracts.

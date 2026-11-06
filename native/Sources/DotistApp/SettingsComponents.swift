@@ -84,7 +84,7 @@ enum SettingsSearchIndex {
         value.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
     }
     private static let dictionaries: [[String: [String: String]]] = ["locales", "native-locales"].compactMap { name in
-        guard let url = Bundle.module.url(forResource: name, withExtension: "json"), let data = try? Data(contentsOf: url) else { return nil }
+        guard let url = AppResources.url(forResource: name, withExtension: "json"), let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode([String: [String: String]].self, from: data)
     }
     private static func translations(_ title: String) -> [String] {

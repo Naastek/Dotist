@@ -19,6 +19,10 @@ let sparkle = ProcessInfo.processInfo.environment["DOTIST_SPARKLE_XCFRAMEWORK"].
     checksum: "8d5fb41d960b43f4a68aa14126bf62b098544ec8d191cdcc73eb14e63a8e7606"
 )
 
+// Packaged apps copy their resources into Contents/Resources. Avoid SwiftPM's
+// generated accessor, which embeds an absolute build-directory fallback.
+let packagedBuild = ProcessInfo.processInfo.environment["DOTIST_PACKAGED_BUILD"] == "1"
+
 let package = Package(
     name: "DotistNative",
     platforms: [.macOS(configuration.minimumMacOS)],
@@ -33,7 +37,7 @@ let package = Package(
     targets: [
         .target(name: "DotistCore", dependencies: [.product(name: "GRDB", package: "GRDB.swift")]),
         sparkle,
-        .executableTarget(name: "DotistApp", dependencies: ["DotistCore", "Sparkle", .product(name: "GRDB", package: "GRDB.swift"), .product(name: "MCP", package: "swift-sdk")], resources: [.process("Resources")], linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
+        .executableTarget(name: "DotistApp", dependencies: ["DotistCore", "Sparkle", .product(name: "GRDB", package: "GRDB.swift"), .product(name: "MCP", package: "swift-sdk")], exclude: packagedBuild ? ["Resources"] : [], resources: packagedBuild ? [] : [.process("Resources")], swiftSettings: packagedBuild ? [.define("DOTIST_PACKAGED_BUILD")] : [], linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
         .testTarget(name: "DotistCoreTests", dependencies: ["DotistCore"]),
         .testTarget(name: "DotistAppTests", dependencies: ["DotistApp"]),
     ]

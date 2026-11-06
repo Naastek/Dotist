@@ -29,6 +29,8 @@ bash native/scripts/test-updater.sh /absolute/path/to/Dotist-Native-QA.app
 
 候选包保存在 .cache/native-migration/，脚本不自动安装。安装前须正常退出正式应用并做 SQLite 一致性备份；回退应用时不要自动用旧数据库覆盖新增任务。
 
+当前打包维护路径隐私不变量：`build-qa` 使用编译器前缀映射并移除链接器调试映射；`DOTIST_PACKAGED_BUILD=1` 仅供打包脚本内部使用，使应用直接从 `Contents/Resources` 读取 `locales.json` 与 `native-locales.json`，避免 SwiftPM 生成包含绝对构建目录回退；日常 `swift build` 与测试保留常规 `Bundle.module` 资源且应保持该变量未设置。`build-local` 要求必须包含这两个 locale JSON 文件，并拒绝包含本地用户或工作区路径的 QA 可执行文件。这属于有限的路径防护，并非不存在任何私密数据的完备证明。
+
 ## 本地 MCP
 
 设置中启用服务后，客户端以应用可执行文件的 --mcp 模式启动 stdio 代理。服务运行在应用内的本机 Unix socket，每个客户端有独立会话，共用同一任务服务与数据库观察。普通操作不抢焦点，focus_task 才明确聚焦。批量新增整体提交或回滚。

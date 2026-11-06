@@ -65,11 +65,11 @@ final class AppModel: ObservableObject {
         databasePath = try core.databasePath()
         launchAtLogin = SMAppService.mainApp.status == .enabled
         scope = settings.defaultFilter
-        if let url = Bundle.main.url(forResource: "locales", withExtension: "json") ?? Bundle.module.url(forResource: "locales", withExtension: "json"),
+        if let url = AppResources.url(forResource: "locales", withExtension: "json"),
            let data = try? Data(contentsOf: url) {
             dictionary = (try? JSONDecoder().decode([String: [String: String]].self, from: data)) ?? [:]
         }
-        if let url = Bundle.main.url(forResource: "native-locales", withExtension: "json") ?? Bundle.module.url(forResource: "native-locales", withExtension: "json"),
+        if let url = AppResources.url(forResource: "native-locales", withExtension: "json"),
            let data = try? Data(contentsOf: url),
            let extra = try? JSONDecoder().decode([String: [String: String]].self, from: data) {
             for (language, values) in extra { dictionary[language, default: [:]].merge(values) { _, new in new } }

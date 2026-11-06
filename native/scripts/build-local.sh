@@ -73,14 +73,26 @@ for row in Path('native/scripts/fonts.tsv').read_text().splitlines():
         raise SystemExit(f'Missing or invalid packaged font: {name}; rebuild the QA application')
     if not license.is_file() or (len(source) > 1 and hashlib.sha256(license.read_bytes()).hexdigest() != source[1]):
         raise SystemExit(f'Missing or invalid packaged font license: {name}; rebuild the QA application')
-for relative in ("Contents/MacOS/dotist",
-                 "Contents/Resources/icon.icns", "Contents/Frameworks/Sparkle.framework"):
+for relative in ("Contents/MacOS/dotist", "Contents/Resources/locales.json",
+                 "Contents/Resources/native-locales.json", "Contents/Resources/icon.icns",
+                 "Contents/Frameworks/Sparkle.framework"):
     if not (app / relative).exists():
         raise SystemExit(f"Missing QA bundle resource: {relative}")
 print(app)
 PY
 )"
 codesign --verify --deep --strict "$qa_app"
+
+# An explicitly supplied QA app can predate the path-safe build flags. Refuse
+# obvious home-directory paths without printing their contents. This is a
+# narrow safeguard, not a comprehensive personal-data scan of the bundle.
+python3 - "$qa_app/Contents/MacOS/dotist" "$project_dir" <<'PY'
+import re, sys
+from pathlib import Path
+binary = Path(sys.argv[1]).read_bytes()
+if re.search(rb'/(?:Users|home)/[^/\x00\r\n]+/', binary) or sys.argv[2].encode() in binary:
+    raise SystemExit('QA executable contains a local build or home-directory path; rebuild it before packaging')
+PY
 
 candidate_dir="$(mktemp -d "$cache_dir/native-local-XXXXXXXX")"
 app="$candidate_dir/Dotist.app"
