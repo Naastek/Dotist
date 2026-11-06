@@ -40,8 +40,8 @@ struct FloatingSurface: View, Animatable {
             // its optical edge unmasked; no second glass/paint layer.
             material
         } else {
-            // Preserve the exact opaque/expanded silhouette, including pixel
-            // rounding at fractional hover widths, for window alpha/shadows.
+            // Keep the window/transition alpha constrained. Expanded native
+            // optics have their own clearance inside this outer silhouette.
             material.clipShape(FloatingPanelShape(compact: compact, transitioning: transitioning,
                 onRight: onRight, reveal: reveal, base: base))
         }
@@ -82,26 +82,53 @@ struct FloatingPanelSurface: View {
             TransientGlassSurface(cornerRadius: 24, color: color, interactive: true, compact: true, solid: solid, scheme: scheme, debug: glassDebug)
         } else {
             let shape = RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius, style: .continuous)
-            Group {
-                if solid {
-                    DotistDesign.paper
-                } else {
-                    Color.clear.glassEffect(.regular.tint(DotistTheme.tint(color, scheme)), in: shape)
-                        .overlay(tintDensityLayer)
+            if solid {
+                shape.fill(DotistDesign.paper)
+                    .overlay(shape.fill(DotistTheme.swatch(color).opacity(GlassTintMaterial.accessibilityTint)))
+            } else {
+                // Leave room for native optical light inside the window clip.
+                // The reading backing owns its masks; neither it nor the user
+                // density setting masks/fades the native glass and reflection.
+                let radius = DotistDesign.windowCornerRadius - ExpandedReadingMaterial.opticalClearance
+                let opticalShape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+                ZStack {
+                    Color.clear.glassEffect(.regular.tint(DotistTheme.tint(color, scheme)), in: opticalShape)
+                    ExpandedReadingMaterial(opacity: opacity, frost: frost, color: color, scheme: scheme, cornerRadius: radius)
+                    GlassEdge(cornerRadius: radius, compact: false, scheme: scheme)
                 }
+                .padding(ExpandedReadingMaterial.opticalClearance)
             }
-            .overlay(DotistTheme.swatch(color).opacity(solid ? GlassTintMaterial.accessibilityTint : (scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint)))
-            .overlay {
-                if !solid { GlassEdge(cornerRadius: DotistDesign.windowCornerRadius, compact: false, scheme: scheme) }
-            }
-            .opacity(solid ? 1 : DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false))
-            .clipShape(shape)
         }
     }
+}
 
-    private var tintDensityLayer: some View {
-        DotistDesign.paper.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false))
-            .overlay(DotistDesign.paper.opacity(Double(frost) / 100 * GlassTintMaterial.expandedFrostScale))
+/// A readable interior inside the native optical band. The small feather joins
+/// the density backing to glass without introducing a second outlined border.
+/// Internal so tests can measure density independently of native glass alpha.
+struct ExpandedReadingMaterial: View {
+    static let opticalClearance: CGFloat = 2
+    private let rimInset: CGFloat = 3
+    let opacity: UInt8
+    let frost: UInt8
+    let color: DotistGroupColor
+    let scheme: ColorScheme
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        ZStack {
+            shape.fill(DotistDesign.paper.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)))
+            shape.fill(DotistDesign.paper.opacity(Double(frost) / 100 * GlassTintMaterial.expandedFrostScale))
+            shape.fill(DotistTheme.swatch(color).opacity(scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint))
+        }
+        .mask {
+            shape.inset(by: rimInset).fill(.white).blur(radius: 1)
+                // Confine the feather as well: the first point of the native
+                // optical band must stay completely free of reading paint.
+                .clipShape(shape.inset(by: 1))
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
