@@ -87,16 +87,32 @@ struct FloatingPanelSurface: View {
                     .overlay(shape.fill(DotistTheme.swatch(color).opacity(GlassTintMaterial.accessibilityTint)))
             } else {
                 // Leave room for native optical light inside the window clip.
-                // The reading backing owns its masks; neither it nor the user
-                // density setting masks/fades the native glass and reflection.
+                // The reading backing owns its shape. Opacity scales every
+                // interior plane (native glass, density, frost and tint),
+                // while the optical band and reflection keep their strength.
                 let radius = DotistDesign.windowCornerRadius - ExpandedReadingMaterial.opticalClearance
                 let opticalShape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+                let amount = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
                 ZStack {
                     Color.clear.glassEffect(.regular.tint(DotistTheme.tint(color, scheme)), in: opticalShape)
+                        .padding(ExpandedReadingMaterial.opticalClearance)
+                        .mask {
+                            // alpha = 1 at the rim, amount in the interior. Mask
+                            // after optical clearance so native light is contained
+                            // by the window silhouette, not a tighter material rect.
+                            Color.white.overlay {
+                                ExpandedReadingMaterial.interiorMask(cornerRadius: radius)
+                                    .padding(ExpandedReadingMaterial.opticalClearance)
+                                    .opacity(1 - amount)
+                                    .blendMode(.destinationOut)
+                            }.compositingGroup()
+                        }
                     ExpandedReadingMaterial(opacity: opacity, frost: frost, color: color, scheme: scheme, cornerRadius: radius)
+                        .applyingBackgroundOpacity(amount)
+                        .padding(ExpandedReadingMaterial.opticalClearance)
                     GlassEdge(cornerRadius: radius, compact: false, scheme: scheme)
+                        .padding(ExpandedReadingMaterial.opticalClearance)
                 }
-                .padding(ExpandedReadingMaterial.opticalClearance)
             }
         }
     }
@@ -114,18 +130,32 @@ struct ExpandedReadingMaterial: View {
     let scheme: ColorScheme
     let cornerRadius: CGFloat
 
-    var body: some View {
+    static func interiorMask(cornerRadius: CGFloat, inset: CGFloat = 3) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        ZStack {
-            shape.fill(DotistDesign.paper.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)))
-            shape.fill(DotistDesign.paper.opacity(Double(frost) / 100 * GlassTintMaterial.expandedFrostScale))
-            shape.fill(DotistTheme.swatch(color).opacity(scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint))
+        // Confine the feather too: keep the first optical point free of paint.
+        return shape.inset(by: inset).fill(.white).blur(radius: 1)
+            .clipShape(shape.inset(by: 1))
+    }
+
+    var body: some View {
+        paint(backgroundOpacity: 1)
+    }
+
+    /// Legacy full-background opacity multiplies every paint plane. Applying it
+    /// after the shaped mask would flatten those planes first and change density.
+    func applyingBackgroundOpacity(_ amount: Double) -> some View {
+        paint(backgroundOpacity: amount)
+    }
+
+    private func paint(backgroundOpacity amount: Double) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        return ZStack {
+            shape.fill(DotistDesign.paper.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false) * amount))
+            shape.fill(DotistDesign.paper.opacity(Double(frost) / 100 * GlassTintMaterial.expandedFrostScale * amount))
+            shape.fill(DotistTheme.swatch(color).opacity((scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint) * amount))
         }
         .mask {
-            shape.inset(by: rimInset).fill(.white).blur(radius: 1)
-                // Confine the feather as well: the first point of the native
-                // optical band must stay completely free of reading paint.
-                .clipShape(shape.inset(by: 1))
+            Self.interiorMask(cornerRadius: cornerRadius, inset: rimInset)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)

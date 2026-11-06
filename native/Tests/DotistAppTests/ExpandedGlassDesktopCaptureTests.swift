@@ -98,6 +98,7 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
     private enum Variant: String, CaseIterable {
         case original, reconstructed, noReadingOverlays, noWholeOpacity, noClips, noReadingOverlaysOrClips, productionCandidate
         case productionLowOpacity, productionLowFrost, productionHighFrost, productionNeutral
+        case productionTransparent, productionOpaque, backdropControl
         var overlays: Bool { self == .original || self == .reconstructed || self == .noClips || self == .noWholeOpacity }
         var clips: Bool { self == .original || self == .reconstructed || self == .noReadingOverlays || self == .noWholeOpacity }
         var productionInputs: (opacity: UInt8, frost: UInt8, color: DotistGroupColor)? {
@@ -107,6 +108,8 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
             case .productionLowFrost: return (20, 0, .pink)
             case .productionHighFrost: return (20, 100, .pink)
             case .productionNeutral: return (80, 40, .none)
+            case .productionTransparent: return (0, 40, .pink)
+            case .productionOpaque: return (100, 40, .pink)
             default: return nil
             }
         }
@@ -321,12 +324,14 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
         defer { trace.mark("foreground.window.close.begin"); panel.close(); trace.mark("foreground.window.close.end") }
         let surfaceSize = rect.size
         var nativeMeans: [Variant: [CGFloat]] = [:]
+        var nativePixels: [Variant: [[CGFloat]]] = [:]
         for variant in Variant.allCases {
             trace.mark("variant.begin", facts: ["variant": variant.rawValue])
             let surface: AnyView
             switch variant {
             case .original: surface = AnyView(OriginalExpandedSurface(scheme: scheme))
-            case .productionCandidate, .productionLowOpacity, .productionLowFrost, .productionHighFrost, .productionNeutral:
+            case .backdropControl: surface = AnyView(Color.clear)
+            case .productionCandidate, .productionLowOpacity, .productionLowFrost, .productionHighFrost, .productionNeutral, .productionTransparent, .productionOpaque:
                 let inputs = try XCTUnwrap(variant.productionInputs)
                 trace.mark("variant.production-inputs", facts: ["opacity": String(inputs.opacity), "frost": String(inputs.frost), "color": inputs.color.rawValue])
                 surface = AnyView(FloatingSurface(opacity: inputs.opacity, frost: inputs.frost, compact: false, transitioning: false,
@@ -462,19 +467,22 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
                         "diagnostics": "four synthetic corner crops only; not visual acceptance"])
                     throw CompactGlassDesktopEvidence.Failure("Backdrop marker missing at \(invalid.joined(separator: ",")); capture rejected; see marker-samples.json")
                 }
-                if variant.productionInputs != nil {
+                if variant.productionInputs != nil || variant == .backdropControl {
                     // Blank interior ROI, in top-left backdrop points: avoids
                     // text, rim and shadow. Compare RGB, never composite alpha.
                     var sum = [CGFloat](repeating: 0, count: 3), count: CGFloat = 0
+                    var pixels: [[CGFloat]] = []
                     for y in stride(from: 400, to: 560, by: 20) {
                         for x in stride(from: 150, to: 370, by: 20) {
                             let pixel = try sRGBPixel(cgImage, x: x * 2, y: y * 2)
+                            pixels.append(Array(pixel.prefix(3)))
                             for channel in 0..<3 { sum[channel] += pixel[channel] }
                             count += 1
                         }
                     }
                     let mean = sum.map { $0 / count }
                     nativeMeans[variant] = mean
+                    nativePixels[variant] = pixels
                     trace.mark("capture.production-interior-rgb", facts: ["variant": variant.rawValue,
                         "meanSRGB": String(describing: mean), "samples": String(describing: count)])
                 }
@@ -490,14 +498,30 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
             let opacity = try distance(.productionCandidate, .productionLowOpacity)
             let frost = try distance(.productionLowFrost, .productionHighFrost)
             let tint = try distance(.productionCandidate, .productionNeutral)
+            let transparentPixels = try XCTUnwrap(nativePixels[.productionTransparent])
+            let backdropPixels = try XCTUnwrap(nativePixels[.backdropControl])
+            XCTAssertEqual(transparentPixels.count, 88); XCTAssertEqual(backdropPixels.count, 88)
+            let clearDifference = zip(transparentPixels, backdropPixels).reduce(CGFloat(0)) { total, pair in
+                total + zip(pair.0, pair.1).reduce(CGFloat(0)) { $0 + abs($1.0 - $1.1) }
+            } / CGFloat(transparentPixels.count)
+            let opaquePixels = try XCTUnwrap(nativePixels[.productionOpaque])
+            XCTAssertEqual(opaquePixels.count, 88)
+            let spreads = try (0..<3).map { channel -> CGFloat in
+                let values = opaquePixels.map { $0[channel] }
+                return try XCTUnwrap(values.max()) - XCTUnwrap(values.min())
+            }
+            let opaqueSpread = try XCTUnwrap(spreads.max())
             let report: [String: Any] = ["meanSRGB": Dictionary(uniqueKeysWithValues: nativeMeans.map { ($0.key.rawValue, $0.value) }),
                 "opacityRGBDistance": opacity, "frostRGBDistance": frost, "tintRGBDistance": tint,
+                "zeroOpacityBackdropPixelDifference": clearDifference, "opaqueInteriorRGBSpread": opaqueSpread,
                 "roiInBackdropPoints": [150, 400, 220, 160], "note": "Full native WindowServer composite; alpha is intentionally not the density oracle"]
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
                 .write(to: output.appendingPathComponent("production-preference-appearance.json"))
             XCTAssertGreaterThan(opacity, 0.03, "Opacity must change the final native appearance")
             XCTAssertGreaterThan(frost, 0.01, "Frost must change the final native appearance")
             XCTAssertGreaterThan(tint, 0.01, "Group tint must change the final native appearance")
+            XCTAssertLessThan(clearDifference, 0.015, "Zero-opacity interior must match the bare synthetic backdrop, including its stripes")
+            XCTAssertLessThan(opaqueSpread, 0.015, "Full-opacity interior must suppress the patterned backdrop")
         }
     }
 }
