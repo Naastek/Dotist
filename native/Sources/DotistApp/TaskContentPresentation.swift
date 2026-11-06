@@ -31,19 +31,20 @@ struct TaskContentPresentation<Content: View>: View {
         self.state = state; self.dragging = dragging; self.content = content()
     }
     var body: some View {
+        let disabled = dragging || LayoutMotionInputs.shouldReduceMotion(reduceMotion)
         content
             .animation(nil, value: TaskContentSelection(state: state))
             // Below one 8-bit alpha step, but never remove the live native/AX tree.
             .opacity(max(0.001, opacity.value))
             .overlay {
-                TaskContentTransitionOverlay(state: state, selection: TaskContentSelection(state: state), disabled: reduceMotion || dragging, opacity: opacity)
+                TaskContentTransitionOverlay(state: state, selection: TaskContentSelection(state: state), disabled: disabled, opacity: opacity)
                     .allowsHitTesting(false).accessibilityHidden(true)
             }
             .onChange(of: TaskContentSelection(state: state)) { _, _ in
-                if opacity.hasSnapshot && !reduceMotion && !dragging && !LayoutMotionInputs.shouldReduceMotion(false) { opacity.set(0) }
+                if opacity.hasSnapshot && !disabled { opacity.set(0) }
                 else { opacity.set(1) }
             }
-            .onChange(of: reduceMotion || dragging) { _, disabled in if disabled { opacity.set(1) } }
+            .onChange(of: disabled) { _, disabled in if disabled { opacity.set(1) } }
             .onDisappear { opacity.set(1) }
     }
 }

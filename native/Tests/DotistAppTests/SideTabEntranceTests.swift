@@ -405,15 +405,33 @@ private final class SideTabOpeningSampleParent: NSPanel {
 @MainActor
 final class SideTabOriginalAPIRegressionTests: XCTestCase {
     func testFirstSynchronizationDoesNotExposeAllRowsAtFullWidth() throws {
+        try assertFirstSynchronization(reduceMotion: false)
+    }
+
+    func testFirstSynchronizationWithReducedMotionExposesRowsImmediately() throws {
+        try assertFirstSynchronization(reduceMotion: true)
+    }
+
+    private func assertFirstSynchronization(reduceMotion: Bool) throws {
         _ = NSApplication.shared
-        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".cache/side-tabs-entrance/original-api-data")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-side-tab-first-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
         let model = try AppModel(store: TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path))
         let frame = CGRect(x: 500, y: 100, width: 364, height: 620)
         let motionPanel = DotistPanel(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
         let parent = SideTabOpeningSampleParent(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
         motionPanel.isReleasedWhenClosed = false; parent.isReleasedWhenClosed = false
         let motion = PanelMotion(model: model, panel: motionPanel, size: frame.size, title: { "" })
-        let controller = SideTabsController(parent: parent, model: model, state: TaskPanelState(), motion: motion)
+        // Sample the first production synchronization, independent of desktop
+        // accessibility settings, pointer position and elapsed rendering time.
+        var environment = SideTabsController.Environment()
+        environment.time = { 1000 }
+        environment.reduceMotion = { reduceMotion }
+        environment.mouse = { CGPoint(x: -10000, y: -10000) }
+        environment.mouseButtons = { 0 }
+        environment.desktopEvents = false
+        environment.inputMonitors = false
+        let controller = SideTabsController(parent: parent, model: model, state: TaskPanelState(), motion: motion, environment: environment)
         defer { controller.stop(); motion.stop(); parent.close(); motionPanel.close() }
         let child = try XCTUnwrap(parent.childWindows?.first)
         let host = try XCTUnwrap(child.contentView)
@@ -421,7 +439,10 @@ final class SideTabOriginalAPIRegressionTests: XCTestCase {
         let screen = CGPoint(x: child.frame.midX, y: child.frame.minY + 17)
         let local = child.convertPoint(fromScreen: screen)
         let target = host.hitTest(host.superview?.convert(local, from: nil) ?? local)
-        print("FIRST OPEN SAMPLE alpha=\(child.alphaValue), window=\(child.frame), last-row-native-target=\(String(describing: target))")
-        XCTAssertNil(target, "The last row must wait for its entrance delay instead of appearing at full geometry on the first sample")
+        print("FIRST OPEN SAMPLE systemReduced=\(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion), reduced=\(reduceMotion), opacities=\(controller.renderedRows.map(\.opacity)), last-row-native-target=\(target != nil)")
+        XCTAssertFalse(controller.renderedRows.isEmpty)
+        XCTAssertTrue(controller.renderedRows.allSatisfy { $0.opacity == (reduceMotion ? 1 : 0) })
+        if reduceMotion { XCTAssertNotNil(target, "Reduced Motion must present the last row immediately") }
+        else { XCTAssertNil(target, "The last row must wait for its entrance delay instead of appearing at full geometry on the first sample") }
     }
 }

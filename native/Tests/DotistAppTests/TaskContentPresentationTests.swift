@@ -27,6 +27,77 @@ final class TaskContentPresentationTests: XCTestCase {
         }
     }
 
+    func testLogicalMotionOverrideControlsBothSwiftUIAccessibilityValues() async throws {
+        // SwiftUI's public getter is read-only. Its backing environment key lets
+        // this fixture exercise either value without changing desktop settings.
+        for reduced in [false, true] {
+            let clock = LayoutMotionTestClock(reduceMotion: reduced)
+            defer { clock.restore() }
+            for environment in [false, true] {
+                let state = TaskPanelState(scope: "all")
+                let fixture = NativeRenderingFixture(Swatch(state: state)
+                    .environment(\._accessibilityReduceMotion, environment), size: CGSize(width: 240, height: 160))
+                defer { fixture.close() }
+                _ = try await fixture.capture(scale: 2)
+                let surface = try XCTUnwrap(fixture.descendants(TaskContentTransitionView.self).first)
+                state.scope = "today"
+                _ = try await fixture.capture(scale: 2)
+                XCTAssertEqual(surface.outgoingOpacity, reduced ? 0 : 1)
+                try await clock.advance(by: 0.06)
+                let image = try await fixture.capture(scale: 2)
+                if reduced { XCTAssertEqual(surface.outgoingOpacity, 0) }
+                else {
+                    XCTAssertGreaterThan(surface.outgoingOpacity, 0.5)
+                    XCTAssertLessThan(surface.outgoingOpacity, 1)
+                    let pixel = try XCTUnwrap(image.colorAt(x: 120, y: 100)?.usingColorSpace(.deviceRGB))
+                    XCTAssertGreaterThan(pixel.redComponent, 0.1, "Outgoing pixels remain visible")
+                    XCTAssertGreaterThan(pixel.blueComponent, 0.05, "Incoming pixels are visible too")
+                }
+                try await clock.advance(by: 0.2)
+                _ = try await fixture.capture(scale: 2)
+                XCTAssertEqual(surface.outgoingOpacity, 0)
+            }
+        }
+    }
+
+    private struct EnvironmentReport: View {
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        let report: (Bool) -> Void
+        var body: some View { Color.clear.onAppear { report(reduceMotion) } }
+    }
+
+    func testLiveReduceMotionIsRespectedAndFixtureOverridesAreRestored() async throws {
+        XCTAssertNil(LayoutMotionInputs.testOverride, "A previous test leaked its motion override")
+        let state = TaskPanelState(scope: "all")
+        let report = NativeRenderingFixture(EnvironmentReport { environment in
+            print("NATIVE_MOTION_ENV system=\(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) swiftUI=\(environment) override=\(LayoutMotionInputs.testOverride != nil) screens=\(NSScreen.screens.count) backing=\(NSScreen.main?.backingScaleFactor ?? 0)")
+        }, size: CGSize(width: 40, height: 40))
+        defer { report.close() }
+        _ = try await report.capture(scale: 1)
+        do {
+            let reduced = LayoutMotionTestClock(reduceMotion: true)
+            defer { reduced.restore() }
+            do {
+                let normal = LayoutMotionTestClock()
+                defer { normal.restore() }
+                XCTAssertFalse(LayoutMotionInputs.shouldReduceMotion(true))
+            }
+            XCTAssertTrue(LayoutMotionInputs.shouldReduceMotion(false))
+        }
+        XCTAssertNil(LayoutMotionInputs.testOverride)
+        // With no test override, a true SwiftUI accessibility value must still
+        // suppress motion, irrespective of the host's system preference.
+        let fixture = NativeRenderingFixture(Swatch(state: state)
+            .environment(\._accessibilityReduceMotion, true), size: CGSize(width: 240, height: 160))
+        defer { fixture.close() }
+        _ = try await fixture.capture(scale: 2)
+        state.scope = "today"
+        _ = try await fixture.capture(scale: 2)
+        let surface = try XCTUnwrap(fixture.descendants(TaskContentTransitionView.self).first)
+        XCTAssertEqual(surface.outgoingOpacity, 0)
+        XCTAssertEqual(surface.opacity?.value, 1)
+    }
+
     func testOutgoingPixelsCrossfadeWithIncomingAndRapidChangeRetargetsComposite() async throws {
         let clock = LayoutMotionTestClock()
         defer { clock.restore() }

@@ -12,7 +12,7 @@ final class BubbleLayoutTests: XCTestCase {
 
     override func setUp() async throws {
         _ = NSApplication.shared
-        print("Bubble capture environment: WindowServer displays=\(NSScreen.screens.count)")
+        print("Bubble capture environment: WindowServer displays=\(NSScreen.screens.count), backingScales=\(NSScreen.screens.map(\.backingScaleFactor)), reduceMotion=\(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion), reduceTransparency=\(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency), increaseContrast=\(NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast)")
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         DotistDesign.registerFonts(in: repo.appendingPathComponent(".cache/native-migration/fonts"))
     }
@@ -91,6 +91,70 @@ final class BubbleLayoutTests: XCTestCase {
         bitmap.bitmapData?.initialize(repeating: 0, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
         host.cacheDisplay(in: host.bounds, to: bitmap)
         return bitmap
+    }
+
+    private func silhouetteMask(width: CGFloat, reveal: CGFloat, onRight: Bool, scale: CGFloat,
+                                screen: NSScreen? = nil) throws -> NSBitmapImageRep {
+        let shape = FloatingPanelShape(compact: true, transitioning: false, onRight: onRight, reveal: reveal)
+        let host = DotistHostingView(rootView: Color.white.clipShape(shape).frame(width: width, height: 48)
+            .environment(\.displayScale, scale))
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: width, height: 48),
+            styleMask: [.borderless], backing: .buffered, defer: false, screen: screen)
+        window.isReleasedWhenClosed = false
+        window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false
+        defer { window.close() }
+        window.contentView = host
+        host.frame = CGRect(x: 0, y: 0, width: width, height: 48)
+        host.layoutSubtreeIfNeeded(); host.display()
+        // cacheDisplay can resample a backing-scale raster. ImageRenderer at
+        // the requested output scale has a different alpha footprint, even for
+        // this plain white clip. Use the same AppKit path for the independent
+        // silhouette; it contains no production material or bubble content.
+        return try snapshot(host, scale: scale)
+    }
+
+    private func exterior(_ image: NSBitmapImageRep, mask: NSBitmapImageRep) -> (alpha: CGFloat, pixels: [String]) {
+        var alpha: CGFloat = 0
+        var pixels: [String] = []
+        for y in 0..<image.pixelsHigh {
+            for x in 0..<image.pixelsWide {
+                let boundary = (-1...1).contains { dy in (-1...1).contains { dx in
+                    let mx = x + dx, my = y + dy
+                    return mx >= 0 && my >= 0 && mx < mask.pixelsWide && my < mask.pixelsHigh
+                        && (mask.colorAt(x: mx, y: my)?.alphaComponent ?? 0) > 0
+                } }
+                if !boundary {
+                    let value = image.colorAt(x: x, y: y)?.alphaComponent ?? 0
+                    alpha = max(alpha, value)
+                    if value > 0 && pixels.count < 32 { pixels.append("\(x),\(y):\(value)") }
+                }
+            }
+        }
+        return (alpha, pixels)
+    }
+
+    func testWindowBackedSilhouetteOracleRejectsOffsetPlateAtBothScales() async throws {
+        for scale: CGFloat in [1, 2] {
+            for onRight in [false, true] {
+                for reveal: CGFloat in [0, 0.3, 1] {
+                    let width: CGFloat = 112
+                    let shape = FloatingPanelShape(compact: true, transitioning: false, onRight: onRight, reveal: reveal)
+                    let valid = NativeRenderingFixture(Color.white.clipShape(shape).frame(width: width, height: 48)
+                        .environment(\.displayScale, scale), size: CGSize(width: width, height: 48))
+                    defer { valid.close() }
+                    let mask = try silhouetteMask(width: width, reveal: reveal, onRight: onRight, scale: scale, screen: valid.window.screen)
+                    let image = try await valid.capture(scale: scale)
+                    XCTAssertEqual(exterior(image, mask: mask).alpha, 0, "A correctly clipped native raster must pass at \(scale)x")
+                    let plate = NativeRenderingFixture(Color.white.clipShape(shape)
+                        .overlay(alignment: .topLeading) { Color.red.frame(width: 8, height: 8) }
+                        .frame(width: width, height: 48).environment(\.displayScale, scale), size: CGSize(width: width, height: 48))
+                    defer { plate.close() }
+                    let invalid = try await plate.capture(scale: scale)
+                    XCTAssertEqual(exterior(invalid, mask: mask).alpha, 1, "The oracle must still reject an opaque offset plate")
+                }
+            }
+        }
     }
 
     /// Keep the failing first capture as the assertion's input. Additional draws
@@ -235,28 +299,12 @@ final class BubbleLayoutTests: XCTestCase {
                             XCTAssertEqual(visibleCount.midY, 24, accuracy: 0.5, "Final composite count axis: \(label)")
                             XCTAssertEqual(visibleText.minX, onRight ? 12 : 66, accuracy: 2, label)
                         }
-                        // Expected production silhouette, independently rasterized, with
-                        // one pixel tolerance for native continuous-corner antialiasing.
-                        let maskRenderer = ImageRenderer(content: Color.white.clipShape(FloatingPanelShape(compact: true,
-                            transitioning: false, onRight: onRight, reveal: reveal)).frame(width: width, height: 48))
-                        maskRenderer.scale = scale
-                        let mask = NSBitmapImageRep(cgImage: try XCTUnwrap(maskRenderer.cgImage))
-                        var exteriorAlpha: CGFloat = 0
-                        var exteriorPixels: [String] = []
-                        for y in 0..<composite.pixelsHigh {
-                            for x in 0..<composite.pixelsWide {
-                                let boundary = (-1...1).contains { dy in (-1...1).contains { dx in
-                                    let mx = x + dx, my = y + dy
-                                    return mx >= 0 && my >= 0 && mx < mask.pixelsWide && my < mask.pixelsHigh
-                                        && (mask.colorAt(x: mx, y: my)?.alphaComponent ?? 0) > 0
-                                } }
-                                if !boundary {
-                                    let alpha = composite.colorAt(x: x, y: y)?.alphaComponent ?? 0
-                                    exteriorAlpha = max(exteriorAlpha, alpha)
-                                    if alpha > 0 && exteriorPixels.count < 32 { exteriorPixels.append("\(x),\(y):\(alpha)") }
-                                }
-                            }
-                        }
+                        // Independent native silhouette, retaining the existing
+                        // one-output-pixel tolerance and exact zero exterior alpha.
+                        let mask = try silhouetteMask(width: width, reveal: reveal, onRight: onRight, scale: scale, screen: motion.panel.screen)
+                        let outside = exterior(composite, mask: mask)
+                        let exteriorAlpha = outside.alpha
+                        let exteriorPixels = outside.pixels
                         if exteriorAlpha != 0 {
                             print("Bubble exterior pixels \(label): \(exteriorPixels)")
                             saveFailureDiagnostics(composite, motion: motion, scale: scale, label: label + "-exterior", output: output, expectedOnRight: onRight)
