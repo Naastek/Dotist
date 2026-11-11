@@ -1,4 +1,5 @@
 import AppKit
+import DotistCore
 import SwiftUI
 
 struct RangeCalendar: View {
@@ -14,8 +15,9 @@ struct RangeCalendar: View {
     @State private var hover: String?
     @State private var keyboardDate: String?
     private var calendar: Calendar {
+        // Same week start as the date filters: the system setting, not the UI language.
         var value = Calendar(identifier: .gregorian)
-        value.firstWeekday = model.language == "en" ? 1 : 2
+        value.firstWeekday = Calendar.current.firstWeekday
         return value
     }
     private var first: Date { calendar.date(from: calendar.dateComponents([.year, .month], from: month))! }
@@ -27,13 +29,24 @@ struct RangeCalendar: View {
         let formatter = DateFormatter(); formatter.locale = Locale(identifier: model.language); formatter.setLocalizedDateFormatFromTemplate(pattern)
         return formatter.string(from: date)
     }
-    private var quick: [(String, String, String)] {
-        let today = calendar.startOfDay(for: Date())
-        let weekday = calendar.component(.weekday, from: today)
-        let monday = calendar.date(byAdding: .day, value: -((weekday + 5) % 7), to: today)!
-        func add(_ date: Date, _ n: Int) -> String { calendar.date(byAdding: .day, value: n, to: date)!.dotistDay }
-        if single { return [("今天", today.dotistDay, today.dotistDay), ("明天", add(today, 1), add(today, 1)), ("下周一", add(monday, 7), add(monday, 7))] }
-        return [("今天", today.dotistDay, today.dotistDay), ("明天", add(today, 1), add(today, 1)), ("本周", monday.dotistDay, add(monday, 6)), ("下周", add(monday, 7), add(monday, 13)), ("未来 7 天", today.dotistDay, add(today, 6))]
+    private var quick: [(String, String, String)] { Self.quickRanges(single: single) }
+
+    /// Shortcut ranges come from TaskFiltering so "本周" here and in the panel filter agree.
+    static func quickRanges(single: Bool, now: Date = Date(), calendar: Calendar = .current) -> [(String, String, String)] {
+        let ranges = TaskFiltering([], now: now, calendar: calendar)
+        func pair(_ label: String, _ scope: String) -> (String, String, String) {
+            let range = ranges.range(scope: scope)
+            return (label, range.start, range.end)
+        }
+        let today = pair("今天", "today"), tomorrow = pair("明天", "tomorrow")
+        guard !single else {
+            // "下周一" names a weekday, so it stays the Monday of next week whatever the week start.
+            let next = ranges.range(scope: "nextweek").start
+            let offset = (2 - calendar.firstWeekday + 7) % 7
+            let monday = Calendar(identifier: .gregorian).date(byAdding: .day, value: offset, to: Date.dotistDay(next) ?? now)!.dotistDay
+            return [today, tomorrow, ("下周一", monday, monday)]
+        }
+        return [today, tomorrow, pair("本周", "week"), pair("下周", "nextweek"), pair("未来 7 天", "next7")]
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
