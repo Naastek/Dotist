@@ -455,7 +455,10 @@ final class PanelShadowTests: XCTestCase {
         panel.contentView = view
         view.refresh()
         let firstCount = panel.invalidations
-        try await Task.sleep(for: .milliseconds(100))
+        // Wait for the refresh ticks rather than a fixed 100 ms: slow runners deliver fewer.
+        for _ in 0..<50 where panel.invalidations <= firstCount + 1 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         XCTAssertGreaterThan(panel.invalidations, firstCount + 1, "Invalidate after glass commits and on each reveal/tint animation tick")
         try await Task.sleep(for: .milliseconds(450))
         let settledCount = panel.invalidations
