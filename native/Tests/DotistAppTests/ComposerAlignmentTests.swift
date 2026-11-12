@@ -23,6 +23,39 @@ final class ComposerAlignmentTests: XCTestCase {
         XCTAssertLessThanOrEqual(rect.height, 24)
     }
 
+    func testComposerFieldGeometry() {
+        for width: CGFloat in [320, 364, 454] {
+            for groupWidth: CGFloat in [45, 500] {
+                let bounds = CGRect(x: 16, y: 14, width: width - 24, height: 24)
+                let frames = ComposerLayout.frames(in: bounds, groupWidth: groupWidth, dateWidth: 64)
+                XCTAssertEqual(frames.field.minX - frames.group.maxX, 10, accuracy: 0.001)
+                XCTAssertEqual(frames.field.maxX, width - 8, accuracy: 0.001)
+                XCTAssertEqual(frames.field.height, 36)
+                XCTAssertEqual(frames.input.minX - frames.field.minX, 12, accuracy: 0.001)
+                XCTAssertGreaterThanOrEqual(frames.date.minX - frames.input.maxX, 8)
+                XCTAssertEqual(frames.field.maxX - frames.date.maxX, 10, accuracy: 0.001)
+                XCTAssertTrue(frames.field.contains(frames.date))
+            }
+        }
+    }
+
+    func testFocusDoesNotMoveComposerInput() async throws {
+        let content = ComposerLayout {
+            ComposerGroupLabel(title: "All", language: "en")
+            ComposerInput(text: .constant(""), focused: .constant(false), placeholder: "New task", label: "New task",
+                font: DotistDesign.nativeFont(13, language: "en"), commit: {}, navigate: { _ in false }, complete: { _ in false })
+            ComposerCalendarIcon()
+        }.padding(.leading, 16).padding(.trailing, 8).frame(width: 320, height: 52)
+        let fixture = NativeRenderingFixture(content, size: CGSize(width: 320, height: 52), simulatedBackingScale: 2)
+        defer { fixture.close() }
+        let field = try XCTUnwrap(fixture.descendants(ComposerTextField.self).first)
+        _ = try await fixture.capture(scale: 2)
+        let before = fixture.host.convert(field.bounds, from: field)
+        XCTAssertTrue(fixture.window.makeFirstResponder(field))
+        _ = try await fixture.capture(scale: 2)
+        XCTAssertEqual(fixture.host.convert(field.bounds, from: field), before)
+    }
+
     func testNativeUndoRoutingPreservesEveryTextEditor() throws {
         func key(_ flags: NSEvent.ModifierFlags, characters: String = "z") throws -> NSEvent {
             try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,

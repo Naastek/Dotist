@@ -221,7 +221,7 @@ struct SettingsWindow: View {
                 boolRow("失焦淡出", value: model.settings.idleFade) { $0.idleFade = $1 }
                 numberRow("淡出前等待", value: Double(model.settings.idleDelaySecs), range: 1...60) { $0.idleDelaySecs = UInt8($1.rounded()) }
                 numberRow("淡出用时", value: Double(model.settings.idleFadeSecs), range: 1...10) { $0.idleFadeSecs = UInt8($1.rounded()) }
-                numberRow("失焦后整窗透明度", value: DotistTransparency.value(opacity: model.settings.idleOpacity), range: 0...80, unit: "%") { $0.idleOpacity = DotistTransparency.opacity(value: $1) }
+                numberRow("失焦后内容透明度", value: DotistTransparency.value(opacity: model.settings.idleOpacity), range: 0...80, unit: "%") { $0.idleOpacity = DotistTransparency.opacity(value: $1) }
             }
         }
     }

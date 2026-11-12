@@ -311,7 +311,7 @@ final class BubbleLayoutTests: XCTestCase {
                         }
                         XCTAssertEqual(exteriorAlpha, 0, "No offset plate outside the real window-backed capsule: \(label)")
                         XCTAssertFalse(motion.panel.hasShadow, "Compact panels have no window shadow")
-                        XCTAssertTrue(motion.panel.childWindows?.isEmpty ?? true)
+                        XCTAssertEqual(motion.panel.childWindows?.count, 1)
                     }
                     motion.setHover(false, in: area)
                     motion.finishHover(false)
@@ -363,7 +363,7 @@ final class BubbleLayoutTests: XCTestCase {
                     XCTAssertEqual(text.minX, onRight ? 12 : 66, accuracy: 2)
                 }
                 XCTAssertFalse(motion.panel.hasShadow, "Compact panels have no window shadow")
-                XCTAssertTrue(motion.panel.childWindows?.isEmpty ?? true)
+                XCTAssertEqual(motion.panel.childWindows?.count, 1)
             }
         }
     }

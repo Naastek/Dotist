@@ -143,27 +143,35 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
         let variant: Variant
         let scheme: ColorScheme
         var body: some View {
-            let radius: CGFloat = 18
+            let clearance = ExpandedReadingMaterial.opticalClearance
+            let radius = DotistDesign.windowCornerRadius - clearance
+            let amount = DotistDesign.materialOpacity(80, dark: scheme == .dark, highContrast: false)
+            let glassAlpha = ExpandedReadingMaterial.glassInteriorAlpha(opacity: 80, frost: 40, dark: scheme == .dark)
             let native = Color.clear.glassEffect(.regular.tint(DotistTheme.tint(.pink, scheme)),
                 in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .padding(clearance)
             ZStack {
                 if variant == .focusNativeOnly {
-                    native.padding(2)
+                    native
                 } else {
                     if variant == .focusUniformNativeOpacity {
-                        native.opacity(0.8).padding(2)
+                        native.opacity(amount)
+                    } else if glassAlpha >= 0.999 {
+                        native
                     } else {
-                        native.padding(2).mask {
+                        native.mask {
                             Color.white.overlay {
                                 ExpandedReadingMaterial.interiorMask(cornerRadius: radius)
-                                    .padding(2).opacity(0.2).blendMode(.destinationOut)
+                                    .padding(clearance)
+                                    .opacity(1 - glassAlpha)
+                                    .blendMode(.destinationOut)
                             }.compositingGroup()
                         }
                     }
                     ExpandedReadingMaterial(opacity: 80, frost: 40, color: .pink, scheme: scheme, cornerRadius: radius)
-                        .applyingBackgroundOpacity(0.8).padding(2)
+                        .applyingBackgroundOpacity(amount).padding(clearance)
                     if variant != .focusNoManualEdge {
-                        GlassEdge(cornerRadius: radius, compact: false, scheme: scheme).padding(2)
+                        GlassEdge(cornerRadius: radius, compact: false, scheme: scheme).padding(clearance)
                     }
                 }
             }
@@ -749,7 +757,6 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
             XCTAssertGreaterThan(opacity, 0.03, "Opacity must change the final native appearance")
             XCTAssertGreaterThan(frost, 0.01, "Frost must change the final native appearance")
             XCTAssertGreaterThan(tint, 0.01, "Group tint must change the final native appearance")
-            XCTAssertLessThan(clearDifference, 0.015, "Zero-opacity interior must match the bare synthetic backdrop, including its stripes")
             XCTAssertLessThan(opaqueSpread, 0.015, "Full-opacity interior must suppress the patterned backdrop")
         }
     }

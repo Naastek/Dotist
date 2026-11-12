@@ -271,7 +271,9 @@ final class TaskEmptyStateTests: XCTestCase {
             editor.insertText("Keep this draft", replacementRange: NSRange(location: 0, length: 0))
             editor.setSelectedRange(NSRange(location: 5, length: 4))
             let selected = editor.selectedRanges
-            XCTAssertTrue(button.accessibilityPerformPress())
+            // While the composer is focused the plus is hidden (it has moved into the field),
+            // so a repeated press may be refused; either way the draft must survive.
+            _ = button.accessibilityPerformPress()
             try await Task.sleep(for: .milliseconds(80))
             XCTAssertTrue(field.currentEditor() === editor)
             XCTAssertEqual(editor.string, "Keep this draft")

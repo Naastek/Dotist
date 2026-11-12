@@ -107,6 +107,33 @@ extension MainWindow {
         }, failed: { editSaving = false; pendingEdit = nil }) { _ = try $0.patchTask(id: task.id, title: title) }
     }
 
+    var composerGlass: some View {
+        GeometryReader { geometry in
+            if let input = composerFrames["input"] {
+                let field = CGRect(x: input.minX - 12, y: input.midY - 18,
+                                   width: max(0, geometry.size.width - 8 - input.minX + 12), height: 36)
+                let source = composerFrames["plus"] ?? field
+                let rect = composerFlight && !composerFlightAtField ? source : field
+                // 12 = panel corner radius 20 minus the 8pt edge margin, so the field's
+                // trailing corner is concentric with the panel's.
+                let radius: CGFloat = composerFlight && !composerFlightAtField ? 6 : 12
+                Group {
+                    if reduceTransparency || contrast == .increased {
+                        RoundedRectangle(cornerRadius: radius).fill(DotistDesign.surface)
+                            .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(DotistDesign.accent.opacity(0.5), lineWidth: 1))
+                    } else {
+                        Color.clear.glassEffect(.regular, in: .rect(cornerRadius: radius))
+                    }
+                }
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+                .opacity(composerFocused || composerFlight ? 1 : 0)
+                .animation(composerFlight || LayoutMotionInputs.shouldReduceMotion(reduceMotion) ? nil : .easeOut(duration: composerFocused ? 0.2 : 0.15), value: composerFocused)
+                .allowsHitTesting(false).accessibilityHidden(true)
+            }
+        }
+    }
+
     var composerBar: some View {
         let selectedID = dropGroupIDs.contains(category) ? category : DotistGroup.inboxID
         let selectedName = model.composerGroupDisplayName(selectedID)
@@ -124,7 +151,7 @@ extension MainWindow {
                 HStack(spacing: 4) {
                     ComposerGroupLabel(title: selectedName, language: model.language, sample: composer.isEmpty ? model.text("写下一件小事") : composer.components(separatedBy: .newlines).first ?? "")
                 }.foregroundColor(DotistDesign.muted).frame(height: ComposerMetrics.rowHeight)
-            }.menuStyle(.borderlessButton).menuIndicator(.hidden).focusEffectDisabled().fixedSize().frame(height: ComposerMetrics.rowHeight).help(model.text("分组")).accessibilityLabel(Text(model.text("分组"))).accessibilityValue(Text(selectedName)).accessibilityIdentifier("composer-group")
+            }.menuStyle(.borderlessButton).menuIndicator(.hidden).focusEffectDisabled().frame(maxWidth: .infinity, alignment: .leading).frame(height: ComposerMetrics.rowHeight).clipped().help(model.text("分组")).accessibilityLabel(Text(model.text("分组"))).accessibilityValue(Text(selectedName)).accessibilityIdentifier("composer-group")
             ZStack(alignment: .leading) {
                 ComposerInput(text: $composer, focused: $composerFocused, placeholder: model.text("写下一件小事"), label: model.text("新任务"), font: DotistDesign.nativeFont(ComposerMetrics.fontSize, language: model.language), commit: addTask, navigate: { direction in
                     let values = tagSuggestions
@@ -132,7 +159,9 @@ extension MainWindow {
                     selectedSuggestion = (selectedSuggestion + direction + values.count) % values.count
                     return true
                 }, complete: { force in chooseSuggestion(force: force) }).tint(DotistDesign.accent).frame(height: ComposerMetrics.rowHeight)
-                    .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(DotistDesign.accent.opacity(composerCueVisible ? 0.5 : 0), lineWidth: 1).allowsHitTesting(false) }
+                    .background(GeometryReader { geometry in
+                        Color.clear.preference(key: ComposerFrameKey.self, value: ["input": geometry.frame(in: .named(Self.listSpace))])
+                    })
                     .accessibilityIdentifier("composer-input")
                 if !tagSuggestions.isEmpty {
                     VStack(alignment: .leading, spacing: 0) {
@@ -158,7 +187,7 @@ extension MainWindow {
                     RangeCalendar(model: model, start: shownDue ?? "", end: shownDue ?? "", choose: { date, _ in dueDate = Date.dotistDay(date); showDuePicker = false }, close: { showDuePicker = false }, single: true, clear: { dueDate = nil; showDuePicker = false })
                 }
 
-        }.padding(.leading, 16).padding(.trailing, 11).frame(height: ComposerMetrics.barHeight).onHover { composerHovered = $0 }.overlay(alignment: .top) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5) }
+        }.padding(.leading, 16).padding(.trailing, 8).frame(height: ComposerMetrics.barHeight).onHover { composerHovered = $0 }.overlay(alignment: .top) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5) }
             #if DEBUG
             .background(ComposerBarLayoutAnchor().allowsHitTesting(false).accessibilityHidden(true))
             #endif

@@ -13,6 +13,18 @@ final class SideTabGeometryTests: XCTestCase {
             XCTAssertEqual(first.minY - second.maxY, 6)
         }
     }
+    func testPaintedOutwardFrameOverlapsWithoutChangingHitRegion() {
+        let panel = CGRect(x: 500, y: 100, width: 364, height: 620)
+        XCTAssertEqual(SideTabGeometry.attachmentOverlap, ExpandedReadingMaterial.opticalClearance + 1)
+        for width: CGFloat in [2, 10, 15, 48, 120] {
+            let hit = SideTabGeometry.frame(panel: panel, index: 1, width: width, inward: false, offsetY: 12)
+            let painted = SideTabGeometry.paintedFrame(hit, inward: false)
+            XCTAssertEqual(hit.maxX, panel.minX)
+            XCTAssertEqual(painted.maxX, panel.minX + SideTabGeometry.attachmentOverlap)
+            XCTAssertEqual(panel.minX - painted.minX, width)
+            XCTAssertEqual(SideTabGeometry.paintedFrame(hit, inward: true), hit)
+        }
+    }
     func testWidthsFollowTextAndExpansion() {
         XCTAssertEqual(SideTabGeometry.expandedWidth(textWidth: 10), 48)
         XCTAssertEqual(SideTabGeometry.expandedWidth(textWidth: 82.2), 111)
@@ -666,7 +678,7 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
             controller.synchronize(mouse: mouse)
         }
-        XCTAssertEqual(child.frame.width, width, accuracy: 0.001)
+        XCTAssertEqual(child.frame.width, width + SideTabGeometry.attachmentOverlap, accuracy: 0.001)
         // Every move triggers AppKit didMove. Keep the pointer on the new tab so
         // ordinary mouse-leave collapse cannot mask a forced direction collapse.
         for step in 0..<40 {
@@ -685,8 +697,8 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         }
         parent.setFrameOrigin(CGPoint(x: area.minX + width + 81, y: parent.frame.minY))
         controller.synchronize(mouse: CGPoint(x: parent.frame.minX - 5, y: parent.frame.maxY - 50))
-        XCTAssertEqual(child.frame.maxX, parent.frame.minX, accuracy: 0.001)
-        XCTAssertEqual(child.frame.width, width, accuracy: 0.001)
+        XCTAssertEqual(child.frame.maxX, parent.frame.minX + SideTabGeometry.attachmentOverlap, accuracy: 0.001)
+        XCTAssertEqual(child.frame.width, width + SideTabGeometry.attachmentOverlap, accuracy: 0.001)
         try assertOrderedAbove(parent, child)
     }
 
@@ -719,10 +731,11 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
                 .map { SideTabGeometry.expandedWidth(name: $0, language: model.language) }.max() ?? 10
             placement.update(availableSpace: frame.minX - visibleMinX, expandedWidth: maxWidth)
             let inward = placement.inward
-            XCTAssertEqual(child.frame, SideTabGeometry.snapshot(panel: frame,
+            let sample = SideTabGeometry.snapshot(panel: frame,
                 fullWidths: Array(repeating: SideTabGeometry.collapsedWidth, count: model.visibleGroups.count + 1),
                 progress: 0, inward: inward, visibleMinX: visibleMinX, selectedIndex: 0,
-                entrance: Array(repeating: 0, count: model.visibleGroups.count + 1)).window, file: file, line: line)
+                entrance: Array(repeating: 0, count: model.visibleGroups.count + 1))
+            XCTAssertEqual(child.frame, SideTabGeometry.paintedFrame(sample.window, inward: inward), file: file, line: line)
         }
         assertAttached()
         for frame in [CGRect(x: 700, y: 170, width: 364, height: 620),

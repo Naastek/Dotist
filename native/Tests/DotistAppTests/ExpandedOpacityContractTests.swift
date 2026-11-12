@@ -22,44 +22,26 @@ final class ExpandedOpacityContractTests: XCTestCase {
         return NSBitmapImageRep(cgImage: try XCTUnwrap(context.makeImage()))
     }
 
-    func testCompleteBackgroundHonorsOpacityBudgetIncludingFrostAndGroupTint() async throws {
+    func testGlassAndReadingCompositionAtEachOpacity() async throws {
         _ = NSApplication.shared
-        for scheme in [ColorScheme.light, .dark] {
-            for color in [DotistGroupColor.none, .orange, .pink] {
-                for opacity: UInt8 in [0, 4, 38, 80, 95, 100] {
-                    for frost: UInt8 in [0, 40, 100] {
-                        let fixture = NativeRenderingFixture(FloatingPanelSurface(opacity: opacity, frost: frost, compact: false,
-                            color: color, solid: false, scheme: scheme).frame(width: 300, height: 120)
-                            .environment(\.colorScheme, scheme), size: size)
-                        fixture.window.isOpaque = false; fixture.window.backgroundColor = .clear
-                        let image = try await fixture.capture(scale: 1)
-                        fixture.close()
-                        for (x, y) in [(60, 25), (150, 60), (240, 95)] {
-                            let alpha = try XCTUnwrap(image.colorAt(x: x, y: y)).alphaComponent
-                            XCTAssertLessThanOrEqual(alpha, CGFloat(opacity) / 100 + 2.0 / 255,
-                                "The complete background must fit the opacity budget: \(scheme), \(color), opacity=\(opacity), frost=\(frost)")
-                            if opacity == 0 { XCTAssertEqual(alpha, 0, accuracy: 1.0 / 255) }
-                            if opacity == 100 { XCTAssertGreaterThan(alpha, 0.98) }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Same full-background reference as the existing pre-edge contract, now
-    /// exercised at intermediate opacity and with independent foreground ink.
-    func testNativeWindowCompositionMatchesLegacyCenterAndKeepsTextOpaque() async throws {
-        _ = NSApplication.shared
-        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        let radius = DotistDesign.windowCornerRadius - ExpandedReadingMaterial.opticalClearance
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         for scheme in [ColorScheme.light, .dark] {
             for opacity: UInt8 in [0, 4, 38, 80, 95, 100] {
-                let amount = Double(opacity) / 100
-                let control = Color.clear.glassEffect(.regular.tint(DotistTheme.tint(.pink, scheme)), in: shape)
-                    .overlay(DotistDesign.paper.opacity(amount).overlay(DotistDesign.paper.opacity(0.4 * 0.12)))
-                    .overlay(DotistTheme.swatch(.pink).opacity(scheme == .dark ? 0.18 : 0.16))
-                    .opacity(amount).clipShape(shape)
-                    .frame(width: 300, height: 120).environment(\.colorScheme, scheme)
+                let amount = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
+                let glassAlpha = 1 - 0.6 * (1 - amount)
+                let control = ZStack {
+                    Color.clear.glassEffect(.regular.tint(DotistTheme.tint(.pink, scheme)), in: shape)
+                        .mask {
+                            Color.white.overlay {
+                                shape.inset(by: 3).fill(.white).blur(radius: 1)
+                                    .clipShape(shape.inset(by: 1))
+                                    .opacity(1 - glassAlpha).blendMode(.destinationOut)
+                            }.compositingGroup()
+                        }
+                    ExpandedReadingMaterial(opacity: opacity, frost: 40, color: .pink, scheme: scheme, cornerRadius: radius)
+                        .applyingBackgroundOpacity(amount)
+                }.padding(ExpandedReadingMaterial.opticalClearance).environment(\.colorScheme, scheme)
                 let reference = NativeRenderingFixture(control, size: size)
                 reference.window.isOpaque = false; reference.window.backgroundColor = .clear
                 let expected = try await reference.capture(scale: 1)
@@ -67,8 +49,7 @@ final class ExpandedOpacityContractTests: XCTestCase {
                 let content = Text("Readable sample text").font(.system(size: 16)).foregroundStyle(DotistDesign.ink)
                     .frame(width: 300, height: 120)
                     .background(FloatingPanelSurface(opacity: opacity, frost: 40, compact: false,
-                        color: .pink, solid: false, scheme: scheme))
-                    .environment(\.colorScheme, scheme)
+                        color: .pink, solid: false, scheme: scheme)).environment(\.colorScheme, scheme)
                 let fixture = NativeRenderingFixture(content, size: size)
                 fixture.window.isOpaque = false; fixture.window.backgroundColor = .clear
                 let actual = try await fixture.capture(scale: 1)
@@ -76,10 +57,9 @@ final class ExpandedOpacityContractTests: XCTestCase {
                 for (x, y) in [(60, 25), (150, 25), (240, 95)] {
                     let a = try XCTUnwrap(actual.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
                     let b = try XCTUnwrap(expected.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
-                    XCTAssertEqual(a.alphaComponent, b.alphaComponent, accuracy: 0.015, "Legacy center alpha at \(scheme), opacity=\(opacity)")
+                    XCTAssertEqual(a.alphaComponent, b.alphaComponent, accuracy: 0.015)
                     for (aa, bb) in [(a.redComponent, b.redComponent), (a.greenComponent, b.greenComponent), (a.blueComponent, b.blueComponent)] {
-                        XCTAssertEqual(aa * a.alphaComponent, bb * b.alphaComponent, accuracy: 0.015,
-                            "Legacy center pigment at \(scheme), opacity=\(opacity)")
+                        XCTAssertEqual(aa * a.alphaComponent, bb * b.alphaComponent, accuracy: 0.015)
                     }
                 }
                 var maxInk: CGFloat = 0

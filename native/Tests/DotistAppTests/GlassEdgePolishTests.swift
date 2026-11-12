@@ -158,7 +158,6 @@ final class GlassEdgePolishTests: XCTestCase {
                             .frame(width: size.width, height: size.height).environment(\.colorScheme, scheme), size: size)
                         let center = try sample(image, x: image.pixelsWide / 2, y: image.pixelsHigh / 2)
                         if solid { XCTAssertEqual(center.alphaComponent, 1, accuracy: 0.01) }
-                        if !compact && !solid && opacity == 0 { XCTAssertLessThan(center.alphaComponent, 0.01) }
                         if !compact && !solid && opacity == 100 { XCTAssertGreaterThan(center.alphaComponent, 0.1) }
                     }
                 }
@@ -166,18 +165,19 @@ final class GlassEdgePolishTests: XCTestCase {
         }
     }
 
-    func testExpandedNativeGlassOpacityAgainstPreEdgeControl() throws {
+    func testExpandedNativeGlassAgainstInteriorStrengthControl() throws {
         let size = CGSize(width: 364, height: 620)
         let shape = RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius, style: .continuous)
         for scheme in [ColorScheme.light, .dark] {
             for opacity in [UInt8(0), 100] {
                 let amount = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
-                // b079d6a expanded production composition, without the new edge.
+                // Interior glass with reading planes, without the edge.
                 let control = Color.clear.glassEffect(.regular.tint(DotistTheme.tint(.orange, scheme)), in: shape)
-                    .overlay(DotistDesign.paper.opacity(amount)
-                        .overlay(DotistDesign.paper.opacity(0.4 * GlassTintMaterial.expandedFrostScale)))
-                    .overlay(DotistTheme.swatch(.orange).opacity(scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint))
-                    .opacity(amount).clipShape(shape)
+                    .opacity(1 - 0.6 * (1 - amount))
+                    .overlay(DotistDesign.paper.opacity(amount * amount))
+                    .overlay(DotistDesign.paper.opacity(0.4 * GlassTintMaterial.expandedFrostScale * amount))
+                    .overlay(DotistTheme.swatch(.orange).opacity((scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint) * amount))
+                    .clipShape(shape)
                     .frame(width: size.width, height: size.height).environment(\.colorScheme, scheme)
                 let actual = FloatingPanelSurface(opacity: opacity, frost: 40, compact: false,
                     color: .orange, solid: false, scheme: scheme)
@@ -188,7 +188,7 @@ final class GlassEdgePolishTests: XCTestCase {
                 let actualAlpha = try sample(fixedBitmap(actual, size: size), x: 364, y: 620).alphaComponent
                 print("GLASS OPACITY CONTROL: scheme=\(scheme), opacity=\(opacity), baseline=\(expectedAlpha), current=\(actualAlpha)")
                 XCTAssertEqual(actualAlpha, expectedAlpha, accuracy: 0.01,
-                    "The added edge must not alter the center; compare native offscreen glass with the pre-edge control")
+                    "The added edge must not alter the center; compare native offscreen glass with the interior-strength control")
             }
         }
     }

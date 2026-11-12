@@ -24,6 +24,9 @@ final class SettingsSearchTests: XCTestCase {
         for query in ["全部", "All", "Tout", "default color"] {
             XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.target == "appearance.全部" && $0.title == "全部" }, query)
         }
+        for query in ["失焦后内容透明度", "Unfocused content transparency", "失焦後內容透明度", "Transparence du contenu lorsque la fenêtre est inactive", "Inhaltstransparenz bei inaktivem Fenster"] {
+            XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.target == "appearance.失焦后内容透明度" }, query)
+        }
         for query in ["分组便签背景透明度", "Group tab background transparency", "群組便籤背景透明度"] {
             XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.target == "appearance.分组便签背景透明度" }, query)
         }

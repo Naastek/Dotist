@@ -23,6 +23,7 @@ struct WindowShadowInvalidation: NSViewRepresentable {
 final class ShadowInvalidationView: NSView {
     private var timer: Timer?
     private var refreshDisplayLink: CADisplayLink?
+    var hasRefreshDriver: Bool { timer != nil || refreshDisplayLink != nil }
     private var deadline = Date.distantPast
     private var closed = false
     private var observations: [NSObjectProtocol] = []
@@ -33,7 +34,7 @@ final class ShadowInvalidationView: NSView {
         stop()
         closed = false
         guard let window else { return }
-        for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
+        for name in [NSWindow.didResizeNotification] {
             observations.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.refresh() }
             })
@@ -52,7 +53,7 @@ final class ShadowInvalidationView: NSView {
     }
 
     func refresh() {
-        guard !closed, let window else { return }
+        guard !closed, let window, window.hasShadow else { return }
         window.invalidateShadow()
         deadline = Date().addingTimeInterval(0.45)
         guard timer == nil, refreshDisplayLink == nil else { return }

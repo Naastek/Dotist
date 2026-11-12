@@ -11,6 +11,7 @@ final class PanelMotion: ObservableObject {
     /// user's desktop while a transition is awaiting completion.
     struct Environment {
         typealias FrameAnimation = @MainActor (DotistPanel, NSRect, TimeInterval, @escaping @MainActor () -> Void) -> Void
+        var now: @MainActor () -> Date = { Date() }
         var mouseLocation: @MainActor () -> NSPoint = { NSEvent.mouseLocation }
         var pressedMouseButtons: @MainActor () -> Int = { Int(NSEvent.pressedMouseButtons) }
         var visibleFrame: @MainActor (DotistPanel) -> NSRect? = { ($0.screen ?? NSScreen.main)?.visibleFrame }
@@ -28,6 +29,7 @@ final class PanelMotion: ObservableObject {
     }
 
     var environment: Environment
+    @Published private(set) var idleContentOpacity: Double = 1
     @Published private(set) var bubble = false
     @Published private(set) var surfaceInsets = EdgeInsets()
     @Published private(set) var hovering = false
@@ -51,7 +53,7 @@ final class PanelMotion: ObservableObject {
     private let title: () -> String
     private let bubbleContent: (() -> BubbleContent)?
     private let rememberFrame: (NSRect) -> Void
-    private var lastActive = Date()
+    private var lastActive: Date
     private var hoverClose: DispatchWorkItem?
     private var pendingHover: Bool?
     private var pendingBubbleToggle = false
@@ -60,6 +62,7 @@ final class PanelMotion: ObservableObject {
     private var stopped = false
     private var closeObservation: NSObjectProtocol?
     private var frameAnimation: PanelFrameAnimation?
+    private(set) var shadowController: PanelShadowController?
     private var insetTransition: PanelSurfaceTransition?
     private var insetObservations: [NSObjectProtocol] = []
 
@@ -67,6 +70,7 @@ final class PanelMotion: ObservableObject {
         self.model = model
         self.panel = panel
         self.environment = environment
+        lastActive = environment.now()
         expandedSize = size
         transitionSize = size
         self.title = title
@@ -75,6 +79,7 @@ final class PanelMotion: ObservableObject {
         // Match the bubble throughout the task panel lifecycle; native glass
         // keeps its own optical edge without an extra AppKit window shadow.
         panel.hasShadow = false
+        shadowController = PanelShadowController(parent: panel, motion: self)
         closeObservation = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stop() }
         }
@@ -85,11 +90,13 @@ final class PanelMotion: ObservableObject {
                     // Publish even when size is unchanged: an anchor-only move
                     // must invalidate FloatingPanelView's observed motion.
                     self.surfaceInsets = transition.insets(at: self.panel.frame)
+                    self.shadowController?.synchronize()
                 }
             })
         }
     }
     isolated deinit {
+        shadowController?.stop()
         frameAnimation?.cancel()
         hoverClose?.cancel()
         if let closeObservation { NotificationCenter.default.removeObserver(closeObservation) }
@@ -98,6 +105,7 @@ final class PanelMotion: ObservableObject {
     func stop() {
         guard !stopped else { return }
         stopped = true
+        shadowController?.stop(); shadowController = nil
         frameAnimation?.cancel(); frameAnimation = nil
         insetTransition = nil
         insetObservations.forEach { NotificationCenter.default.removeObserver($0) }
@@ -113,6 +121,7 @@ final class PanelMotion: ObservableObject {
 
     func refreshShadow() {
         guard !stopped else { return }
+        shadowController?.synchronize()
         panel.invalidateShadow()
         // SwiftUI may not have committed its glass/tint change until the next turn.
         DispatchQueue.main.async { [weak self] in
@@ -345,18 +354,19 @@ final class PanelMotion: ObservableObject {
         if bubble && hoverRequiresExit && !panel.frame.contains(environment.mouseLocation()) { hoverRequiresExit = false }
         if bubble && hovering && !panel.frame.contains(environment.mouseLocation()) && environment.pressedMouseButtons() & 1 == 0 { setHover(false) }
         let active = bubble || animationInProgress || panel.isKeyWindow || panel.frame.contains(environment.mouseLocation()) || environment.pressedMouseButtons() & 1 != 0
-        if active || prefs.locked { lastActive = Date() }
-        let idle = Date().timeIntervalSince(lastActive)
+        let now = environment.now()
+        if active || prefs.locked { lastActive = now }
+        let idle = now.timeIntervalSince(lastActive)
         if !active && !prefs.locked && prefs.autoCollapse && idle >= Double(prefs.autoCollapseSecs) {
             toggleBubble()
             return
         }
         let faded = !active && !prefs.locked && prefs.idleFade && idle >= Double(prefs.idleDelaySecs)
-        let target = faded ? CGFloat(prefs.idleOpacity) / 100 : 1
-        guard abs(panel.alphaValue - target) > 0.01 else { return }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : (faded ? Double(prefs.idleFadeSecs) : 0.12)
-            panel.animator().alphaValue = target
+        let target = faded ? Double(prefs.idleOpacity) / 100 : 1
+        guard idleContentOpacity != target else { return }
+        let duration = faded ? Double(prefs.idleFadeSecs) : 0.12
+        withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration: duration)) {
+            idleContentOpacity = target
         }
     }
 

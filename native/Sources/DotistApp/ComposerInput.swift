@@ -389,17 +389,31 @@ struct ComposerInput: NSViewRepresentable {
     }
 }
 
-/// A shared 24pt line box, used by the real bar and offscreen rendering tests.
+/// The label and controls retain the same 24 pt optical line box.
 struct ComposerLayout: Layout {
+    static func frames(in bounds: CGRect, groupWidth: CGFloat, dateWidth: CGFloat) -> (group: CGRect, field: CGRect, input: CGRect, date: CGRect) {
+        let date = min(dateWidth, max(0, bounds.width - 42))
+        let group = min(groupWidth, max(0, bounds.width - date - 70))
+        let y = bounds.midY - ComposerMetrics.rowHeight / 2
+        let fieldX = bounds.minX - 3 + group + 10
+        let field = CGRect(x: fieldX, y: bounds.midY - 18, width: max(0, bounds.maxX - fieldX), height: 36)
+        let dateX = max(fieldX + 12, bounds.maxX - 10 - date)
+        return (CGRect(x: bounds.minX - 3, y: y, width: group, height: 24), field,
+                CGRect(x: fieldX + 12, y: y, width: max(0, dateX - 8 - fieldX - 12), height: 24),
+                CGRect(x: dateX, y: y, width: date, height: 24))
+    }
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         CGSize(width: proposal.width ?? 324, height: ComposerMetrics.rowHeight)
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let date = subviews[2].sizeThatFits(.unspecified).width
-        let group = min(subviews[0].sizeThatFits(.unspecified).width, max(0, bounds.width - date - 70))
-        let y = bounds.midY - ComposerMetrics.rowHeight / 2
-        subviews[0].place(at: CGPoint(x: bounds.minX - 3, y: y), proposal: ProposedViewSize(width: group, height: ComposerMetrics.rowHeight))
-        subviews[1].place(at: CGPoint(x: bounds.minX + group + 8, y: y), proposal: ProposedViewSize(width: max(0, bounds.width - group - date - 16), height: ComposerMetrics.rowHeight))
-        subviews[2].place(at: CGPoint(x: bounds.maxX - date, y: y), proposal: ProposedViewSize(width: date, height: ComposerMetrics.rowHeight))
+        let frames = Self.frames(in: bounds, groupWidth: subviews[0].sizeThatFits(.unspecified).width, dateWidth: subviews[2].sizeThatFits(.unspecified).width)
+        for (view, frame) in zip(subviews, [frames.group, frames.input, frames.date]) {
+            view.place(at: frame.origin, proposal: ProposedViewSize(width: frame.width, height: frame.height))
+        }
     }
+}
+
+struct ComposerFrameKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) { value.merge(nextValue(), uniquingKeysWith: { _, new in new }) }
 }

@@ -290,14 +290,22 @@ extension MainWindow {
                 if context.allowsAdding {
                     Button { focusEmptyStateComposer(context) } label: {
                         TaskEmptyAddLabel()
-                            .background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(emptyAddHovered ? 0.10 : 0)))
+                            .opacity(composerFocused || composerFlight ? 0 : 1)
+                            .animation(LayoutMotionInputs.shouldReduceMotion(reduceMotion) ? nil : .easeOut(duration: composerFocused ? 0.12 : 0.15), value: composerFocused || composerFlight)
+                            .background(GeometryReader { geometry in
+                                Color.clear.preference(key: ComposerFrameKey.self, value: ["plus": geometry.frame(in: .named(Self.listSpace))])
+                            })
+                            .background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(emptyAddHovered && !composerFocused && !composerFlight ? 0.10 : 0)))
                     }.buttonStyle(.plain).modifier(DotistFocusRing())
+                        .allowsHitTesting(!composerFocused && !composerFlight)
+                        .accessibilityHidden(composerFocused || composerFlight)
                         .onHover { emptyAddHovered = $0 }
                         .accessibilityLabel(Text(model.text(TaskEmptyState.addAccessibilityLabel)))
                         .accessibilityIdentifier("empty-state-add")
                 }
             }
         }.accessibilityElement(children: .contain)
+            .onDisappear { dismissComposerCue() }
     }
 
     private func focusEmptyStateComposer(_ context: TaskEmptyState) {
@@ -305,27 +313,41 @@ extension MainWindow {
         selection.update { $0.clear() }
         category = context.groupID
         dueDate = context.dueDate.flatMap { Date.dotistDay($0) }
-        composerFocused = true
-        let generation = UUID()
-        composerCueGeneration = generation
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) { composerCueVisible = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            guard composerCueGeneration == generation else { return }
-            if reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-                composerCueVisible = false
-            } else {
-                withAnimation(.easeOut(duration: 0.2)) { composerCueVisible = false }
+        let canTravel = !LayoutMotionInputs.shouldReduceMotion(reduceMotion) && composerFrames["plus"] != nil && composerFrames["input"] != nil && !composerFlight && !composerFocused
+        if canTravel {
+            composerFlightGeneration = UUID()
+            let generation = composerFlightGeneration
+            composerFlight = true
+            composerFlightAtField = false
+            composerFocused = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) {
+                guard composerFlightGeneration == generation else { return }
+                withAnimation(.easeOut(duration: composerTravelDuration)) { composerFlightAtField = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + composerTravelDuration) {
+                    guard composerFlightGeneration == generation else { return }
+                    var transaction = Transaction(); transaction.disablesAnimations = true
+                    withTransaction(transaction) { composerFlight = false }
+                }
             }
-        }
+        } else { composerFocused = true }
+    }
+
+    func activateEmptyStateComposer() {
+        if showsEmptyState && emptyStateContext.allowsAdding { focusEmptyStateComposer(emptyStateContext) }
+        else { composerFocused = true }
+    }
+
+    var composerTravelDuration: Double {
+        guard Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa",
+              let value = ProcessInfo.processInfo.environment["DOTIST_QA_SLOW"],
+              let factor = Double(value), factor.isFinite, factor > 0 else { return 0.32 }
+        return 0.32 * factor
     }
 
     func dismissComposerCue() {
-        composerCueGeneration = UUID()
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) { composerCueVisible = false }
+        composerFlightGeneration = UUID()
+        var transaction = Transaction(); transaction.disablesAnimations = true
+        withTransaction(transaction) { composerFlight = false }
     }
 
     @ViewBuilder private var listMenu: some View {

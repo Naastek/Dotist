@@ -37,7 +37,7 @@ final class SideTabEntranceTests: XCTestCase {
         let motion = PanelMotion(model: model, panel: panel, size: panel.frame.size, title: { "" })
         let controller = SideTabsController(parent: panel, model: model, state: TaskPanelState(), motion: motion)
         defer { controller.stop(); motion.stop(); panel.close() }
-        let child = try XCTUnwrap(panel.childWindows?.first)
+        let child = try XCTUnwrap(panel.childWindows?.first { $0.identifier?.rawValue == "dotist.side-tabs" })
         let content = try XCTUnwrap(child.contentView)
         try await Task.sleep(for: .milliseconds(60))
         content.layoutSubtreeIfNeeded()
@@ -216,7 +216,7 @@ final class SideTabEntranceControllerTests: XCTestCase {
             environment.reduceMotion = { clock.reduceMotion }
             environment.desktopEvents = false
             controller = SideTabsController(parent: panel, model: model, state: state, motion: motion, environment: environment)
-            child = try XCTUnwrap(panel.childWindows?.first)
+            child = try XCTUnwrap(panel.childWindows?.first { $0.identifier?.rawValue == "dotist.side-tabs" })
         }
         func sample(_ time: Double) {
             clock.time = time

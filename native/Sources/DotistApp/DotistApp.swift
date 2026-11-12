@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import DotistCore
 import SwiftUI
+import ObjectiveC.runtime
 
 // Opt-in QA diagnostics record event routing without task text or user data.
 func shortcutTrace(_ message: String) {
@@ -39,7 +40,25 @@ struct DotistApplication {
     }
 }
 
+// Private AppKit selector, verified on macOS 27.2: keeps floating Liquid Glass lit
+// when not key. If AppKit removes it, the old inactive appearance returns.
+enum FloatingGlassAppearance {
+    static let alwaysActive = true
+    static func active(_ window: NSWindow) -> Bool {
+        guard !alwaysActive else { return true }
+        let selector = NSSelectorFromString("_hasActiveAppearance")
+        guard let method = class_getInstanceMethod(NSWindow.self, selector) else { return window.isKeyWindow }
+        typealias Implementation = @convention(c) (AnyObject, Selector) -> Bool
+        return unsafeBitCast(method_getImplementation(method), to: Implementation.self)(window, selector)
+    }
+}
+
+final class ViewsGlassWindow: NSWindow {
+    @objc(_hasActiveAppearance) func dotistHasActiveAppearance() -> Bool { FloatingGlassAppearance.active(self) }
+}
+
 final class DotistPanel: NSPanel {
+    @objc(_hasActiveAppearance) func dotistHasActiveAppearance() -> Bool { FloatingGlassAppearance.active(self) }
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }
@@ -85,6 +104,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     private var panel: DotistPanel!
     private var sideTabs: SideTabsController?
     private var viewsWindow: NSWindow?
+    private var viewsShadow: ViewsShadowController?
     private var settingsWindow: NSWindow?
     private var quickWindow: QuickPanel?
     private var searchWindow: QuickPanel?
@@ -109,7 +129,19 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DotistDesign.registerFonts()
-        do { model = try AppModel() }
+        do {
+            if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa",
+               ProcessInfo.processInfo.environment["DOTIST_QA_SEED"] == "groups" {
+                let store = try TaskStore()
+                if try store.listGroups().allSatisfy({ $0.id == DotistGroup.inboxID }) {
+                    for name in ["工作", "生活", "阅读"] {
+                        let group = try store.addGroup(name: name)
+                        try store.addTask(title: name, category: group.id)
+                    }
+                }
+                model = try AppModel(store: store)
+            } else { model = try AppModel() }
+        }
         catch {
             let alert = NSAlert()
             alert.messageText = "Dotist"
@@ -238,6 +270,16 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             self.performMenuAction("show")
             if let task { self.revealTask(task) }
         }
+        if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa", ProcessInfo.processInfo.environment["DOTIST_QA_OPEN"] == "views" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.showViews() }
+        }
+        if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa", ProcessInfo.processInfo.environment["DOTIST_QA_OPEN"] == "composer" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.panel.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                NotificationCenter.default.post(name: .init("DotistQAComposer"), object: nil)
+            }
+        }
         if model.settings.mcpEnabled { model.mcp.start() }
         idleTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.updateIdleState() }
@@ -287,6 +329,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     }
     func windowWillClose(_ notification: Notification) {
         if let window = notification.object as? NSWindow, window === viewsWindow {
+            viewsShadow?.stop(); viewsShadow = nil
             NSApp.setActivationPolicy(model.settings.showDock ? .regular : .accessory)
         }
     }
@@ -541,13 +584,13 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
 
     func showViews() {
         if viewsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+            let window = ViewsGlassWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
             window.title = model.text("任务视图")
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.isOpaque = false
             window.backgroundColor = .clear
-            window.hasShadow = true
+            window.hasShadow = false
             window.isReleasedWhenClosed = false
             window.appearance = panel.appearance
             window.delegate = self
@@ -558,7 +601,9 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         }
         NSApp.setActivationPolicy(.regular)
         viewsWindow?.level = panel.level
+        if viewsShadow == nil, let viewsWindow { viewsShadow = ViewsShadowController(parent: viewsWindow) }
         viewsWindow?.makeKeyAndOrderFront(nil)
+        viewsShadow?.synchronize()
         viewsWindow?.makeFirstResponder(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
