@@ -314,12 +314,13 @@ final class FeedbackFourRegressionTests: XCTestCase {
             _ = try await fixture.capture(scale: captureScale)
             XCTAssertLessThan(disclosureProgress, try XCTUnwrap(retargetFractions.min()))
             func waitForEnd(_ target: CGFloat) async throws {
-                let deadline = ProcessInfo.processInfo.systemUptime + 2
-                repeat {
+                // Bounded by logical time (2 s of animation clock), not wall time: each
+                // advance also waits for run-loop delivery, which is slower on CI runners.
+                for _ in 0..<100 {
                     _ = try await fixture.capture(scale: captureScale)
                     if disclosureProgress == target && !lastClock.values.contains(where: \.animating) { return }
                     try await clock.advance(by: 0.020)
-                } while ProcessInfo.processInfo.systemUptime < deadline
+                }
                 XCTFail("Disclosure did not deliver endpoint \(target)")
             }
             try await waitForEnd(0)
@@ -392,14 +393,14 @@ final class FeedbackFourRegressionTests: XCTestCase {
             }, size: CGSize(width: 364, height: 620))
         defer { fixture.close() }
         func waitFor(_ phase: String, _ condition: () -> Bool) async throws {
-            let deadline = ProcessInfo.processInfo.systemUptime + 2
-            repeat {
+            // Bounded by logical time (2 s of animation clock), not wall time.
+            for _ in 0..<100 {
                 fixture.host.layoutSubtreeIfNeeded()
                 await Task.yield()
                 fixture.host.layoutSubtreeIfNeeded()
                 if condition() { return }
                 try await clock.advance(by: 0.020)
-            } while ProcessInfo.processInfo.systemUptime < deadline
+            }
             XCTFail("Presentation did not finish: \(phase), active=\(active.count), rows=\(rows.count)")
         }
         func checkAX(_ present: Bool, phase: String) {
