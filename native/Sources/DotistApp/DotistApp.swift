@@ -21,6 +21,10 @@ func shortcutTrace(_ message: String) {
 @main
 struct DotistApplication {
     static func main() {
+        // Thin overlay scrollers that hide when idle, in every list, even when the system
+        // setting is "always" (the default once a mouse is connected). Must be set in the
+        // app's own domain before AppKit reads the preferred scroller style.
+        UserDefaults.standard.set("WhenScrolling", forKey: "AppleShowScrollBars")
         if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa" {
             let expected = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("data", isDirectory: true).standardizedFileURL.path
             let selected = ProcessInfo.processInfo.environment["DOTIST_DATA_DIR"].map { URL(fileURLWithPath: $0).standardizedFileURL.path }
@@ -66,7 +70,7 @@ final class DotistPanel: NSPanel {
 final class QuickPanel: NSPanel {
     override init(contentRect: NSRect, styleMask: NSWindow.StyleMask, backing: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: styleMask, backing: backing, defer: flag)
-        hasShadow = true
+        hasShadow = false
     }
     override var canBecomeKey: Bool { true }
     override func cancelOperation(_ sender: Any?) { orderOut(sender) }
@@ -105,6 +109,8 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     private var sideTabs: SideTabsController?
     private var viewsWindow: NSWindow?
     private var viewsShadow: ViewsShadowController?
+    private var quickShadow: ViewsShadowController?
+    private var searchShadow: ViewsShadowController?
     private var settingsWindow: NSWindow?
     private var quickWindow: QuickPanel?
     private var searchWindow: QuickPanel?
@@ -129,6 +135,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     private var userMoveInProgress = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        _ = QAEdge.flags // Read QA diagnostics once at launch.
         DotistDesign.registerFonts()
         do {
             if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa",
@@ -172,7 +179,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         if model.settings.theme == "dark" { panel.appearance = NSAppearance(named: .darkAqua) }
         motion = PanelMotion(model: model, panel: panel, size: expandedSize, title: { [model] in model!.bubbleTitle }, rememberFrame: { [weak self] in self?.rememberWindowFrame($0) })
         let container = NSView(frame: NSRect(origin: .zero, size: expandedSize))
-        let hosting = DotistHostingView(rootView: RootWindow(model: model, coordinator: self))
+        let hosting = DotistHostingView(rootView: RootWindow(model: model, coordinator: self).environment(\.qaMainPanel, true))
         hosting.sizingOptions = []
         hosting.frame = container.bounds
         hosting.autoresizingMask = [.width, .height]
@@ -271,6 +278,19 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             self.performMenuAction("show")
             if let task { self.revealTask(task) }
         }
+        if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa" {
+            let target = ProcessInfo.processInfo.environment["DOTIST_QA_OPEN"]
+            if target == "bubble" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                    guard let self, !self.bubble else { return }; self.toggleBubble()
+                }
+            } else if target == "palette" || target == "quickadd" || target == "settings" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                    guard let self else { return }
+                    switch target { case "palette": self.showSearch(); case "quickadd": self.showQuick(); default: self.showSettings() }
+                }
+            }
+        }
         if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa", ProcessInfo.processInfo.environment["DOTIST_QA_OPEN"] == "views" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.showViews() }
         }
@@ -349,6 +369,12 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         if let window = notification.object as? NSWindow, window === quickWindow || window === searchWindow { shortcutTrace("resign quick/search"); window.orderOut(nil) }
     }
     func windowWillClose(_ notification: Notification) {
+        if let window = notification.object as? NSWindow, window === quickWindow {
+            quickShadow?.stop(); quickShadow = nil; quickWindow = nil
+        }
+        if let window = notification.object as? NSWindow, window === searchWindow {
+            searchShadow?.stop(); searchShadow = nil; searchWindow = nil
+        }
         if let window = notification.object as? NSWindow, window === viewsWindow {
             viewsShadow?.stop(); viewsShadow = nil
             NSApp.setActivationPolicy(model.settings.showDock ? .regular : .accessory)
@@ -702,12 +728,14 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             let window = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 560, height: 112), styleMask: [.borderless], backing: .buffered, defer: false)
             window.isOpaque = false
             window.backgroundColor = .clear
-            window.hasShadow = true
+            window.hasShadow = false
             window.level = .floating
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            window.isReleasedWhenClosed = false
             window.appearance = panel.appearance
             window.delegate = self
             quickWindow = window
+            quickShadow = ViewsShadowController(parent: window, accessibleCornerRadius: 18)
         }
         if let window = quickWindow {
             model.error = nil
@@ -718,6 +746,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             quickWindow?.setFrameOrigin(NSPoint(x: area.midX - 280, y: area.maxY - area.height * 0.2 - 112))
         }
         quickWindow?.makeKeyAndOrderFront(nil)
+        quickShadow?.synchronize()
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -731,7 +760,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             let window = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 440), styleMask: [.borderless], backing: .buffered, defer: false)
             window.isOpaque = false
             window.backgroundColor = .clear
-            window.hasShadow = true
+            window.hasShadow = false
             window.level = .floating
             window.isReleasedWhenClosed = false
             window.isMovableByWindowBackground = true
@@ -739,6 +768,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             window.appearance = panel.appearance
             window.center()
             searchWindow = window
+            searchShadow = ViewsShadowController(parent: window)
         }
         guard let window = searchWindow else { return }
         window.title = model.text("搜索")
@@ -754,6 +784,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         }), in: window)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        searchShadow?.synchronize()
         shortcutTrace("search shown visible=\(window.isVisible)")
     }
 

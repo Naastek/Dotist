@@ -367,7 +367,7 @@ extension MainWindow {
             }.overlay(alignment: .top) {
                 if let notice {
                     Text(model.text(notice)).font(font(13)).foregroundStyle(DotistDesign.muted)
-                        .padding(.horizontal, 16).frame(height: 36).glassEffect(.regular, in: .capsule).fixedSize().offset(y: -48)
+                        .padding(.horizontal, 16).frame(height: 36).dotistGlass(.regular, in: Capsule()).dotistInlineShadow().fixedSize().offset(y: -48)
                         .onHover { noticeLifetime.setHovered($0, at: ProcessInfo.processInfo.systemUptime) }
                         .onDisappear { noticeLifetime.setHovered(false, at: ProcessInfo.processInfo.systemUptime) }
                 } else { undoToast }
@@ -384,7 +384,7 @@ extension MainWindow {
                     .accessibilityLabel(Text(model.text("关闭")))
             }.buttonStyle(.plain).font(font(13)).foregroundColor(DotistDesign.muted)
                 .padding(.leading, 16).padding(.trailing, 6).frame(height: 36)
-                .glassEffect(.regular, in: .capsule).fixedSize().offset(y: -48)
+                .dotistGlass(.regular, in: Capsule()).dotistInlineShadow().fixedSize().offset(y: -48)
                 .onHover { undoToastLifetime.setHovered($0, at: ProcessInfo.processInfo.systemUptime) }
                 .onDisappear { undoToastLifetime.setHovered(false, at: ProcessInfo.processInfo.systemUptime) }
                 .accessibilityIdentifier("undo-toast")

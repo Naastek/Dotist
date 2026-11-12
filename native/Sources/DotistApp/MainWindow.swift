@@ -103,6 +103,28 @@ struct MainWindow: View {
         (serif ? DotistDesign.nameFont(size, weight: weight, language: model.language) : DotistDesign.textFont(size, weight: weight, language: model.language))
     }
 
+    /// Typed here so the body's modifier chain does not have to infer them.
+    private func ticks(every interval: TimeInterval, active: Bool) -> AnyPublisher<Date, Never> {
+        guard active else { return Empty<Date, Never>().eraseToAnyPublisher() }
+        return Timer.publish(every: interval, on: .main, in: .common).autoconnect().eraseToAnyPublisher()
+    }
+    private func autoScrollTick() {
+        if QAPerf.enabled { QAPerf.count(.timer30Hz) }
+        autoScrollReorder()
+    }
+    private func undoChanged(_ entry: AppModel.UndoEntry?) {
+        undoToastVisible = entry != nil
+        undoToastLifetime.restart(at: ProcessInfo.processInfo.systemUptime)
+    }
+    private func expireToasts() {
+        if QAPerf.enabled { QAPerf.count(.timer10Hz) }
+        let now = ProcessInfo.processInfo.systemUptime
+        if undoToastVisible && !undoToastLifetime.isVisible(at: now) { undoToastVisible = false }
+        if notice != nil && !noticeLifetime.isVisible(at: now) { notice = nil }
+    }
+    private var autoScrollTicks: AnyPublisher<Date, Never> { ticks(every: 1.0 / 30, active: drag != nil) }
+    private var toastTicks: AnyPublisher<Date, Never> { ticks(every: 0.1, active: undoToastVisible || notice != nil) }
+
     var body: some View {
         VStack(spacing: 0) {
             if let error = model.error {
@@ -171,17 +193,9 @@ struct MainWindow: View {
                 }
             }
         }
-        .onReceive((drag != nil ? Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect().eraseToAnyPublisher() : Empty<Date, Never>().eraseToAnyPublisher())) { _ in if QAPerf.enabled { QAPerf.count(.timer30Hz) }; autoScrollReorder() }
-        .onReceive(model.$undo) { entry in
-            undoToastVisible = entry != nil
-            undoToastLifetime.restart(at: ProcessInfo.processInfo.systemUptime)
-        }
-        .onReceive((undoToastVisible || notice != nil ? Timer.publish(every: 0.1, on: .main, in: .common).autoconnect().eraseToAnyPublisher() : Empty<Date, Never>().eraseToAnyPublisher())) { _ in
-            if QAPerf.enabled { QAPerf.count(.timer10Hz) }
-            let now = ProcessInfo.processInfo.systemUptime
-            if undoToastVisible && !undoToastLifetime.isVisible(at: now) { undoToastVisible = false }
-            if notice != nil && !noticeLifetime.isVisible(at: now) { notice = nil }
-        }
+        .onReceive(autoScrollTicks) { (_: Date) in autoScrollTick() }
+        .onReceive(model.$undo) { (entry: AppModel.UndoEntry?) in undoChanged(entry) }
+        .onReceive(toastTicks) { (_: Date) in expireToasts() }
         .onDisappear { filterPresentation.dismiss(); traceReorder("lifecycle.disappear"); cancelReorder(); reorderRuntime.handleInput = nil; leaveInputs(); selection.update { $0.clear() } }
         .onHover { panelHovered = $0 }
         .foregroundColor(textColor)

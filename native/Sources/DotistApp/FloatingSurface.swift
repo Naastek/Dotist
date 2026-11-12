@@ -3,6 +3,32 @@ import CoreText
 import DotistCore
 import SwiftUI
 
+// QA diagnostics are cached once at launch and enabled only for the QA bundle.
+struct QAEdge: OptionSet {
+    let rawValue: UInt8
+    static let noShadow = Self(rawValue: 1 << 0), noEdge = Self(rawValue: 1 << 1)
+    static let noGlass = Self(rawValue: 1 << 2), noPaper = Self(rawValue: 1 << 3)
+    static let fullMask = Self(rawValue: 1 << 4), noRim = Self(rawValue: 1 << 5)
+    static let cutout1 = Self(rawValue: 1 << 7)
+    static let flags: Self = {
+        guard Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa",
+              let value = ProcessInfo.processInfo.environment["DOTIST_QA_EDGE"] else { return [] }
+        let names: [String: Self] = ["noshadow": .noShadow, "noedge": .noEdge, "noglass": .noGlass,
+            "nopaper": .noPaper, "fullmask": .fullMask, "norim": .noRim, "cutout1": .cutout1]
+        return value.split(separator: ",").reduce(into: Self()) { result, name in
+            result.formUnion(names[name.trimmingCharacters(in: .whitespacesAndNewlines)] ?? [])
+        }
+    }()
+}
+
+private struct QAEdgeEnvironmentKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    var qaMainPanel: Bool {
+        get { self[QAEdgeEnvironmentKey.self] }
+        set { self[QAEdgeEnvironmentKey.self] = newValue }
+    }
+}
+
 struct FloatingSurface: View, Animatable {
     static let compactOpticalInset: CGFloat = 2
     static func opticalInsets(compact: Bool, reduceTransparency: Bool, increasedContrast: Bool,
@@ -38,7 +64,7 @@ struct FloatingSurface: View, Animatable {
             .frame(width: size.width, height: size.height, alignment: onRight ? .topTrailing : .topLeading)
         if compact && !transitioning && !reduceTransparency && contrast != .increased {
             // The native material owns its shape at the animated width. Leave
-            // its optical edge unmasked; no second glass/paint layer.
+            // its optical edge clipped by the shared glass helper.
             material
         } else {
             // Keep the window/transition alpha constrained. Expanded native
@@ -72,6 +98,7 @@ struct FloatingPanelMaterial: View {
 /// Resolved material inputs also let previews inspect the opaque accessibility surface.
 struct FloatingPanelSurface: View {
     @Environment(\.glassDebugParameters) private var glassDebug
+    @Environment(\.qaMainPanel) private var qaMainPanel
     let opacity: UInt8
     let frost: UInt8
     let compact: Bool
@@ -94,27 +121,36 @@ struct FloatingPanelSurface: View {
                 let opticalShape = RoundedRectangle(cornerRadius: radius, style: .continuous)
                 let amount = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
                 let glassAlpha = ExpandedReadingMaterial.glassInteriorAlpha(opacity: opacity, frost: frost, dark: scheme == .dark)
-                let glass = Color.clear.glassEffect(.regular.tint(DotistTheme.tint(color, scheme)), in: opticalShape)
+                let qa: QAEdge = qaMainPanel ? QAEdge.flags : []
+                let clippedGlass = Color.clear.dotistGlass(.regular.tint(DotistTheme.tint(color, scheme)), in: opticalShape)
                     .padding(ExpandedReadingMaterial.opticalClearance)
                 ZStack {
-                    if glassAlpha >= 0.999 {
-                        glass
-                    } else {
-                        glass.mask {
-                            Color.white.overlay {
-                                ExpandedReadingMaterial.interiorMask(cornerRadius: radius)
-                                    .padding(ExpandedReadingMaterial.opticalClearance)
-                                    .opacity(1 - glassAlpha)
-                                    .blendMode(.destinationOut)
-                            }.compositingGroup()
+                    if !qa.contains(.noGlass) {
+                        if qa.contains(.fullMask) || glassAlpha >= 0.999 {
+                            clippedGlass
+                        } else if qa.contains(.noRim) {
+                            clippedGlass.mask { Color.white.opacity(glassAlpha) }
+                        } else {
+                            clippedGlass.mask {
+                                Color.white.overlay {
+                                    ExpandedReadingMaterial.interiorMask(cornerRadius: radius)
+                                        .padding(ExpandedReadingMaterial.opticalClearance)
+                                        .opacity(1 - glassAlpha)
+                                        .blendMode(.destinationOut)
+                                }.compositingGroup()
+                            }
                         }
                     }
-                    ExpandedReadingMaterial(opacity: opacity, frost: frost, color: color, scheme: scheme, cornerRadius: radius)
-                        .applyingBackgroundOpacity(amount)
-                        .opacity(idleContentOpacity)
-                        .padding(ExpandedReadingMaterial.opticalClearance)
-                    GlassEdge(cornerRadius: radius, compact: false, scheme: scheme)
-                        .padding(ExpandedReadingMaterial.opticalClearance)
+                    if !qa.contains(.noPaper) {
+                        ExpandedReadingMaterial(opacity: opacity, frost: frost, color: color, scheme: scheme, cornerRadius: radius)
+                            .applyingBackgroundOpacity(amount)
+                            .opacity(idleContentOpacity)
+                            .padding(ExpandedReadingMaterial.opticalClearance)
+                    }
+                    if !qa.contains(.noEdge) {
+                        GlassEdge(cornerRadius: radius, compact: false, scheme: scheme)
+                            .padding(ExpandedReadingMaterial.opticalClearance)
+                    }
                 }
             }
         }

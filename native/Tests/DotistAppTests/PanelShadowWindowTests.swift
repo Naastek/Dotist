@@ -5,6 +5,16 @@ import XCTest
 
 @MainActor
 final class PanelShadowWindowTests: XCTestCase {
+    func testShadowTiers() {
+        let tiers: [(DotistShadow, CGFloat, CGFloat, Float, Float)] = [
+            (.panel, 24, 8, 0.20, 0.36), (.compact, 16, 5, 0.16, 0.30), (.inline, 12, 4, 0.14, 0.28)
+        ]
+        for (tier, blur, y, light, dark) in tiers {
+            XCTAssertEqual(tier.blur, blur); XCTAssertEqual(tier.y, y)
+            XCTAssertEqual(tier.opacity(dark: false), light); XCTAssertEqual(tier.opacity(dark: true), dark)
+        }
+    }
+
     func testChildPlacementTranslationAndResize() {
         let parent = CGRect(x: 200, y: 300, width: 400, height: 500)
         let child = CGRect(x: 150, y: 250, width: 500, height: 600)
