@@ -26,7 +26,7 @@ final class SideTabGeometryTests: XCTestCase {
     }
     func testPaintedOutwardFrameOverlapsWithoutChangingHitRegion() {
         let panel = CGRect(x: 500, y: 100, width: 364, height: 620)
-        XCTAssertEqual(SideTabGeometry.attachmentOverlap, GlassSilhouette.expandedInset + 1)
+        XCTAssertEqual(SideTabGeometry.attachmentOverlap, (GlassSilhouette.expandedInset + 1).rounded(.up))
         for width: CGFloat in [2, 10, 15, 48, 120] {
             let hit = SideTabGeometry.frame(panel: panel, index: 1, width: width, inward: false, offsetY: 12)
             let painted = SideTabGeometry.paintedFrame(hit, inward: false)
