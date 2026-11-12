@@ -3,11 +3,13 @@ import SwiftUI
 import XCTest
 @testable import DotistApp
 
-/// These assertions concern the custom white perimeter only. They cannot
-/// establish WindowServer glass appearance in an active or inactive window.
+/// The custom edge light must exist where the slab catches light, and must never
+/// close into a line around the whole shape: a closed rim reads as an outline,
+/// whatever its colour. (The former continuous white perimeter compensated for
+/// inactive glass losing its edge; glass now always has active appearance.)
 @MainActor
 final class CompactGlassPerimeterTests: XCTestCase {
-    func testCompactPerimeterRemainsVisibleAlongBothArcsAndStraightEdges() throws {
+    func testCompactEdgeLightIsPartialAndNeverAClosedOutline() throws {
         for scheme in [ColorScheme.light, .dark] {
             for width in [CGFloat(48), 96, 144, 240, 440] {
                 for scale in [CGFloat(1), 2] {
@@ -18,6 +20,7 @@ final class CompactGlassPerimeterTests: XCTestCase {
                         .path(in: CGRect(origin: .zero, size: size)).cgPath
                     // The neighborhood includes the inward stroke and tolerates
                     // antialiasing at 1x without relying on one edge pixel.
+                    var peaks: [CGFloat] = []
                     for point in perimeterPoints(path) {
                         var peak: CGFloat = 0
                         let reach = Int(ceil(scale * 1.5))
@@ -32,11 +35,26 @@ final class CompactGlassPerimeterTests: XCTestCase {
                                 peak = max(peak, min(pixel.redComponent, pixel.greenComponent, pixel.blueComponent) * pixel.alphaComponent)
                             }
                         }
-                        XCTAssertGreaterThanOrEqual(peak, 0.05,
-                            "Weak perimeter at \(point), \(scheme), width \(width), scale \(scale)")
+                        peaks.append(peak)
+                    }
+                    let context = "\(scheme), width \(width), scale \(scale)"
+                    XCTAssertGreaterThanOrEqual(peaks.max() ?? 0, 0.05, "The lit edge needs a visible highlight: \(context)")
+                    XCTAssertLessThanOrEqual(peaks.min() ?? 1, 0.02, "The highlight must fade out somewhere on the perimeter: \(context)")
+                    if width >= 144 {
+                        // The middle of both straight edges carries no light at all, so the
+                        // lit ends can never join into a line around the shape.
+                        for row in [0, Int(48 * scale) - 1] {
+                            var edge: CGFloat = 0
+                            for dy in 0...Int(ceil(scale * 2)) {
+                                let y = row == 0 ? dy : row - dy
+                                let pixel = try XCTUnwrap(image.colorAt(x: Int(width * scale / 2), y: y)?.usingColorSpace(.sRGB))
+                                edge = max(edge, min(pixel.redComponent, pixel.greenComponent, pixel.blueComponent) * pixel.alphaComponent)
+                            }
+                            XCTAssertLessThanOrEqual(edge, 0.02, "Edge light at the middle of a straight edge: \(context)")
+                        }
                     }
                     XCTAssertLessThan(try XCTUnwrap(image.colorAt(x: Int(width * scale / 2), y: Int(24 * scale))).alphaComponent, 0.01,
-                        "A continuous rim must leave the interior clear")
+                        "The edge light must leave the interior clear")
                 }
             }
         }

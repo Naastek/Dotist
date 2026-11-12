@@ -589,7 +589,8 @@ final class FeedbackFourRegressionTests: XCTestCase {
                     for y in 45..<75 { for x in 60..<240 { maxText = max(maxText, bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) } }
                     rows.append("\(scheme),\(opacity),0,\(protection == 1),\(protection == 2),\(background.alphaComponent),\(maxText)")
                     if protection == 0 {
-                        XCTAssertLessThanOrEqual(background.alphaComponent, CGFloat(opacity) / 100 + 0.015)
+                        let glossAllowance = CGFloat(CompactGlassStyle.specularTop(.expanded, scheme))
+                        XCTAssertLessThanOrEqual(background.alphaComponent, CGFloat(opacity) / 100 + glossAllowance + 0.015)
                         if opacity >= 95 { XCTAssertGreaterThan(background.alphaComponent, 0.85) }
                     } else { XCTAssertEqual(background.alphaComponent, 1, accuracy: 0.01) }
                     XCTAssertGreaterThan(maxText, 0.9, "Surface opacity must never fade normal text")

@@ -83,8 +83,8 @@ final class ExpandedGlassMaterialTests: XCTestCase {
                 let panel = FloatingPanelShape(compact: compact, transitioning: transitioning, onRight: true, reveal: 0.5)
                 let actual = FloatingPanelContentShape(panelShape: panel).path(in: rect)
                 let expected = !compact && !transitioning
-                    ? RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius - ExpandedReadingMaterial.opticalClearance, style: .continuous)
-                        .path(in: rect.insetBy(dx: ExpandedReadingMaterial.opticalClearance, dy: ExpandedReadingMaterial.opticalClearance))
+                    ? RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius - GlassSilhouette.expandedInset, style: .continuous)
+                        .path(in: rect.insetBy(dx: GlassSilhouette.expandedInset, dy: GlassSilhouette.expandedInset))
                     : panel.path(in: rect)
                 XCTAssertEqual(actual.cgPath, expected.cgPath)
             }

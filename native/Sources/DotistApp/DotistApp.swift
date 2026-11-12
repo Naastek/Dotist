@@ -139,13 +139,22 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         DotistDesign.registerFonts()
         do {
             if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa",
-               ProcessInfo.processInfo.environment["DOTIST_QA_SEED"] == "groups" {
+               ["groups", "strip2"].contains(ProcessInfo.processInfo.environment["DOTIST_QA_SEED"] ?? "") {
                 let store = try TaskStore()
                 if try store.listGroups().allSatisfy({ $0.id == DotistGroup.inboxID }) {
                     for name in ["工作", "生活", "阅读"] {
                         let group = try store.addGroup(name: name)
                         try store.addTask(title: name, category: group.id)
                     }
+                }
+                if ProcessInfo.processInfo.environment["DOTIST_QA_SEED"] == "strip2" {
+                    let groups = try store.listGroups()
+                    let group = try groups.first(where: { $0.name == "QA Strip" }) ?? store.addGroup(name: "QA Strip", color: "teal")
+                    _ = try store.updateGroup(group.id, color: "teal")
+                    if try !store.listTasks().contains(where: { $0.category == group.id && !$0.completed }) {
+                        try store.addTask(title: "QA two-line task", category: group.id)
+                    }
+                    mainState.groupID = group.id
                 }
                 model = try AppModel(store: store)
             } else { model = try AppModel() }

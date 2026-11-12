@@ -147,11 +147,14 @@ struct FloatingPanelSurface: View {
                             .opacity(idleContentOpacity)
                             .padding(ExpandedReadingMaterial.opticalClearance)
                     }
+                    GlassGloss(shape: opticalShape.inset(by: GlassSilhouette.glassClip), intensity: .expanded, scheme: scheme)
+                        .padding(ExpandedReadingMaterial.opticalClearance)
                     if !qa.contains(.noEdge) {
                         GlassEdge(cornerRadius: radius, compact: false, scheme: scheme, color: color)
                             .padding(ExpandedReadingMaterial.opticalClearance)
                     }
                 }
+                .clipShape(RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius, style: .continuous).inset(by: GlassSilhouette.expandedInset))
             }
         }
     }

@@ -221,7 +221,9 @@ final class BubbleLayoutTests: XCTestCase {
         for y in max(0, Int(rect.minY * scale))..<min(bitmap.pixelsHigh, Int(rect.maxY * scale)) {
             for x in max(0, Int(rect.minX * scale))..<min(bitmap.pixelsWide, Int(rect.maxX * scale)) {
                 guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
-                if color.alphaComponent > threshold && (!onSurface || max(color.redComponent, color.greenComponent, color.blueComponent) < 0.65) {
+                // Translucent inner shade is not text; require coverage from the opaque glyph.
+                let minimumAlpha: CGFloat = onSurface ? max(threshold, 0.3) : threshold
+                if color.alphaComponent > minimumAlpha && (!onSurface || max(color.redComponent, color.greenComponent, color.blueComponent) < 0.65) {
                     bounds = bounds.union(CGRect(x: CGFloat(x) / scale, y: CGFloat(y) / scale, width: 1 / scale, height: 1 / scale))
                 }
             }
