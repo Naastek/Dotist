@@ -83,7 +83,7 @@ struct SettingsWindow: View {
                 }
             }.padding(.horizontal, 12).frame(height: 34)
                 // Glass is only the backdrop: a native NSTextField inside the effect graph is composited twice.
-                .background { Color.clear.glassEffect(.regular, in: .capsule) }
+                .background { Color.clear.dotistGlass(.regular, in: Capsule()) }
                 .padding(.horizontal, 14)
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 ScrollView {

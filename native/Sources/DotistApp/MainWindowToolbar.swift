@@ -229,7 +229,7 @@ extension MainWindow {
             }.padding(.horizontal, DateFilterEdgeMask.contentInset)
         }.frame(height: TaskDateFilterMetrics.rowHeight)
             .mask { DateFilterEdgeMask() }
-            .glassEffect(.regular, in: .rect(cornerRadius: 12))
+            .dotistGlass(.regular, in: RoundedRectangle(cornerRadius: 12)).dotistInlineShadow()
             .background(DateFilterHoverObserver(enabled: filterPresentation.isOpen, changed: filterPresentation.hoverChanged))
             .padding(.horizontal, TaskRowMetrics.inset)
             .allowsHitTesting(filterPresentation.isOpen)

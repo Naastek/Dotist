@@ -64,54 +64,75 @@ struct FloatingPanelView<Content: View>: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var scheme
+    /// Kept out of `body`: one expression spanning the surface and the whole modifier chain
+    /// exceeded the type checker's time limit on the release runner.
+    @ViewBuilder private func panel(_ geometry: GeometryProxy) -> some View {
+        let fixed = motion.bubble || motion.animationInProgress
+        let width = fixed ? motion.transitionSize.width : geometry.size.width
+        let height = fixed ? motion.transitionSize.height : geometry.size.height
+        let extra: CGFloat = motion.animationInProgress ? 0 : motion.filterExtra
+        let base: CGFloat = 48 + extra
+        let opaque: Bool = reduceTransparency || contrast == .increased
+        let visibleOpacity: Double = opaque ? 1 : Double(motion.idleContentOpacity)
+        let contentOpacity: Double = motion.bubble ? 0 : visibleOpacity
+        let settled: Bool = motion.bubble && !motion.animationInProgress
+        let bubbleWidth: CGFloat = settled ? geometry.size.width : 48
+        let trailing: Bool = motion.animationInProgress || motion.bubbleOnRight
+        let bubbleAlignment: Alignment = trailing ? .topTrailing : .topLeading
+        let shapeDebug = glassDebug.enabled && !opaque ? glassDebug.parameters : nil
+        ZStack(alignment: .topTrailing) {
+            content
+                .frame(width: width, height: height)
+                .opacity(contentOpacity)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.14).delay(motion.bubble ? 0 : 0.1), value: motion.bubble)
+                .allowsHitTesting(!motion.bubble)
+                .accessibilityHidden(motion.bubble)
+            // Keep text, font cascade and SwiftUI metadata warm before the first
+            // collapse. The circle's content never lays out at intermediate widths.
+            FloatingBubble(model: model, motion: motion,
+                details: bubbleContent,
+                groupName: groupName, contextMenu: contextMenu, width: bubbleWidth, reveal: hoverReveal,
+                extra: extra, filter: filter)
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: bubbleAlignment)
+                .opacity(motion.bubble ? 1 : 0)
+                .allowsHitTesting(motion.bubble && !motion.animationInProgress)
+                .accessibilityHidden(!motion.bubble)
+        }
+        .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topTrailing)
+        // Clip the animated content, then attach glass. Masking the combined
+        // result also cuts the system material's light at the silhouette.
+        .clipShape(FloatingPanelContentShape(panelShape: FloatingPanelShape(compact: motion.bubble, transitioning: motion.animationInProgress,
+            onRight: motion.bubbleOnRight, reveal: hoverReveal, base: base,
+            debug: shapeDebug)))
+        .background(ObservedFloatingSurface(surface: motion.surface, opacity: model.settings.opacity, frost: model.settings.frost,
+            compact: motion.bubble, transitioning: motion.animationInProgress, onRight: motion.bubbleOnRight,
+            size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID), base: base,
+            idleContentOpacity: motion.idleContentOpacity))
+        .background(WindowShadowInvalidation())
+    }
+
+    // The modifier chain is split into three opaque stages with explicit closure
+    // signatures. As one expression it exceeded the type checker's limits on the
+    // release runner's older compiler.
+    private var surfaceStage: some View {
+        let debug: GlassDebugParameters? = glassDebug.enabled ? glassDebug.parameters : nil
+        return GeometryReader { (geometry: GeometryProxy) in panel(geometry) }
+            .environment(\.glassDebugParameters, debug)
+            .onAppear { motion.refreshShadow(); motion.filterState = colorState; motion.filterLines = filter }
+    }
+
+    private var observedStage: some View {
+        surfaceStage
+            .onChange(of: filter) { (_: [String], _: [String]) in motion.filterLines = filter; motion.refreshBaseWidth() }
+            .modifier(ShadowRefreshTriggers(motion: motion, settings: model.settings, groups: model.groups,
+                groupID: colorState.groupID, title: title, scheme: scheme,
+                reduceTransparency: reduceTransparency, contrast: contrast))
+    }
+
     var body: some View {
         let _ = QAPerf.enabled ? QAPerf.count(.floatingPanelBody) : ()
-        return GeometryReader { geometry in
-            let fixed = motion.bubble || motion.animationInProgress
-            let width = fixed ? motion.transitionSize.width : geometry.size.width
-            let height = fixed ? motion.transitionSize.height : geometry.size.height
-            let extra = motion.animationInProgress ? 0 : motion.filterExtra
-            ZStack(alignment: .topTrailing) {
-                content
-                    .frame(width: width, height: height)
-                    .opacity(motion.bubble ? 0 : (reduceTransparency || contrast == .increased ? 1 : motion.idleContentOpacity))
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.14).delay(motion.bubble ? 0 : 0.1), value: motion.bubble)
-                    .allowsHitTesting(!motion.bubble)
-                    .accessibilityHidden(motion.bubble)
-                // Keep text, font cascade and SwiftUI metadata warm before the first
-                // collapse. The circle's content never lays out at intermediate widths.
-                FloatingBubble(model: model, motion: motion,
-                    details: bubbleContent,
-                    groupName: groupName, contextMenu: contextMenu, width: motion.bubble && !motion.animationInProgress ? geometry.size.width : 48, reveal: hoverReveal,
-                    extra: extra, filter: filter)
-                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: motion.animationInProgress || motion.bubbleOnRight ? .topTrailing : .topLeading)
-                    .opacity(motion.bubble ? 1 : 0)
-                    .allowsHitTesting(motion.bubble && !motion.animationInProgress)
-                    .accessibilityHidden(!motion.bubble)
-            }
-            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topTrailing)
-            // Clip the animated content, then attach glass. Masking the combined
-            // result also cuts the system material's light at the silhouette.
-            .clipShape(FloatingPanelContentShape(panelShape: FloatingPanelShape(compact: motion.bubble, transitioning: motion.animationInProgress,
-                onRight: motion.bubbleOnRight, reveal: hoverReveal, base: 48 + extra,
-                debug: glassDebug.enabled && !reduceTransparency && contrast != .increased ? glassDebug.parameters : nil)))
-            .background(ObservedFloatingSurface(surface: motion.surface, opacity: model.settings.opacity, frost: model.settings.frost,
-                compact: motion.bubble, transitioning: motion.animationInProgress, onRight: motion.bubbleOnRight,
-                size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID), base: 48 + extra,
-                idleContentOpacity: motion.idleContentOpacity))
-            .background(WindowShadowInvalidation())
-        }
-        .environment(\.glassDebugParameters, glassDebug.enabled ? glassDebug.parameters : nil)
-        .onAppear { motion.refreshShadow(); motion.filterState = colorState; motion.filterLines = filter }
-        .onChange(of: filter) { motion.filterLines = filter; motion.refreshBaseWidth() }
-        .onChange(of: model.settings) { motion.refreshShadow() }
-        .onChange(of: model.groups) { motion.refreshShadow() }
-        .onChange(of: colorState.groupID) { motion.refreshShadow() }
-        .onChange(of: title) { motion.refreshShadow() }
-        .onChange(of: scheme) { motion.refreshShadow() }
-        .onChange(of: reduceTransparency) { motion.refreshShadow() }
-        .onChange(of: contrast) { motion.refreshShadow() }
-        .onChange(of: motion.hovering) { _, active in
+        observedStage
+        .onChange(of: motion.hovering) { (_: Bool, active: Bool) in
             // The window already has its final width. Reveal text and glass in the
             // same transaction, then shrink the window after both have settled.
             if reduceMotion {
@@ -146,5 +167,38 @@ private struct ObservedFloatingSurface: View {
         FloatingSurface(opacity: opacity, frost: frost, compact: compact, transitioning: transitioning,
             onRight: onRight, size: size, reveal: reveal, color: color, base: base,
             frameInsets: surface.value, idleContentOpacity: idleContentOpacity)
+    }
+}
+
+/// Every input whose change requires the panel shadow to be refreshed. One modifier per
+/// input keeps each `onChange` a small, independently type-checked expression.
+private struct ShadowRefreshTriggers: ViewModifier {
+    let motion: PanelMotion
+    let settings: DotistSettings
+    let groups: [DotistGroup]
+    let groupID: String?
+    let title: String
+    let scheme: ColorScheme
+    let reduceTransparency: Bool
+    let contrast: ColorSchemeContrast
+
+    private struct Trigger<Value: Equatable>: ViewModifier {
+        let value: Value
+        let motion: PanelMotion
+        func body(content: Content) -> some View {
+            content.onChange(of: value) { (_: Value, _: Value) in motion.refreshShadow() }
+        }
+    }
+
+    func body(content: Content) -> some View {
+        let appearance: some View = content
+            .modifier(Trigger(value: scheme, motion: motion))
+            .modifier(Trigger(value: reduceTransparency, motion: motion))
+            .modifier(Trigger(value: contrast, motion: motion))
+        return appearance
+            .modifier(Trigger(value: settings, motion: motion))
+            .modifier(Trigger(value: groups, motion: motion))
+            .modifier(Trigger(value: groupID, motion: motion))
+            .modifier(Trigger(value: title, motion: motion))
     }
 }

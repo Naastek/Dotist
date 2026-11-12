@@ -231,7 +231,7 @@ final class PanelShadowTests: XCTestCase {
         for size in [NSSize(width: 560, height: 112), NSSize(width: 600, height: 372)] {
             let quick = QuickPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
             quick.isReleasedWhenClosed = false
-            XCTAssertTrue(quick.hasShadow)
+            XCTAssertFalse(quick.hasShadow)
             quick.close()
         }
         let area = NSRect(x: 0, y: 0, width: 1440, height: 1000)

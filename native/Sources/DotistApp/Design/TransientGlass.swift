@@ -1,6 +1,24 @@
 import DotistCore
 import SwiftUI
 
+extension View {
+    // System glass paints a dark hairline and pale halo at its outermost edge.
+    // Clip that optical edge; any intentional highlight remains a separate overlay.
+    func dotistGlass<S: InsettableShape>(_ glass: Glass, in shape: S) -> some View {
+        glassEffect(glass, in: shape).clipShape(shape.inset(by: 1))
+    }
+
+    func dotistInlineShadow() -> some View { modifier(DotistInlineShadow()) }
+}
+
+private struct DotistInlineShadow: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    func body(content: Content) -> some View {
+        let tier = DotistShadow.inline
+        content.shadow(color: .black.opacity(Double(tier.opacity(dark: scheme == .dark))), radius: tier.blur, y: tier.y)
+    }
+}
+
 /// Shared material strengths. These preserve the existing appearance and settings
 /// while keeping optical glass, tint density and accessibility fallback distinct.
 enum GlassTintMaterial {
@@ -41,7 +59,7 @@ struct TransientGlassSurface: View {
             // override does not prevent WindowServer's non-key graying.
             let tint = color == .none ? nil : DotistTheme.tint(color, scheme).opacity(compact ? GlassTintMaterial.compactTintScale : 1)
             Color.clear
-                .glassEffect(Glass.regular.tint(tint)
+                .dotistGlass(Glass.regular.tint(tint)
                     .interactive(compact ? false : interactive), in: shape)
                 .environment(\.appearsActive, compact || appearsActive)
                 .overlay {

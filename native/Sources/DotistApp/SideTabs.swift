@@ -166,10 +166,16 @@ struct SideTabEntrance {
     }
 }
 
-struct SideTabShape: Shape {
+struct SideTabShape: InsettableShape {
     let inward: Bool
+    var insetAmount: CGFloat = 0
+    func inset(by amount: CGFloat) -> SideTabShape {
+        var shape = self; shape.insetAmount += amount; return shape
+    }
     func path(in rect: CGRect) -> Path {
-        let radius = min(8, rect.width / 2, rect.height / 2)
+        let rect = CGRect(x: rect.minX + (inward ? 0 : insetAmount), y: rect.minY + insetAmount,
+                          width: max(0, rect.width - insetAmount), height: max(0, rect.height - 2 * insetAmount))
+        let radius = max(0, min(8, (rect.width + insetAmount) / 2, (rect.height + 2 * insetAmount) / 2) - insetAmount)
         // Outward tabs attach on the right; inward tabs attach on the left.
         // The connection edge stays square at every sampled expansion width.
         return UnevenRoundedRectangle(topLeadingRadius: inward ? 0 : radius,
@@ -256,7 +262,7 @@ private struct SideTabBackground: View {
                 by: selected ? (contrast == .increased ? GlassTintMaterial.tabHighContrastSelectedTint : GlassTintMaterial.tabSelectedTint) : GlassTintMaterial.tabUnselectedTint, in: .device))
             if style == .glass && !reduceTransparency && contrast != .increased {
                 Color.clear
-                    .glassEffect(.regular.tint(DotistTheme.tint(color, scheme).opacity(selected ? 1 : 0.5)), in: shape)
+                    .dotistGlass(.regular.tint(DotistTheme.tint(color, scheme).opacity(selected ? 1 : 0.5)), in: shape)
             }
         }
         // Composite first so tint cannot raise the configured alpha.

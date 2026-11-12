@@ -122,7 +122,7 @@ extension MainWindow {
                         RoundedRectangle(cornerRadius: radius).fill(DotistDesign.surface)
                             .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(DotistDesign.accent.opacity(0.5), lineWidth: 1))
                     } else {
-                        Color.clear.glassEffect(.regular, in: .rect(cornerRadius: radius))
+                        Color.clear.dotistGlass(.regular, in: RoundedRectangle(cornerRadius: radius))
                     }
                 }
                 .frame(width: rect.width, height: rect.height)
@@ -169,7 +169,7 @@ extension MainWindow {
                             Button("#" + tag) { selectedSuggestion = index; _ = chooseSuggestion(force: true) }
                                 .buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12, index == selectedSuggestion ? .medium : .regular)).foregroundColor(index == selectedSuggestion ? DotistDesign.ink : DotistDesign.muted).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 8).frame(height: 28)
                         }
-                    }.glassEffect(.regular, in: .rect(cornerRadius: 12)).offset(y: -CGFloat(tagSuggestions.count * 28 + 6)).zIndex(1)
+                    }.dotistGlass(.regular, in: RoundedRectangle(cornerRadius: 12)).dotistInlineShadow().offset(y: -CGFloat(tagSuggestions.count * 28 + 6)).zIndex(1)
                 }
             }.frame(maxWidth: .infinity).frame(height: ComposerMetrics.rowHeight)
                 .onChange(of: composer) { _ in selectedSuggestion = -1; dismissComposerCue() }

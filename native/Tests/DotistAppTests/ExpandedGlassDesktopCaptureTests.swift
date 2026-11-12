@@ -147,7 +147,7 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
             let radius = DotistDesign.windowCornerRadius - clearance
             let amount = DotistDesign.materialOpacity(80, dark: scheme == .dark, highContrast: false)
             let glassAlpha = ExpandedReadingMaterial.glassInteriorAlpha(opacity: 80, frost: 40, dark: scheme == .dark)
-            let native = Color.clear.glassEffect(.regular.tint(DotistTheme.tint(.pink, scheme)),
+            let native = Color.clear.dotistGlass(.regular.tint(DotistTheme.tint(.pink, scheme)),
                 in: RoundedRectangle(cornerRadius: radius, style: .continuous))
                 .padding(clearance)
             ZStack {

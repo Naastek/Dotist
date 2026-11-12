@@ -25,14 +25,19 @@ struct ChildFramePlacement: Equatable {
     }
 }
 
+enum DotistShadow {
+    case panel, compact, inline
+    var blur: CGFloat { switch self { case .panel: 24; case .compact: 16; case .inline: 12 } }
+    var y: CGFloat { switch self { case .panel: 8; case .compact: 5; case .inline: 4 } }
+    func opacity(dark: Bool) -> Float {
+        switch self { case .panel: dark ? 0.36 : 0.20; case .compact: dark ? 0.30 : 0.16; case .inline: dark ? 0.28 : 0.14 }
+    }
+}
+
 /// The even-odd mask removes every shadow pixel beneath the glass surface.
 @MainActor
 final class PanelShadowController {
     static let margin: CGFloat = 48
-    fileprivate enum Style {
-        static let expandedBlur: CGFloat = 24, compactBlur: CGFloat = 10
-        static let lightOpacity: Float = 0.20, darkOpacity: Float = 0.36
-    }
     let window: PanelShadowWindow
     private weak var parent: DotistPanel?
     private weak var motion: PanelMotion?
@@ -45,7 +50,8 @@ final class PanelShadowController {
     private var tabRects: [CGRect] = [] // Relative to the parent frame, in screen coordinates.
     private struct LayerInputs: Equatable {
         let size: CGSize, rect: CGRect
-        let radius: CGFloat, dark: Bool, compact: Bool, alpha: CGFloat
+        let radius: CGFloat, dark: Bool, compactProgress: CGFloat, alpha: CGFloat
+        let hideShadow: Bool
         let tabs: [CGRect]
     }
     private var lastLayerInputs: LayerInputs?
@@ -167,23 +173,25 @@ final class PanelShadowController {
         rect = CGRect(x: rect.minX + inset.leading, y: rect.minY + inset.bottom,
                       width: max(0, rect.width - inset.leading - inset.trailing), height: max(0, rect.height - inset.top - inset.bottom))
         // Expanded glass sits inside the optical clearance; hug it so no unshadowed band shows.
-        let clearance = !accessible && !compact && !transitioning ? ExpandedReadingMaterial.opticalClearance : 0
+        let qa = parent.identifier?.rawValue == "dotist.main" && !compact && !transitioning ? QAEdge.flags : []
+        let clearance = !accessible && !compact && !transitioning ? ExpandedReadingMaterial.opticalClearance + (qa.contains(.cutout1) ? 1 : 0) : 0
         rect = rect.insetBy(dx: clearance, dy: clearance)
         let transitionProgress = min(1, max(0, motion.surfaceInsets.top / FloatingSurface.compactOpticalInset))
         let radius = transitioning ? DotistDesign.windowCornerRadius + (24 - DotistDesign.windowCornerRadius) * transitionProgress : (compact ? 24 : DotistDesign.windowCornerRadius - clearance)
+        let compactProgress = transitioning ? transitionProgress : (compact ? 1.0 : 0.0)
         let dark = parent.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let localTabs = tabs.map { $0.offsetBy(dx: Self.margin + left, dy: Self.margin + bottom) }
-        let inputs = LayerInputs(size: frame.size, rect: rect, radius: radius, dark: dark, compact: compact, alpha: parent.alphaValue, tabs: localTabs)
+        let inputs = LayerInputs(size: frame.size, rect: rect, radius: radius, dark: dark, compactProgress: compactProgress, alpha: parent.alphaValue, hideShadow: qa.contains(.noShadow), tabs: localTabs)
         if inputs != lastLayerInputs {
             lastLayerInputs = inputs
-            Self.render(ambient: ambient, cutout: cutout, bounds: bounds, rect: rect, radius: radius, dark: dark, compact: compact, tabs: localTabs)
+            Self.render(ambient: ambient, cutout: cutout, bounds: bounds, rect: rect, radius: radius, dark: dark, compactProgress: compactProgress, tabs: localTabs, hideShadow: qa.contains(.noShadow))
         }
         if parent.isVisible && !parent.isMiniaturized {
             if !window.isVisible { window.order(.below, relativeTo: parent.windowNumber) }
         } else if window.isVisible { window.orderOut(nil) }
     }
 
-    fileprivate static func render(ambient: CALayer, cutout: CAShapeLayer, bounds: CGRect, rect: CGRect, radius: CGFloat, dark: Bool, compact: Bool, tabs: [CGRect] = []) {
+    fileprivate static func render(ambient: CALayer, cutout: CAShapeLayer, bounds: CGRect, rect: CGRect, radius: CGFloat, dark: Bool, compactProgress: CGFloat, tabs: [CGRect] = [], hideShadow: Bool = false) {
         if QAPerf.enabled { QAPerf.count(.shadowRender) }
         let outline = silhouette(rect: rect, radius: radius, tabs: tabs)
         let mask = CGMutablePath(); mask.addRect(bounds); mask.addPath(outline)
@@ -191,9 +199,12 @@ final class PanelShadowController {
         cutout.frame = bounds; cutout.path = mask
         ambient.frame = bounds; ambient.backgroundColor = NSColor.clear.cgColor
         ambient.shadowColor = NSColor.black.cgColor; ambient.shadowPath = outline
-        ambient.shadowRadius = compact ? Style.compactBlur : Style.expandedBlur
-        ambient.shadowOffset = CGSize(width: 0, height: compact ? -3 : -8)
-        ambient.shadowOpacity = dark ? Style.darkOpacity : Style.lightOpacity
+        let panel = DotistShadow.panel, compact = DotistShadow.compact
+        let t = compactProgress
+        ambient.shadowRadius = panel.blur + (compact.blur - panel.blur) * t
+        ambient.shadowOffset = CGSize(width: 0, height: -(panel.y + (compact.y - panel.y) * t))
+        let opacity = panel.opacity(dark: dark) + (compact.opacity(dark: dark) - panel.opacity(dark: dark)) * Float(t)
+        ambient.shadowOpacity = hideShadow ? 0 : opacity
         CATransaction.commit()
     }
 
@@ -227,13 +238,18 @@ final class ViewsShadowController {
     private var observers: [NSObjectProtocol] = []
     private var appearanceObservation: NSKeyValueObservation?
     private var fullScreen = false, stopped = false
+    private let cornerRadius: CGFloat
+    private let usesOpticalClearance: Bool
+    private let accessibleCornerRadius: CGFloat?
 
     static func silhouette(size: CGSize, accessible: Bool) -> (rect: CGRect, radius: CGFloat) {
         let clearance = accessible ? 0 : ExpandedReadingMaterial.opticalClearance
         return (CGRect(x: PanelShadowController.margin, y: PanelShadowController.margin, width: size.width, height: size.height).insetBy(dx: clearance, dy: clearance), DotistDesign.windowCornerRadius - clearance)
     }
-    init(parent: NSWindow) {
+    init(parent: NSWindow, cornerRadius: CGFloat = DotistDesign.windowCornerRadius, usesOpticalClearance: Bool = true, accessibleCornerRadius: CGFloat? = nil) {
         self.parent = parent
+        self.cornerRadius = cornerRadius; self.usesOpticalClearance = usesOpticalClearance
+        self.accessibleCornerRadius = accessibleCornerRadius
         window = PanelShadowWindow(contentRect: PanelShadowController.frame(for: parent.frame), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false
         window.ignoresMouseEvents = true; window.isReleasedWhenClosed = false
@@ -267,9 +283,12 @@ final class ViewsShadowController {
         if window.frame != frame { window.setFrame(frame, display: false) }
         window.level = parent.level; window.collectionBehavior = parent.collectionBehavior; window.alphaValue = parent.alphaValue
         let accessible = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-        let shape = Self.silhouette(size: parent.frame.size, accessible: accessible)
+        let clearance = !accessible && usesOpticalClearance ? ExpandedReadingMaterial.opticalClearance : 0
+        let rect = CGRect(x: PanelShadowController.margin, y: PanelShadowController.margin, width: parent.frame.width, height: parent.frame.height).insetBy(dx: clearance, dy: clearance)
+        let radius = accessible ? (accessibleCornerRadius ?? cornerRadius) : cornerRadius - clearance
+        let shape = (rect: rect, radius: max(0, radius))
         let dark = parent.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        PanelShadowController.render(ambient: ambient, cutout: cutout, bounds: CGRect(origin: .zero, size: frame.size), rect: shape.rect, radius: shape.radius, dark: dark, compact: false)
+        PanelShadowController.render(ambient: ambient, cutout: cutout, bounds: CGRect(origin: .zero, size: frame.size), rect: shape.rect, radius: shape.radius, dark: dark, compactProgress: 0)
         if parent.isVisible && !parent.isMiniaturized && !fullScreen && !parent.styleMask.contains(.fullScreen) {
             if !window.isVisible { window.order(.below, relativeTo: parent.windowNumber) }
         } else if window.isVisible { window.orderOut(nil) }
