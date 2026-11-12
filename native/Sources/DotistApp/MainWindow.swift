@@ -5,6 +5,8 @@ import SwiftUI
 
 struct MainWindow: View {
     @Environment(\.accessibilityReduceMotion) var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) var reduceTransparency
+    @Environment(\.colorSchemeContrast) var contrast
     @ObservedObject var model: AppModel
     @ObservedObject var state: TaskPanelState
     let showViews: () -> Void
@@ -18,8 +20,10 @@ struct MainWindow: View {
     @State var panelHovered = false
     @State var composerHovered = false
     @State var composerFocused = false
-    @State var composerCueVisible = false
-    @State var composerCueGeneration = UUID()
+    @State var composerFlight = false
+    @State var composerFlightAtField = false
+    @State var composerFlightGeneration = UUID()
+    @State var composerFrames: [String: CGRect] = [:]
     @State var toolbarDrag: ToolbarDragSession?
     @GestureState var toolbarGestureActive = false
     @State private var toolbarFrames: [ToolbarItem: CGRect] = [:]
@@ -119,7 +123,12 @@ struct MainWindow: View {
                     .background(DateFilterContentClickObserver(enabled: filterPresentation.isOpen, dismiss: filterPresentation.contentClicked))
             }
         }
+        .background(alignment: .topLeading) { composerGlass }
         .coordinateSpace(name: Self.listSpace)
+        .onPreferenceChange(ComposerFrameKey.self) { composerFrames = $0 }
+        .onReceive(NotificationCenter.default.publisher(for: .init("DotistQAComposer"))) { _ in
+            if primary { activateEmptyStateComposer() }
+        }
         .overlay(alignment: .topLeading) {
             ghostConnector
             if let drag {
@@ -176,6 +185,7 @@ struct MainWindow: View {
         .onChange(of: showCalendar) { _, open in filterPresentation.dateControlsChanged(open) }
         .onChange(of: state.groupID) { id in
             cancelReorder()
+            dismissComposerCue()
             category = id ?? DotistGroup.inboxID
             leaveInputs()
             selection.update { $0.clear() }
@@ -184,11 +194,14 @@ struct MainWindow: View {
             if let id = state.groupID, !groups.contains(where: { $0.id == id }) { state.groupID = nil }
             if !groups.contains(where: { $0.id == category }) { category = state.groupID ?? DotistGroup.inboxID }
         }
+        .onChange(of: state.activeTag) { _ in dismissComposerCue() }
+        .onChange(of: customStart) { _ in dismissComposerCue() }
+        .onChange(of: customEnd) { _ in dismissComposerCue() }
         .onChange(of: model.tagDescription) { _ in
             if let tag = state.activeTag, !model.tagCounts.contains(where: { $0.tag == tag && $0.open > 0 }) { state.activeTag = nil }
         }
         .onChange(of: model.scope) { scope in if primary { state.scope = scope } }
-        .onChange(of: state.scope) { scope in cancelReorder(); leaveInputs(); selection.update { $0.clear() }; if primary { model.scope = scope } }
+        .onChange(of: state.scope) { scope in dismissComposerCue(); cancelReorder(); leaveInputs(); selection.update { $0.clear() }; if primary { model.scope = scope } }
         .onChange(of: model.scopeNavigation) { _ in
             guard primary else { return }
             state.activeTag = nil

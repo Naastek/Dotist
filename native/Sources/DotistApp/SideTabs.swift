@@ -8,6 +8,7 @@ import SwiftUI
 enum SideTabGeometry {
     static let collapsedWidth: CGFloat = 10
     static let selectedWidth: CGFloat = 15
+    static let attachmentOverlap = ExpandedReadingMaterial.opticalClearance + 1
     static let height: CGFloat = 34
     static let spacing: CGFloat = 6
     static let topInset: CGFloat = 40
@@ -52,6 +53,17 @@ enum SideTabGeometry {
         let tabs: [CGRect]
         let textOpacity: Double
         let opacities: [Double]
+    }
+    static func paintedFrame(_ rect: CGRect, inward: Bool) -> CGRect {
+        var painted = rect
+        if !inward { painted.size.width += attachmentOverlap }
+        return painted
+    }
+    static func shadowRects(rows: [SideTabLayout], bounds: CGRect, panel: CGRect, painted: Bool, visible: Bool, inward: Bool) -> [CGRect] {
+        guard painted, visible, !inward else { return [] }
+        return rows.filter { $0.opacity > 0 }.map {
+            paintedFrame($0.rect, inward: false).offsetBy(dx: bounds.minX - panel.minX, dy: bounds.minY - panel.minY)
+        }
     }
     static func snapshot(panel: CGRect, fullWidths: [CGFloat], progress: CGFloat, inward: Bool, visibleMinX: CGFloat? = nil,
                          selectedIndex: Int? = nil, entrance: [CGFloat]? = nil) -> Snapshot {
@@ -154,7 +166,7 @@ struct SideTabEntrance {
     }
 }
 
-private struct SideTabShape: Shape {
+struct SideTabShape: Shape {
     let inward: Bool
     func path(in rect: CGRect) -> Path {
         let radius = min(8, rect.width / 2, rect.height / 2)
@@ -294,16 +306,17 @@ private struct SideTabContent: View {
     let inward: Bool
     let textOpacity: Double
     let opacity: UInt8
+    let attachmentOverlap: CGFloat
 
     var body: some View {
-        ZStack(alignment: inward ? .leading : .trailing) {
+        ZStack(alignment: .leading) {
             SideTabBackground(inward: inward, color: color, selected: selected, opacity: opacity)
-                .frame(width: row.rect.width, height: SideTabGeometry.height)
+                .frame(width: row.rect.width + attachmentOverlap, height: SideTabGeometry.height)
             SideTabLabel(name: row.name, language: language, selected: selected,
                          hovered: hovered, right: inward, width: row.rect.width,
                          fullWidth: row.fullWidth, textOpacity: textOpacity)
         }
-        .frame(width: row.rect.width, height: SideTabGeometry.height)
+        .frame(width: row.rect.width + attachmentOverlap, height: SideTabGeometry.height)
         .clipped()
     }
 }
@@ -320,6 +333,7 @@ struct SideTabsCanvas: View {
     let textOpacity: Double
     let opacity: UInt8
     let color: (String?) -> DotistGroupColor
+    var attachmentOverlap: CGFloat = 0
     var pointer: ((String, NSEvent.EventType, CGPoint) -> Void)?
     var select: ((String?) -> Void)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -330,10 +344,11 @@ struct SideTabsCanvas: View {
             ForEach(rows.filter { $0.opacity > 0 }) { row in
                 SideTabContent(row: row, language: language, color: color(row.groupID),
                     selected: selectedGroupID == row.groupID, hovered: hovered == row.id,
-                    inward: inward, textOpacity: textOpacity, opacity: opacity)
-                    .overlay {
+                    inward: inward, textOpacity: textOpacity, opacity: opacity, attachmentOverlap: attachmentOverlap)
+                    .overlay(alignment: .leading) {
                         if row.interactive, let pointer {
                             SideTabPointer { type, location in pointer(row.id, type, location) }
+                                .frame(width: row.rect.width)
                         }
                     }
                     .opacity(row.opacity)
@@ -361,13 +376,17 @@ private struct SideTabsView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var state: TaskPanelState
     @ObservedObject var presentation: SideTabPresentation
+    @ObservedObject var motion: PanelMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
     let pointer: (String, NSEvent.EventType, CGPoint) -> Void
 
     var body: some View {
         SideTabsCanvas(rows: presentation.rows, size: presentation.size, language: model.language,
             selectedGroupID: state.groupID, hovered: presentation.hovered, inward: presentation.inward,
-            textOpacity: presentation.textOpacity, opacity: model.settings.sideTabOpacity,
+            textOpacity: presentation.textOpacity * (reduceTransparency || contrast == .increased ? 1 : motion.idleContentOpacity), opacity: model.settings.sideTabOpacity,
             color: { model.themeColor(forGroup: $0) },
+            attachmentOverlap: presentation.inward ? 0 : SideTabGeometry.attachmentOverlap,
             pointer: pointer, select: { state.groupID = $0 })
             .environment(\.sideTabSurfaceStyle, .tint)
             .modifier(DotistTheme(theme: model.settings.theme))
@@ -506,14 +525,14 @@ final class SideTabsController: NSObject {
     init(parent: NSPanel, model: AppModel, state: TaskPanelState, motion: PanelMotion, environment: Environment = Environment()) {
         self.environment = environment
         self.parent = parent; self.model = model; self.state = state; self.motion = motion
-        window = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window = SideTabsPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         window.identifier = NSUserInterfaceItemIdentifier("dotist.side-tabs")
         window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false
         window.alphaValue = 0
         window.isReleasedWhenClosed = false; window.isMovable = false; window.isMovableByWindowBackground = false
         window.collectionBehavior = parent.collectionBehavior
-        let host = SideTabHostingView(rootView: SideTabsView(model: model, state: state, presentation: presentation) { [weak self] in self?.pointer($0, type: $1, at: $2) })
+        let host = SideTabHostingView(rootView: SideTabsView(model: model, state: state, presentation: presentation, motion: motion) { [weak self] in self?.pointer($0, type: $1, at: $2) })
         host.sizingOptions = []
         host.safeAreaRegions = []
         host.wantsLayer = true
@@ -564,6 +583,7 @@ final class SideTabsController: NSObject {
     func stop() {
         guard !stopped else { return }
         stopped = true
+        motion.shadowController?.setTabRects([])
         collapseWork?.cancel(); collapseWork = nil
         displayLink?.invalidate(); displayLink = nil
         observers.forEach(NotificationCenter.default.removeObserver); observers.removeAll()
@@ -672,7 +692,7 @@ final class SideTabsController: NSObject {
         let sample = SideTabGeometry.snapshot(panel: frame, fullWidths: widths,
             progress: expansion.progress(at: now), inward: inward, visibleMinX: visibleMinX,
             selectedIndex: selectedIndex, entrance: arrivals)
-        let bounds = sample.window
+        let bounds = SideTabGeometry.paintedFrame(sample.window, inward: inward)
         // AppKit moves child windows with the parent. Compare the actual frame,
         // then update frame + SwiftUI layout from the very same animation sample.
         if window.frame != bounds { window.setFrame(bounds, display: false) }
@@ -704,7 +724,9 @@ final class SideTabsController: NSObject {
         if presentation.visible != visible { presentation.visible = visible }
         window.ignoresMouseEvents = !visible || (press == nil && !hitRects.contains { $0.contains(mouse) })
         let painted = hostVisible && rows.contains { $0.opacity > 0 }
-        window.alphaValue = painted ? parent.alphaValue : 0
+        let shadowTabs = SideTabGeometry.shadowRects(rows: rows, bounds: bounds, panel: frame, painted: painted, visible: visible, inward: inward)
+        motion.shadowController?.setTabRects(shadowTabs)
+        window.alphaValue = painted ? 1 : 0
         let ordering = SideTabGeometry.childOrder(inward: inward, expanded: expanded,
             progress: expansion.progress(at: now))
         if let restingHost {
@@ -731,4 +753,9 @@ final class SideTabsController: NSObject {
             expanded = false; collapseWork?.cancel(); collapseWork = nil; cancelDrag()
         }
     }
+}
+
+// Internal so the selector contract can be checked without showing a window.
+final class SideTabsPanel: NSPanel {
+    @objc(_hasActiveAppearance) func dotistHasActiveAppearance() -> Bool { FloatingGlassAppearance.active(self) }
 }

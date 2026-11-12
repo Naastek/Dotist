@@ -24,6 +24,30 @@ final class PanelMotionLifecycleTests: XCTestCase {
         return try AppModel(store: store)
     }
 
+    func testIdleFadeChangesContentOpacityWithoutChangingPanelAlpha() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-idle-fade-\(UUID().uuidString)")
+        addTeardownBlock { try FileManager.default.removeItem(at: directory) }
+        let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
+        var settings = DotistSettingsPatch()
+        settings.idleFade = true
+        settings.idleDelaySecs = 1
+        settings.idleOpacity = 37
+        settings.autoCollapse = false
+        settings.locked = false
+        _ = try store.updateSettings(settings)
+        let model = try AppModel(store: store)
+        let panel = panel()
+        defer { panel.close() }
+        var now = Date()
+        var environment = PanelMotionTestEnvironment().environment
+        environment.now = { now }
+        let motion = PanelMotion(model: model, panel: panel, size: panel.frame.size, title: { "" }, environment: environment)
+        now = now.addingTimeInterval(2)
+        motion.updateIdleState()
+        XCTAssertEqual(panel.alphaValue, 1)
+        XCTAssertEqual(motion.idleContentOpacity, 0.37, accuracy: 0.0001)
+    }
+
     func testAnimatorProxyDeliversFrameChangesToTheRealPanel() async throws {
         let panel = panel()
         defer { panel.close() }
@@ -89,15 +113,17 @@ final class PanelMotionLifecycleTests: XCTestCase {
         XCTAssertEqual(completions, 0)
     }
 
-    func testClosingPanelStopsMotionWithoutCreatingShadowWindows() throws {
+    func testClosingPanelStopsMotionAndRemovesShadowWindow() throws {
         let model = try model()
         let panel = panel()
         let motion = PanelMotion(model: model, panel: panel, size: panel.frame.size, title: { "" },
                                  environment: PanelMotionTestEnvironment().environment)
         motion.refreshShadow()
         XCTAssertFalse(panel.hasShadow)
-        XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
+        let shadow = try XCTUnwrap(motion.shadowController?.window)
+        XCTAssertTrue(panel.childWindows?.contains { $0 === shadow } ?? false)
         panel.close()
+        XCTAssertFalse(shadow.isVisible)
         XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
         motion.refreshShadow()
         XCTAssertFalse(panel.hasShadow)
@@ -113,7 +139,7 @@ final class PanelMotionLifecycleTests: XCTestCase {
                                              environment: PanelMotionTestEnvironment().environment)
         let released = WeakBox(try XCTUnwrap(motion))
         motion?.refreshShadow()
-        XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
+        XCTAssertEqual(panel.childWindows?.count, 1)
         motion = nil
         XCTAssertNil(released.value)
         XCTAssertTrue(panel.childWindows?.isEmpty ?? true)

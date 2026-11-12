@@ -27,6 +27,21 @@ struct FloatingPanelShape: Shape {
     }
 }
 
+struct FloatingPanelContentShape: Shape {
+    var panelShape: FloatingPanelShape
+    var animatableData: CGFloat {
+        get { panelShape.animatableData }
+        set { panelShape.animatableData = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        guard !panelShape.compact && !panelShape.transitioning else { return panelShape.path(in: rect) }
+        let inset = ExpandedReadingMaterial.opticalClearance
+        return RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius - inset, style: .continuous)
+            .path(in: rect.insetBy(dx: inset, dy: inset))
+    }
+}
+
 struct FloatingPanelView<Content: View>: View {
     @ObservedObject private var glassDebug = GlassDebugState.shared
     @ObservedObject var model: AppModel
@@ -57,7 +72,7 @@ struct FloatingPanelView<Content: View>: View {
             ZStack(alignment: .topTrailing) {
                 content
                     .frame(width: width, height: height)
-                    .opacity(motion.bubble ? 0 : 1)
+                    .opacity(motion.bubble ? 0 : (reduceTransparency || contrast == .increased ? 1 : motion.idleContentOpacity))
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.14).delay(motion.bubble ? 0 : 0.1), value: motion.bubble)
                     .allowsHitTesting(!motion.bubble)
                     .accessibilityHidden(motion.bubble)
@@ -75,13 +90,13 @@ struct FloatingPanelView<Content: View>: View {
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topTrailing)
             // Clip the animated content, then attach glass. Masking the combined
             // result also cuts the system material's light at the silhouette.
-            .clipShape(FloatingPanelShape(compact: motion.bubble, transitioning: motion.animationInProgress,
+            .clipShape(FloatingPanelContentShape(panelShape: FloatingPanelShape(compact: motion.bubble, transitioning: motion.animationInProgress,
                 onRight: motion.bubbleOnRight, reveal: hoverReveal, base: 48 + extra,
-                debug: glassDebug.enabled && !reduceTransparency && contrast != .increased ? glassDebug.parameters : nil))
+                debug: glassDebug.enabled && !reduceTransparency && contrast != .increased ? glassDebug.parameters : nil)))
             .background(FloatingSurface(opacity: model.settings.opacity, frost: model.settings.frost,
                 compact: motion.bubble, transitioning: motion.animationInProgress, onRight: motion.bubbleOnRight,
                 size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID), base: 48 + extra,
-                frameInsets: motion.surfaceInsets))
+                frameInsets: motion.surfaceInsets, idleContentOpacity: motion.idleContentOpacity))
             .background(WindowShadowInvalidation())
         }
         .environment(\.glassDebugParameters, glassDebug.enabled ? glassDebug.parameters : nil)

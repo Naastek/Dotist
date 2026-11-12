@@ -196,7 +196,7 @@ final class PanelShadowTests: XCTestCase {
         try pixelEvidence.joined(separator: "\n").write(to: evidence.appendingPathComponent("exterior-pixels.csv"), atomically: true, encoding: .utf8)
     }
 
-    func testTaskPanelStateAndOtherPanelsUseExpectedShadowWithoutChildren() throws {
+    func testTaskPanelStateAndOtherPanelsUseExpectedShadowChildren() throws {
         let model = try model()
         let frame = NSRect(x: 100, y: 100, width: 364, height: 620)
         let panel = DotistPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -229,8 +229,8 @@ final class PanelShadowTests: XCTestCase {
             motion.finishHover(false)
             motion.refreshShadow()
             XCTAssertFalse(panel.hasShadow)
-            XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
-            XCTAssertTrue(group.window?.childWindows?.isEmpty ?? true)
+            XCTAssertEqual(panel.childWindows?.count, 1)
+            XCTAssertEqual(group.window?.childWindows?.count, 1)
         }
     }
 
@@ -264,7 +264,7 @@ final class PanelShadowTests: XCTestCase {
             func check(_ phase: String) {
                 XCTAssertFalse(panel.hasShadow, "reduceMotion=\(reduceMotion), \(phase)")
                 XCTAssertFalse(panel.isVisible)
-                XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
+                XCTAssertEqual(panel.childWindows?.count ?? 0, motion.shadowController == nil ? 0 : 1)
             }
             check("initial expanded")
             for compact in [true, false] {
@@ -301,7 +301,7 @@ final class PanelShadowTests: XCTestCase {
         }
     }
 
-    func testHiddenPanelFrameRequestsCompleteSynchronouslyWithoutShadowChildren() throws {
+    func testHiddenPanelFrameRequestsCompleteSynchronouslyWithShadowChild() throws {
         let model = try model()
         let area = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 1000)
         let frame = NSRect(x: area.minX + 20, y: area.minY + 20, width: min(364, area.width), height: min(620, area.height))
@@ -330,7 +330,7 @@ final class PanelShadowTests: XCTestCase {
             XCTAssertEqual(panel.styleMask.contains(.resizable), !compact)
             XCTAssertFalse(panel.isVisible)
             XCTAssertFalse(panel.hasShadow)
-            XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
+            XCTAssertEqual(panel.childWindows?.count, 1)
             XCTAssertEqual(durationRequests, 0, "Do not queue native animations for hidden windows")
             XCTAssertEqual(input.pendingFrameAnimationCount, 0)
         }
@@ -360,14 +360,14 @@ final class PanelShadowTests: XCTestCase {
                 XCTAssertFalse(panel.hasShadow)
                 motion.refreshShadow()
                 XCTAssertFalse(panel.hasShadow)
-                XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
+                XCTAssertEqual(panel.childWindows?.count, 1)
             }
             try input.completeFrameAnimation(for: panel)
             XCTAssertFalse(motion.animationInProgress)
             XCTAssertEqual(motion.bubble, compact)
             XCTAssertEqual(panel.frame.size, compact ? NSSize(width: 48, height: 48) : frame.size)
             XCTAssertFalse(panel.hasShadow)
-            XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
+            XCTAssertEqual(panel.childWindows?.count, 1)
         }
         XCTAssertEqual(input.pendingFrameAnimationCount, 0)
     }
@@ -429,6 +429,7 @@ final class PanelShadowTests: XCTestCase {
     func testShadowRefreshContinuesAfterViewUpdatesAndStopsWhenRemoved() async throws {
         _ = NSApplication.shared
         let panel = ShadowCountingPanel(contentRect: NSRect(x: 0, y: 0, width: 280, height: 48), styleMask: [.borderless], backing: .buffered, defer: false)
+        panel.hasShadow = true
         panel.isReleasedWhenClosed = false
         defer { panel.close() }
         let view = ShadowInvalidationView()

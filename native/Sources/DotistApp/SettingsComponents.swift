@@ -37,7 +37,7 @@ struct SettingsSearchEntry: Identifiable, Equatable {
 enum SettingsSearchIndex {
     static let entries: [SettingsSearchEntry] = {
         let rows: [(SettingsModule, [String])] = [
-            (.appearance, ["主题", "玻璃预设", "主表面透明度", "磨砂程度", "字体", "西文衬线", "西文无衬线", "中文衬线", "中文无衬线", "恢复默认字体", "失焦淡出", "淡出前等待", "淡出用时", "失焦后整窗透明度", "全部", "分组便签背景透明度", "便签入场预览"]),
+            (.appearance, ["主题", "玻璃预设", "主表面透明度", "磨砂程度", "字体", "西文衬线", "西文无衬线", "中文衬线", "中文无衬线", "恢复默认字体", "失焦淡出", "淡出前等待", "淡出用时", "失焦后内容透明度", "全部", "分组便签背景透明度", "便签入场预览"]),
             (.general, ["语言", "显示在 Dock", "显示在菜单栏", "开机启动", "悬停显示详情", "窗口大小", "固定窗口", "自动收起", "收起等待时间", "窗口置顶", "分组", "标签"]),
             (.filters, ["启动时打开", "筛选器"]),
             (.menubar, ["显示内容", "日期透视", "分组", "轮播间隔", "左键点击", "右键点击"]),
@@ -94,7 +94,7 @@ enum SettingsSearchIndex {
         switch title {
         case "主表面透明度": return ["transparency opacity alpha glass 透明程度 不透明度 透過率"] + translations("透明程度")
         case "分组便签背景透明度": return ["transparency opacity alpha group tab 分组便签不透明度"] + translations("分组便签不透明度")
-        case "失焦后整窗透明度": return ["transparency opacity alpha idle fade 淡出后的不透明度"] + translations("淡出后的不透明度")
+        case "失焦后内容透明度": return ["transparency opacity alpha idle fade 淡出后的不透明度"] + translations("淡出后的不透明度")
         case "字体": return ["Fonts Typeface フォント 字型 字體"]
         case "西文衬线": return ["Fonts Latin serif 西文襯線 欧文セリフ Newsreader Source Serif Brygada 1918 PT Serif Playfair Display Zodiak Gambarino New York 系统 系統 システム system"]
         case "西文无衬线": return ["Fonts Latin sans serif 西文無襯線 欧文サンセリフ Atkinson Hyperlegible Next Source Sans Figtree Rubik Work Sans Public Sans Quicksand Plus Jakarta Sans Switzer Satoshi SF Pro 系统 系統 システム system"]

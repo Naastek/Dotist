@@ -3,6 +3,8 @@ import DotistCore
 import SwiftUI
 
 struct ViewsWindow: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
     @ObservedObject var model: AppModel
     @State private var view = "calendar"
     @State private var scale = "month"
@@ -59,6 +61,7 @@ struct ViewsWindow: View {
                 }.padding(.horizontal, narrow ? 16 : 24).padding(.top, 12).padding(.bottom, 20).frame(minWidth: 632, maxWidth: .infinity, alignment: .topLeading).background(WindowDragArea())
             }
         }.foregroundColor(DotistDesign.ink).modifier(DotistControlTint()).background(WindowMaterial(opacity: 78, frost: model.settings.frost)).modifier(DotistTheme(theme: model.settings.theme))
+            .clipShape(RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius, style: .continuous).inset(by: reduceTransparency || contrast == .increased ? 0 : ExpandedReadingMaterial.opticalClearance))
         }
     }
 

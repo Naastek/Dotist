@@ -23,10 +23,9 @@ final class ExpandedGlassMaterialTests: XCTestCase {
             for (opacity, frost): (UInt8, UInt8) in [(20, 0), (80, 40), (100, 100)] {
                 let image = try bitmap(FloatingPanelSurface(opacity: opacity, frost: frost, compact: false,
                     color: .pink, solid: false, scheme: scheme), size: size, scheme: scheme)
-                let alpha = try XCTUnwrap(image.colorAt(x: 260, y: 4)).alphaComponent
-                if let reference { XCTAssertEqual(alpha, reference, accuracy: 1.0 / 255, "Reading settings must not paint or fade the optical rim: \(scheme)") }
+                let alpha = try XCTUnwrap(image.colorAt(x: 260, y: 2)).alphaComponent
+                if let reference { XCTAssertEqual(alpha, reference, accuracy: 1.0 / 255, "Reading settings must not paint outside the optical clearance: \(scheme)") }
                 else { reference = alpha }
-                XCTAssertGreaterThan(alpha, 0.08, "The existing reflection must still render")
             }
         }
     }
@@ -42,8 +41,9 @@ final class ExpandedGlassMaterialTests: XCTestCase {
                     ExpandedReadingMaterial(opacity: opacity, frost: frost, color: color, scheme: scheme, cornerRadius: 18)
                 }, size: size, scheme: scheme)
                 if !composite {
-                    XCTAssertEqual(try XCTUnwrap(image.colorAt(x: 260, y: 0)).alphaComponent, 0,
-                        "Reading paint must leave the native optical band clear")
+                    XCTAssertEqual(try XCTUnwrap(image.colorAt(x: 260, y: 0)).alphaComponent,
+                        try XCTUnwrap(image.colorAt(x: 260, y: 140)).alphaComponent, accuracy: 1.0 / 255,
+                        "Reading paint must reach the straight edge without an inset step")
                     XCTAssertEqual(try XCTUnwrap(image.colorAt(x: 0, y: 0)).alphaComponent, 0,
                         "Reading layers must not create a rectangular plate")
                 }
@@ -73,6 +73,39 @@ final class ExpandedGlassMaterialTests: XCTestCase {
             XCTAssertGreaterThan(try rgbDistance(center(20, 40, composite: true), center(80, 40, composite: true)), 0.1)
             XCTAssertGreaterThan(try rgbDistance(center(20, 0, composite: true), center(20, 100, composite: true)), 0.02)
             XCTAssertGreaterThan(try rgbDistance(center(80, 40, composite: true), center(80, 40, .none, composite: true)), 0.01)
+        }
+    }
+
+    func testExpandedContentClipMatchesOpticalShapeAndPreservesTransitions() {
+        let rect = CGRect(x: 0, y: 0, width: 364, height: 620)
+        for compact in [false, true] {
+            for transitioning in [false, true] {
+                let panel = FloatingPanelShape(compact: compact, transitioning: transitioning, onRight: true, reveal: 0.5)
+                let actual = FloatingPanelContentShape(panelShape: panel).path(in: rect)
+                let expected = !compact && !transitioning
+                    ? RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius - ExpandedReadingMaterial.opticalClearance, style: .continuous)
+                        .path(in: rect.insetBy(dx: ExpandedReadingMaterial.opticalClearance, dy: ExpandedReadingMaterial.opticalClearance))
+                    : panel.path(in: rect)
+                XCTAssertEqual(actual.cgPath, expected.cgPath)
+            }
+        }
+    }
+
+    func testGlassInteriorAlphaEndpointsAndMonotonicity() {
+        for dark in [false, true] {
+            for frost: UInt8 in [0, 40, 100] {
+                XCTAssertEqual(ExpandedReadingMaterial.glassInteriorAlpha(opacity: 100, frost: frost, dark: dark), 1, accuracy: 0.000001)
+            }
+            XCTAssertEqual(ExpandedReadingMaterial.glassInteriorAlpha(opacity: 0, frost: 0, dark: dark), 0, accuracy: 0.000001)
+            XCTAssertEqual(ExpandedReadingMaterial.glassInteriorAlpha(opacity: 0, frost: 100, dark: dark), 1, accuracy: 0.000001)
+            XCTAssertEqual(ExpandedReadingMaterial.glassInteriorAlpha(opacity: 80, frost: 40, dark: dark), 0.88, accuracy: 0.000001)
+            for opacity in 0...100 {
+                for frost in 0...100 {
+                    let value = ExpandedReadingMaterial.glassInteriorAlpha(opacity: UInt8(opacity), frost: UInt8(frost), dark: dark)
+                    if opacity < 100 { XCTAssertGreaterThanOrEqual(ExpandedReadingMaterial.glassInteriorAlpha(opacity: UInt8(opacity + 1), frost: UInt8(frost), dark: dark), value) }
+                    if frost < 100 { XCTAssertGreaterThanOrEqual(ExpandedReadingMaterial.glassInteriorAlpha(opacity: UInt8(opacity), frost: UInt8(frost + 1), dark: dark), value) }
+                }
+            }
         }
     }
 
