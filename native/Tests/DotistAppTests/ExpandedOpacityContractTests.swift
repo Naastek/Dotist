@@ -31,7 +31,7 @@ final class ExpandedOpacityContractTests: XCTestCase {
                 let amount = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
                 let glassAlpha = 1 - 0.6 * (1 - amount)
                 let control = ZStack {
-                    Color.clear.glassEffect(.regular.tint(DotistTheme.tint(.pink, scheme)), in: shape)
+                    Color.clear.dotistGlass(.regular.tint(DotistTheme.tint(.pink, scheme)), in: shape)
                         .mask {
                             Color.white.overlay {
                                 shape.inset(by: 3).fill(.white).blur(radius: 1)
@@ -41,7 +41,8 @@ final class ExpandedOpacityContractTests: XCTestCase {
                         }
                     ExpandedReadingMaterial(opacity: opacity, frost: 40, color: .pink, scheme: scheme, cornerRadius: radius)
                         .applyingBackgroundOpacity(amount)
-                }.padding(ExpandedReadingMaterial.opticalClearance).environment(\.colorScheme, scheme)
+                    GlassGloss(shape: shape.inset(by: GlassSilhouette.glassClip), intensity: .expanded, scheme: scheme)
+                }.clipShape(shape.inset(by: GlassSilhouette.glassClip)).padding(ExpandedReadingMaterial.opticalClearance).environment(\.colorScheme, scheme)
                 let reference = NativeRenderingFixture(control, size: size)
                 reference.window.isOpaque = false; reference.window.backgroundColor = .clear
                 let expected = try await reference.capture(scale: 1)

@@ -5,13 +5,19 @@ import SwiftUI
 
 /// The content and material share the same animated silhouette, including the
 /// unused transparent area of the already-resized hover window.
-struct FloatingPanelShape: Shape {
+struct FloatingPanelShape: InsettableShape {
     let compact: Bool
     let transitioning: Bool
     let onRight: Bool
     var reveal: CGFloat
     var base: CGFloat = 48
     var debug: GlassDebugParameters? = nil
+    var insetAmount: CGFloat = 0
+    func inset(by amount: CGFloat) -> FloatingPanelShape {
+        var result = self
+        result.insetAmount += amount
+        return result
+    }
     var animatableData: CGFloat {
         get { reveal }
         set { reveal = newValue }
@@ -20,10 +26,10 @@ struct FloatingPanelShape: Shape {
         let width = compact && !transitioning ? base + (rect.width - base) * min(1, max(0, reveal)) : rect.width
         let surface = CGRect(x: rect.minX + (onRight ? rect.width - width : 0), y: rect.minY, width: width, height: rect.height)
         if compact, let debug {
-            if debug.shape == .capsule { return Capsule().path(in: surface) }
-            return RoundedRectangle(cornerRadius: CGFloat(debug.radius.rawValue), style: .continuous).path(in: surface)
+            if debug.shape == .capsule { return Capsule().inset(by: insetAmount).path(in: surface) }
+            return RoundedRectangle(cornerRadius: CGFloat(debug.radius.rawValue), style: .continuous).inset(by: insetAmount).path(in: surface)
         }
-        return RoundedRectangle(cornerRadius: compact ? 24 : DotistDesign.windowCornerRadius, style: .continuous).path(in: surface)
+        return RoundedRectangle(cornerRadius: compact ? 24 : DotistDesign.windowCornerRadius, style: .continuous).inset(by: insetAmount).path(in: surface)
     }
 }
 
@@ -36,7 +42,7 @@ struct FloatingPanelContentShape: Shape {
 
     func path(in rect: CGRect) -> Path {
         guard !panelShape.compact && !panelShape.transitioning else { return panelShape.path(in: rect) }
-        let inset = ExpandedReadingMaterial.opticalClearance
+        let inset = GlassSilhouette.expandedInset
         return RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius - inset, style: .continuous)
             .path(in: rect.insetBy(dx: inset, dy: inset))
     }

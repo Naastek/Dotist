@@ -7,7 +7,7 @@ import XCTest
 final class PanelShadowWindowTests: XCTestCase {
     func testShadowTiers() {
         let tiers: [(DotistShadow, CGFloat, CGFloat, Float, Float)] = [
-            (.panel, 24, 8, 0.20, 0.36), (.compact, 16, 5, 0.16, 0.30), (.inline, 12, 4, 0.14, 0.28)
+            (.panel, 24, 8, 0.20, 0.36), (.compact, 16, 5, 0.10, 0.24), (.inline, 12, 4, 0.14, 0.28)
         ]
         for (tier, blur, y, light, dark) in tiers {
             XCTAssertEqual(tier.blur, blur); XCTAssertEqual(tier.y, y)
@@ -65,7 +65,7 @@ final class PanelShadowWindowTests: XCTestCase {
         func tabs(_ painted: Bool, _ visible: Bool, _ inward: Bool) -> [CGRect] {
             SideTabGeometry.shadowRects(rows: rows, bounds: bounds, panel: panel, painted: painted, visible: visible, inward: inward)
         }
-        XCTAssertEqual(tabs(true, true, false), [CGRect(x: -20, y: 440, width: 23, height: 34)])
+        XCTAssertEqual(tabs(true, true, false), [CGRect(x: -20, y: 440, width: 20 + SideTabGeometry.attachmentOverlap, height: 34)])
         XCTAssertTrue(tabs(false, true, false).isEmpty)
         XCTAssertTrue(tabs(true, false, false).isEmpty)
         XCTAssertTrue(tabs(true, true, true).isEmpty)
@@ -137,7 +137,7 @@ final class PanelShadowWindowTests: XCTestCase {
         XCTAssertFalse(shadow.window.canBecomeKey)
         XCTAssertFalse(shadow.window.canBecomeMain)
         let shape = ViewsShadowController.silhouette(size: parent.frame.size, accessible: false)
-        let clearance = ExpandedReadingMaterial.opticalClearance
+        let clearance = GlassSilhouette.expandedInset
         XCTAssertEqual(shape.rect, CGRect(x: 48, y: 48, width: parent.frame.width, height: parent.frame.height).insetBy(dx: clearance, dy: clearance))
         XCTAssertEqual(shape.radius, DotistDesign.windowCornerRadius - clearance)
         let accessible = ViewsShadowController.silhouette(size: parent.frame.size, accessible: true)

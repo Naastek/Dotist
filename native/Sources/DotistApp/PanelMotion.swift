@@ -367,6 +367,13 @@ final class PanelMotion: ObservableObject {
     func updateIdleState() {
         guard !stopped else { return }
         let prefs = model.settings
+        let qaIdle = Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa"
+            && panel.identifier?.rawValue == "dotist.main"
+            && ProcessInfo.processInfo.environment["DOTIST_QA_IDLE"] == "1"
+        if qaIdle && !bubble && !animationInProgress {
+            idleContentOpacity = Double(prefs.idleOpacity) / 100
+            return
+        }
         if bubble && hoverRequiresExit && !panel.frame.contains(environment.mouseLocation()) { hoverRequiresExit = false }
         if bubble && hovering && !panel.frame.contains(environment.mouseLocation()) && environment.pressedMouseButtons() & 1 == 0 { setHover(false) }
         let active = bubble || animationInProgress || panel.isKeyWindow || panel.frame.contains(environment.mouseLocation()) || environment.pressedMouseButtons() & 1 != 0

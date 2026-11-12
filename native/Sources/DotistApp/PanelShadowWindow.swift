@@ -30,7 +30,7 @@ enum DotistShadow {
     var blur: CGFloat { switch self { case .panel: 24; case .compact: 16; case .inline: 12 } }
     var y: CGFloat { switch self { case .panel: 8; case .compact: 5; case .inline: 4 } }
     func opacity(dark: Bool) -> Float {
-        switch self { case .panel: dark ? 0.36 : 0.20; case .compact: dark ? 0.30 : 0.16; case .inline: dark ? 0.28 : 0.14 }
+        switch self { case .panel: dark ? 0.36 : 0.20; case .compact: dark ? 0.24 : 0.10; case .inline: dark ? 0.28 : 0.14 }
     }
 }
 
@@ -174,17 +174,19 @@ final class PanelShadowController {
                       width: max(0, rect.width - inset.leading - inset.trailing), height: max(0, rect.height - inset.top - inset.bottom))
         // Expanded glass sits inside the optical clearance; hug it so no unshadowed band shows.
         let qa = parent.identifier?.rawValue == "dotist.main" && !compact && !transitioning ? QAEdge.flags : []
-        let clearance = !accessible && !compact && !transitioning ? ExpandedReadingMaterial.opticalClearance + (qa.contains(.cutout1) ? 1 : 0) : 0
-        rect = rect.insetBy(dx: clearance, dy: clearance)
+        let clearance: CGFloat = !accessible && !compact ? GlassSilhouette.expandedInset : 0
+        let glassClip: CGFloat = !accessible && compact ? GlassSilhouette.glassClip : 0
+        rect = rect.insetBy(dx: clearance + glassClip, dy: clearance + glassClip)
         let transitionProgress = min(1, max(0, motion.surfaceInsets.top / FloatingSurface.compactOpticalInset))
-        let radius = transitioning ? DotistDesign.windowCornerRadius + (24 - DotistDesign.windowCornerRadius) * transitionProgress : (compact ? 24 : DotistDesign.windowCornerRadius - clearance)
+        let radius: CGFloat = compact ? 24 : DotistDesign.windowCornerRadius - clearance
+        let visibleRadius = radius - glassClip
         let compactProgress = transitioning ? transitionProgress : (compact ? 1.0 : 0.0)
         let dark = parent.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let localTabs = tabs.map { $0.offsetBy(dx: Self.margin + left, dy: Self.margin + bottom) }
-        let inputs = LayerInputs(size: frame.size, rect: rect, radius: radius, dark: dark, compactProgress: compactProgress, alpha: parent.alphaValue, hideShadow: qa.contains(.noShadow), tabs: localTabs)
+        let inputs = LayerInputs(size: frame.size, rect: rect, radius: visibleRadius, dark: dark, compactProgress: compactProgress, alpha: parent.alphaValue, hideShadow: qa.contains(.noShadow), tabs: localTabs)
         if inputs != lastLayerInputs {
             lastLayerInputs = inputs
-            Self.render(ambient: ambient, cutout: cutout, bounds: bounds, rect: rect, radius: radius, dark: dark, compactProgress: compactProgress, tabs: localTabs, hideShadow: qa.contains(.noShadow))
+            Self.render(ambient: ambient, cutout: cutout, bounds: bounds, rect: rect, radius: visibleRadius, dark: dark, compactProgress: compactProgress, tabs: localTabs, hideShadow: qa.contains(.noShadow))
         }
         if parent.isVisible && !parent.isMiniaturized {
             if !window.isVisible { window.order(.below, relativeTo: parent.windowNumber) }
@@ -243,7 +245,7 @@ final class ViewsShadowController {
     private let accessibleCornerRadius: CGFloat?
 
     static func silhouette(size: CGSize, accessible: Bool) -> (rect: CGRect, radius: CGFloat) {
-        let clearance = accessible ? 0 : ExpandedReadingMaterial.opticalClearance
+        let clearance = accessible ? 0 : GlassSilhouette.expandedInset
         return (CGRect(x: PanelShadowController.margin, y: PanelShadowController.margin, width: size.width, height: size.height).insetBy(dx: clearance, dy: clearance), DotistDesign.windowCornerRadius - clearance)
     }
     init(parent: NSWindow, cornerRadius: CGFloat = DotistDesign.windowCornerRadius, usesOpticalClearance: Bool = true, accessibleCornerRadius: CGFloat? = nil) {
@@ -283,7 +285,7 @@ final class ViewsShadowController {
         if window.frame != frame { window.setFrame(frame, display: false) }
         window.level = parent.level; window.collectionBehavior = parent.collectionBehavior; window.alphaValue = parent.alphaValue
         let accessible = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-        let clearance = !accessible && usesOpticalClearance ? ExpandedReadingMaterial.opticalClearance : 0
+        let clearance = !accessible && usesOpticalClearance ? GlassSilhouette.expandedInset : 0
         let rect = CGRect(x: PanelShadowController.margin, y: PanelShadowController.margin, width: parent.frame.width, height: parent.frame.height).insetBy(dx: clearance, dy: clearance)
         let radius = accessible ? (accessibleCornerRadius ?? cornerRadius) : cornerRadius - clearance
         let shape = (rect: rect, radius: max(0, radius))

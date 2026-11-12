@@ -1,11 +1,16 @@
 import DotistCore
 import SwiftUI
 
+enum GlassSilhouette {
+    static let glassClip: CGFloat = 1
+    static let expandedInset: CGFloat = ExpandedReadingMaterial.opticalClearance + glassClip
+}
+
 extension View {
     // System glass paints a dark hairline and pale halo at its outermost edge.
     // Clip that optical edge; any intentional highlight remains a separate overlay.
     func dotistGlass<S: InsettableShape>(_ glass: Glass, in shape: S) -> some View {
-        glassEffect(glass, in: shape).clipShape(shape.inset(by: 1))
+        glassEffect(glass, in: shape).clipShape(shape.inset(by: GlassSilhouette.glassClip))
     }
 
     func dotistInlineShadow() -> some View { modifier(DotistInlineShadow()) }
@@ -37,6 +42,72 @@ enum GlassTintMaterial {
     static let tabHighContrastSelectedTint = 0.42
 }
 
+enum CompactGlassStyle {
+    static let tintStrength: Double = 1.0
+    static func washOpacity(_ scheme: ColorScheme) -> Double { scheme == .dark ? 0.12 : 0.08 }
+    enum Tier { case compact, expanded }
+    static func specularTop(_ tier: Tier, _ scheme: ColorScheme) -> Double {
+        switch tier {
+        case .compact: return scheme == .dark ? 0.34 : 0.55   // peak of the partial edge highlight
+        case .expanded: return scheme == .dark ? 0.05 : 0.10
+        }
+    }
+    static func innerShade(_ tier: Tier, _ scheme: ColorScheme) -> Double {
+        switch tier {
+        case .compact: return scheme == .dark ? 0.16 : 0.07
+        case .expanded: return 0.03
+        }
+    }
+}
+
+struct GlassGloss<S: InsettableShape>: View {
+    let shape: S
+    let intensity: CompactGlassStyle.Tier
+    let scheme: ColorScheme
+    var body: some View {
+        Group {
+            if intensity == .compact { slab } else { sheen }
+        }.clipShape(shape).allowsHitTesting(false).accessibilityHidden(true)
+    }
+
+    /// A clear, flat slab. There is deliberately NO closed line around the shape: any
+    /// stroke that runs the whole perimeter reads as an outline, whatever its colour.
+    /// Light only touches the two places a slab catches it (top-left, and more faintly
+    /// bottom-right) and fades to nothing in between; the fill and the shadow define the edge.
+    private var slab: some View {
+        let peak: Double = CompactGlassStyle.specularTop(.compact, scheme)
+        let arcs = LinearGradient(stops: [
+            .init(color: .white.opacity(peak), location: 0),
+            .init(color: .white.opacity(0), location: 0.34),
+            .init(color: .white.opacity(0), location: 0.74),
+            .init(color: .white.opacity(peak * 0.45), location: 1)
+        ], startPoint: .topLeading, endPoint: .bottomTrailing)
+        return ZStack {
+            // Soft light spilling a few points inside the lit edges.
+            shape.strokeBorder(arcs, lineWidth: 5).blur(radius: 3).opacity(0.45)
+            // The crisp part of the same highlight, right on the edge.
+            shape.strokeBorder(arcs, lineWidth: 1).blur(radius: 0.3)
+        }
+    }
+
+    /// Large reading surfaces only get a faint light falling from the top edge.
+    private var sheen: some View {
+        GeometryReader { (geometry: GeometryProxy) in
+            let height: CGFloat = min(120, geometry.size.height)
+            let specular: Double = CompactGlassStyle.specularTop(.expanded, scheme)
+            let shade: Double = CompactGlassStyle.innerShade(.expanded, scheme)
+            ZStack(alignment: .top) {
+                LinearGradient(stops: [.init(color: .white.opacity(specular), location: 0),
+                    .init(color: .clear, location: 0.55)], startPoint: .top, endPoint: .bottom)
+                    .frame(height: height)
+                shape.strokeBorder(LinearGradient(stops: [.init(color: .clear, location: 0.35),
+                    .init(color: .black.opacity(shade), location: 1)],
+                    startPoint: .top, endPoint: .bottom), lineWidth: 7).blur(radius: 3.5)
+            }
+        }
+    }
+}
+
 /// One native optical surface for small floating controls and lifted content.
 /// Window tint density and frost preferences belong to the expanded reading surface; they
 /// do not fade compact glass or its contrast and light edge.
@@ -58,25 +129,34 @@ struct TransientGlassSurface: View {
                 .overlay(shape.fill(DotistTheme.swatch(color).opacity(GlassTintMaterial.accessibilityTint)))
         } else if let debug {
             GlassDebugOpticalSurface(parameters: debug, color: color, scheme: scheme)
+        } else if compact {
+            opticalSurface(shape: FloatingPanelShape(compact: true, transitioning: false, onRight: false, reveal: 1))
         } else {
-            // The local environment override does not prevent non-key graying.
-            let tint: Color? = color == .none ? nil : DotistTheme.tint(color, scheme)
-            Color.clear
-                .dotistGlass(Glass.regular.tint(tint)
-                    .interactive(compact ? false : interactive), in: shape)
-                .environment(\.appearsActive, compact || appearsActive)
-                .overlay {
-                    if compact { shape.fill(GlassTintMaterial.themeWash(color, scheme)).allowsHitTesting(false).accessibilityHidden(true) }
-                }
-                .overlay {
-                    if compact && scheme == .dark {
-                        shape.fill(.black.opacity(GlassTintMaterial.compactDarkProtection)).allowsHitTesting(false).accessibilityHidden(true)
-                    }
-                }
-                .overlay {
-                    if compact { GlassEdge(cornerRadius: cornerRadius, compact: true, scheme: scheme, color: color) }
-                }
+            opticalSurface(shape: shape)
         }
+    }
+
+    private func opticalSurface<S: InsettableShape>(shape: S) -> some View {
+        // The local environment override does not prevent non-key graying.
+        let tint: Color? = color == .none ? nil : DotistTheme.tint(color, scheme).opacity(CompactGlassStyle.tintStrength)
+        return Color.clear
+            .dotistGlass(Glass.regular.tint(tint).interactive(compact ? false : interactive), in: shape)
+            .environment(\.appearsActive, compact || appearsActive)
+            .overlay {
+                if compact { shape.fill(GlassTintMaterial.themeWash(color, scheme).opacity(CompactGlassStyle.washOpacity(scheme))).allowsHitTesting(false).accessibilityHidden(true) }
+            }
+            .overlay {
+                if compact && scheme == .dark {
+                    shape.fill(.black.opacity(GlassTintMaterial.compactDarkProtection)).allowsHitTesting(false).accessibilityHidden(true)
+                }
+            }
+            .overlay {
+                if compact { GlassGloss(shape: shape.inset(by: GlassSilhouette.glassClip), intensity: .compact, scheme: scheme) }
+            }
+            .overlay {
+                if compact { GlassEdge(cornerRadius: cornerRadius, compact: true, scheme: scheme, color: color) }
+            }
+            .clipShape(shape.inset(by: GlassSilhouette.glassClip))
     }
 }
 
@@ -90,7 +170,7 @@ struct GlassEdge: View {
 
     static func highlightColor(_ color: DotistGroupColor, _ scheme: ColorScheme) -> Color {
         guard color != .none else { return .white }
-        let amount: Double = scheme == .dark ? 0.25 : 0.35
+        let amount: Double = scheme == .dark ? 0.65 : 0.70
         return Color.white.mix(with: DotistTheme.swatch(color), by: amount)
     }
 
@@ -131,11 +211,13 @@ struct GlassEdge: View {
             let light = LinearGradient(stops: [
                 .init(color: highlight.opacity(p.highlight), location: 0),
                 .init(color: highlight.opacity(p.highlight * 0.55), location: 0.20),
-                .init(color: highlight.opacity(compact ? p.secondary : 0.015), location: 0.55),
+                // Zero through the middle: the highlight must never close into an outline.
+                .init(color: highlight.opacity(0), location: 0.36),
+                .init(color: highlight.opacity(0), location: 0.74),
                 .init(color: highlight.opacity(p.secondary), location: 1)
             ], startPoint: .topLeading, endPoint: .bottomTrailing)
             let innerLight = LinearGradient(stops: [.init(color: highlight.opacity(p.innerLight), location: 0),
-                .init(color: .clear, location: 0.5)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                .init(color: highlight.opacity(0), location: 0.34)], startPoint: .topLeading, endPoint: .bottomTrailing)
             ZStack {
                 shape.inset(by: 1).strokeBorder(innerLight, lineWidth: p.innerWidth)
                     .blur(radius: p.blur)
