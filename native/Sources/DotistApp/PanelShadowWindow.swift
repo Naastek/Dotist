@@ -12,6 +12,19 @@ final class PanelShadowWindow: NSPanel {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
+// Child windows follow parent translations before AppKit updates their reported frame.
+struct ChildFramePlacement: Equatable {
+    let offset: CGPoint
+    let size: CGSize
+    let parentSize: CGSize
+
+    init(child: CGRect, parent: CGRect) {
+        offset = CGPoint(x: child.minX - parent.minX, y: child.minY - parent.minY)
+        size = child.size
+        parentSize = parent.size
+    }
+}
+
 /// The even-odd mask removes every shadow pixel beneath the glass surface.
 @MainActor
 final class PanelShadowController {
@@ -31,11 +44,15 @@ final class PanelShadowController {
     private var motionObservation: AnyCancellable?
     private var tabRects: [CGRect] = [] // Relative to the parent frame, in screen coordinates.
     private struct LayerInputs: Equatable {
-        let frame: CGRect, rect: CGRect
+        let size: CGSize, rect: CGRect
         let radius: CGFloat, dark: Bool, compact: Bool, alpha: CGFloat
         let tabs: [CGRect]
     }
     private var lastLayerInputs: LayerInputs?
+    private var lastPlacement: ChildFramePlacement?
+    private var lastParentOrigin: CGPoint?
+    private var frameVerification: DispatchWorkItem?
+    private var wasTransitioning = false
     private var reveal: CGFloat = 0, revealStart: CGFloat = 0, revealTarget: CGFloat = 0
     private var revealBegan: CFTimeInterval = 0
     private var lastHover = false
@@ -76,8 +93,13 @@ final class PanelShadowController {
         window.contentView = view
         parent.addChildWindow(window, ordered: .below)
         for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification, NSWindow.didChangeScreenNotification, NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification, NSWindow.didMiniaturizeNotification, NSWindow.willStartLiveResizeNotification, NSWindow.didEndLiveResizeNotification] {
-            observers.append(NotificationCenter.default.addObserver(forName: name, object: parent, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.synchronize() }
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: parent, queue: .main) { [weak self, weak motion] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let motion else { return }
+                    // PanelMotion synchronizes after publishing the matching insets.
+                    if motion.animationInProgress && (name == NSWindow.didMoveNotification || name == NSWindow.didResizeNotification) { return }
+                    self.synchronize(verifyFrame: name == NSWindow.didResizeNotification || name == NSWindow.didChangeScreenNotification)
+                }
             })
         }
         let target = PanelShadowDisplayTarget(self); self.target = target
@@ -85,12 +107,16 @@ final class PanelShadowController {
         displayLink?.isPaused = true
         displayLink?.add(to: .main, forMode: .common)
         motionObservation = motion.objectWillChange.sink { [weak self] _ in
-            DispatchQueue.main.async { [weak self] in self?.synchronize() }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.motion?.animationInProgress != true else { return }
+                self.synchronize()
+            }
         }
         synchronize()
     }
 
-    func synchronize() {
+    func synchronize(verifyFrame: Bool = false) {
+        if QAPerf.enabled { QAPerf.count(.shadowSynchronize) }
         guard !stopped, let parent, let motion else { return }
         let now = CACurrentMediaTime()
         if motion.hovering != lastHover {
@@ -102,21 +128,34 @@ final class PanelShadowController {
             let progress = min(1, max(0, (now - revealBegan) / 0.26))
             reveal = revealStart + (revealTarget - revealStart) * PanelFrameAnimation.easedProgress(CGFloat(progress))
         }
-        displayLink?.isPaused = !(motion.animationInProgress || reveal != revealTarget || parent.inLiveResize)
+        displayLink?.isPaused = !(reveal != revealTarget && !motion.animationInProgress)
         let compact = motion.bubble, transitioning = motion.animationInProgress
         let tabs = compact || transitioning ? [] : tabRects
-        let screenTabs = tabs.map { $0.offsetBy(dx: parent.frame.minX, dy: parent.frame.minY) }
-        let silhouetteBounds = screenTabs.reduce(parent.frame) { $0.union($1) }
+        let parentBounds = CGRect(origin: .zero, size: parent.frame.size)
+        let silhouetteBounds = tabs.reduce(parentBounds) { $0.union($1) }
         let scale = max(1, parent.backingScaleFactor)
         func pixelCeil(_ value: CGFloat) -> CGFloat { ceil(max(0, value) * scale) / scale }
-        let left = pixelCeil(parent.frame.minX - silhouetteBounds.minX)
-        let bottom = pixelCeil(parent.frame.minY - silhouetteBounds.minY)
-        let right = pixelCeil(silhouetteBounds.maxX - parent.frame.maxX)
-        let top = pixelCeil(silhouetteBounds.maxY - parent.frame.maxY)
+        let left = pixelCeil(-silhouetteBounds.minX)
+        let bottom = pixelCeil(-silhouetteBounds.minY)
+        let right = pixelCeil(silhouetteBounds.maxX - parentBounds.maxX)
+        let top = pixelCeil(silhouetteBounds.maxY - parentBounds.maxY)
         let frame = CGRect(x: parent.frame.minX - Self.margin - left, y: parent.frame.minY - Self.margin - bottom,
                            width: parent.frame.width + 2 * Self.margin + left + right,
                            height: parent.frame.height + 2 * Self.margin + bottom + top)
-        if window.frame != frame { window.setFrame(frame, display: false) }
+        let placement = ChildFramePlacement(child: frame, parent: parent.frame)
+        let mustVerify = verifyFrame || (wasTransitioning && !transitioning) || (parent.isVisible && !window.isVisible)
+        wasTransitioning = transitioning
+        let translated = lastParentOrigin != parent.frame.origin
+        lastParentOrigin = parent.frame.origin
+        if placement == lastPlacement && !mustVerify && translated {
+            frameVerification?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.synchronize(verifyFrame: true) }
+            frameVerification = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+        } else if placement != lastPlacement || mustVerify {
+            if placement != lastPlacement || window.frame != frame { if QAPerf.enabled { QAPerf.count(.shadowSetFrame) }; window.setFrame(frame, display: false) }
+            lastPlacement = placement
+        }
         if window.level != parent.level { window.level = parent.level }
         if window.collectionBehavior != parent.collectionBehavior { window.collectionBehavior = parent.collectionBehavior }
         window.alphaValue = parent.alphaValue
@@ -124,7 +163,7 @@ final class PanelShadowController {
         let accessible = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         let inset = accessible ? EdgeInsets() : motion.surfaceInsets
         let width = compact && !transitioning ? min(parent.frame.width, motion.baseWidth + (parent.frame.width - motion.baseWidth) * reveal) : parent.frame.width
-        var rect = CGRect(x: parent.frame.minX - frame.minX + (motion.bubbleOnRight ? parent.frame.width - width : 0), y: parent.frame.minY - frame.minY, width: width, height: parent.frame.height)
+        var rect = CGRect(x: Self.margin + left + (motion.bubbleOnRight ? parent.frame.width - width : 0), y: Self.margin + bottom, width: width, height: parent.frame.height)
         rect = CGRect(x: rect.minX + inset.leading, y: rect.minY + inset.bottom,
                       width: max(0, rect.width - inset.leading - inset.trailing), height: max(0, rect.height - inset.top - inset.bottom))
         // Expanded glass sits inside the optical clearance; hug it so no unshadowed band shows.
@@ -133,8 +172,8 @@ final class PanelShadowController {
         let transitionProgress = min(1, max(0, motion.surfaceInsets.top / FloatingSurface.compactOpticalInset))
         let radius = transitioning ? DotistDesign.windowCornerRadius + (24 - DotistDesign.windowCornerRadius) * transitionProgress : (compact ? 24 : DotistDesign.windowCornerRadius - clearance)
         let dark = parent.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let localTabs = screenTabs.map { $0.offsetBy(dx: -frame.minX, dy: -frame.minY) }
-        let inputs = LayerInputs(frame: frame, rect: rect, radius: radius, dark: dark, compact: compact, alpha: parent.alphaValue, tabs: localTabs)
+        let localTabs = tabs.map { $0.offsetBy(dx: Self.margin + left, dy: Self.margin + bottom) }
+        let inputs = LayerInputs(size: frame.size, rect: rect, radius: radius, dark: dark, compact: compact, alpha: parent.alphaValue, tabs: localTabs)
         if inputs != lastLayerInputs {
             lastLayerInputs = inputs
             Self.render(ambient: ambient, cutout: cutout, bounds: bounds, rect: rect, radius: radius, dark: dark, compact: compact, tabs: localTabs)
@@ -145,6 +184,7 @@ final class PanelShadowController {
     }
 
     fileprivate static func render(ambient: CALayer, cutout: CAShapeLayer, bounds: CGRect, rect: CGRect, radius: CGFloat, dark: Bool, compact: Bool, tabs: [CGRect] = []) {
+        if QAPerf.enabled { QAPerf.count(.shadowRender) }
         let outline = silhouette(rect: rect, radius: radius, tabs: tabs)
         let mask = CGMutablePath(); mask.addRect(bounds); mask.addPath(outline)
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -160,6 +200,7 @@ final class PanelShadowController {
     func stop() {
         guard !stopped else { return }
         stopped = true
+        frameVerification?.cancel(); frameVerification = nil
         motionObservation = nil
         displayLink?.invalidate(); displayLink = nil; target = nil
         observers.forEach(NotificationCenter.default.removeObserver); observers.removeAll()

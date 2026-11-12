@@ -53,7 +53,10 @@ struct MainWindow: View {
     @State var manageTags = false
     @State var showCalendar = false
     @StateObject var filterPresentation = DateFilterPresentation()
-    @State var hideCompleted = false
+    var hideCompleted: Bool {
+        get { state.hideCompleted }
+        nonmutating set { state.hideCompleted = newValue }
+    }
     @State var showDuePicker = false
     @State var pickingTask: String?
     @State var hoveredTask: String?
@@ -168,12 +171,13 @@ struct MainWindow: View {
                 }
             }
         }
-        .onReceive(Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect()) { _ in autoScrollReorder() }
+        .onReceive((drag != nil ? Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect().eraseToAnyPublisher() : Empty<Date, Never>().eraseToAnyPublisher())) { _ in if QAPerf.enabled { QAPerf.count(.timer30Hz) }; autoScrollReorder() }
         .onReceive(model.$undo) { entry in
             undoToastVisible = entry != nil
             undoToastLifetime.restart(at: ProcessInfo.processInfo.systemUptime)
         }
-        .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
+        .onReceive((undoToastVisible || notice != nil ? Timer.publish(every: 0.1, on: .main, in: .common).autoconnect().eraseToAnyPublisher() : Empty<Date, Never>().eraseToAnyPublisher())) { _ in
+            if QAPerf.enabled { QAPerf.count(.timer10Hz) }
             let now = ProcessInfo.processInfo.systemUptime
             if undoToastVisible && !undoToastLifetime.isVisible(at: now) { undoToastVisible = false }
             if notice != nil && !noticeLifetime.isVisible(at: now) { notice = nil }

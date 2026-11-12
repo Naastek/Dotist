@@ -49,6 +49,7 @@ struct GroupManager: View {
                                     }.padding(12)
                                 }
                             Button { model.deleteGroup(group) } label: { OpticalSymbol(name: "xmark", size: 11).frame(width: 24, height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing())
+                                .accessibilityLabel(Text(model.text("删除分组 {name}").replacingOccurrences(of: "{name}", with: group.name)))
                         }.frame(height: 40).contentShape(Rectangle())
                             .onHover { hovered = $0 ? group.id : nil }
                             .modifier(ManagerReorderRow(id: group.id, index: index, count: model.visibleGroups.count, drag: $drag) { model.moveGroup(group.id, toIndex: $0) })
@@ -92,6 +93,7 @@ struct ManagerDragState {
 }
 
 struct ManagerReorderRow: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let id: String
     let index: Int
     let count: Int
@@ -109,7 +111,7 @@ struct ManagerReorderRow: ViewModifier {
     func body(content: Content) -> some View {
         content.offset(y: offset).zIndex(drag.id == id ? 1 : 0)
             .shadow(color: .black.opacity(drag.id == id ? 0.16 : 0), radius: 4, y: 3)
-            .animation(.easeInOut(duration: 0.15), value: drag.target)
+            .animation(LayoutMotionInputs.shouldReduceMotion(reduceMotion) ? nil : .easeInOut(duration: 0.15), value: drag.target)
             .simultaneousGesture(DragGesture(minimumDistance: 6)
                 .onChanged { value in
                     if drag.id == nil { drag.id = id; drag.source = index; drag.target = index }

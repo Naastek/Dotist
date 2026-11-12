@@ -256,7 +256,7 @@ final class BubbleLayoutTests: XCTestCase {
                     XCTAssertEqual(onRight ? motion.panel.frame.maxX - 24 : motion.panel.frame.minX + 24, coreX, accuracy: 0.01)
                     let width = motion.panel.frame.width
                     let measured = details.textWidth(language: model.language)
-                    XCTAssertEqual(width, min(440, ceil(78 + measured)), accuracy: 1,
+                    XCTAssertEqual(width, min(440, ceil(86 + measured)), accuracy: 1,
                                    "Short strips must fit their actual content without a fixed 250pt floor")
                     for reveal in [CGFloat(0), 0.3, 0.6, 1] {
                         let label = "\(long ? "long" : "short")-\(metadata ? "two-line" : "one-line")-\(onRight ? "right" : "left")-\(reveal)@\(scale)x"
@@ -279,7 +279,7 @@ final class BubbleLayoutTests: XCTestCase {
                         if reveal == 1 {
                             let textInk = try XCTUnwrap(textInk, label)
                             XCTAssertEqual(textInk.midY, coreInk.midY, accuracy: 0.5, "Whole text block should be visually centered: \(label)")
-                            XCTAssertEqual(textInk.minX, onRight ? 12 : 66, accuracy: 2, "Text stays left aligned on both sides: \(label)")
+                            XCTAssertEqual(textInk.minX, onRight ? 20 : 66, accuracy: 2, "Text stays left aligned on both sides: \(label)")
                             if metadata {
                                 let titleInk = try XCTUnwrap(ink(bitmap, in: CGRect(x: textRect.minX, y: 0, width: textRect.width, height: 24)))
                                 let metadataInk = try XCTUnwrap(ink(bitmap, in: CGRect(x: textRect.minX, y: 24, width: textRect.width, height: 24)))
@@ -297,7 +297,7 @@ final class BubbleLayoutTests: XCTestCase {
                             let visibleCount = try XCTUnwrap(ink(composite, in: core, onSurface: true))
                             XCTAssertEqual(visibleText.midY, 24, accuracy: 0.5, "Final composite text axis: \(label)")
                             XCTAssertEqual(visibleCount.midY, 24, accuracy: 0.5, "Final composite count axis: \(label)")
-                            XCTAssertEqual(visibleText.minX, onRight ? 12 : 66, accuracy: 2, label)
+                            XCTAssertEqual(visibleText.minX, onRight ? 20 : 66, accuracy: 2, label)
                         }
                         // Independent native silhouette, retaining the existing
                         // one-output-pixel tolerance and exact zero exterior alpha.
@@ -346,7 +346,7 @@ final class BubbleLayoutTests: XCTestCase {
                 }
                 host.layoutSubtreeIfNeeded()
                 let bitmap = try snapshot(host)
-                XCTAssertEqual(motion.panel.frame.width, active ? 180 : 48, accuracy: 1)
+                XCTAssertEqual(motion.panel.frame.width, active ? 188 : 48, accuracy: 1)
                 XCTAssertFalse(motion.hoverAnimating)
                 var redPixels = 0
                 for y in 0..<bitmap.pixelsHigh {
@@ -360,7 +360,7 @@ final class BubbleLayoutTests: XCTestCase {
                     let rect = CGRect(x: onRight ? 0 : 48, y: 0, width: host.bounds.width - 48, height: 48)
                     let text = try XCTUnwrap(ink(bitmap, in: rect, onSurface: true))
                     XCTAssertEqual(text.midY, 24, accuracy: 0.5)
-                    XCTAssertEqual(text.minX, onRight ? 12 : 66, accuracy: 2)
+                    XCTAssertEqual(text.minX, onRight ? 20 : 66, accuracy: 2)
                 }
                 XCTAssertFalse(motion.panel.hasShadow, "Compact panels have no window shadow")
                 XCTAssertEqual(motion.panel.childWindows?.count, 1)
@@ -404,7 +404,7 @@ final class BubbleLayoutTests: XCTestCase {
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         let details = BubbleContent(model: model)
         XCTAssertEqual(details.remaining, 51)
-        let expectedWidth = ceil(78 + details.textWidth(language: model.language))
+        let expectedWidth = ceil(86 + details.textWidth(language: model.language))
         XCTAssertLessThan(expectedWidth, 250)
         for onRight in [false, true] {
             motion.bubbleOnRight = onRight
@@ -424,13 +424,13 @@ final class BubbleLayoutTests: XCTestCase {
                 let textInk = try XCTUnwrap(ink(bitmap, in: text))
                 XCTAssertEqual(coreInk.midX, core.midX, accuracy: 0.5)
                 XCTAssertEqual(coreInk.midY, 24, accuracy: 0.5)
-                XCTAssertEqual(textInk.minX, onRight ? 12 : 66, accuracy: 2)
+                XCTAssertEqual(textInk.minX, onRight ? 20 : 66, accuracy: 2)
                 XCTAssertEqual(textInk.midY, coreInk.midY, accuracy: 0.5)
                 let composite = try capture(model: model, motion: motion, width: expectedWidth, reveal: 1,
                                             surface: true, scale: scale, expectedOnRight: onRight)
                 try XCTUnwrap(composite.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(label + ".png"))
                 let visibleText = try XCTUnwrap(ink(composite, in: text, onSurface: true))
-                XCTAssertEqual(visibleText.minX, onRight ? 12 : 66, accuracy: 2)
+                XCTAssertEqual(visibleText.minX, onRight ? 20 : 66, accuracy: 2)
                 XCTAssertEqual(visibleText.midY, 24, accuracy: 0.5)
             }
             motion.setHover(false, in: area)

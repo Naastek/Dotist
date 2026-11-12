@@ -5,6 +5,17 @@ import XCTest
 
 @MainActor
 final class PanelShadowWindowTests: XCTestCase {
+    func testChildPlacementTranslationAndResize() {
+        let parent = CGRect(x: 200, y: 300, width: 400, height: 500)
+        let child = CGRect(x: 150, y: 250, width: 500, height: 600)
+        let original = ChildFramePlacement(child: child, parent: parent)
+        let movedParent = parent.offsetBy(dx: 30, dy: -20)
+        XCTAssertEqual(original, ChildFramePlacement(child: child.offsetBy(dx: 30, dy: -20), parent: movedParent))
+        var resizedParent = movedParent
+        resizedParent.size.width += 1
+        XCTAssertNotEqual(original, ChildFramePlacement(child: child.offsetBy(dx: 30, dy: -20), parent: resizedParent))
+    }
+
     func testCombinedSilhouetteAndGrowingFrame() throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("shadow-tabs-\(UUID().uuidString)")

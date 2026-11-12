@@ -9,6 +9,7 @@ extension MainWindow {
     #endif
 
     var taskList: some View {
+        if QAPerf.enabled { QAPerf.count(.taskListBody) }
         #if DEBUG
         Self.taskListRenders += 1
         #endif
@@ -57,10 +58,10 @@ extension MainWindow {
                 .onReceive(selection.navigation) { id in proxy.scrollTo(id, anchor: .center) }
                 .onChange(of: model.focusNavigation) { _ in
                     guard primary, let id = model.focusId else { return }
-                    proxy.scrollTo(id, anchor: .center)
+                    proxy.scrollTo("row:" + (model.tasks.first(where: { $0.id == id })?.category ?? "") + ":" + id, anchor: .center)
                 }
                 .onAppear {
-                    if let id = model.focusId { proxy.scrollTo(id, anchor: .center) }
+                    if let id = model.focusId, let task = model.tasks.first(where: { $0.id == id }) { proxy.scrollTo("row:" + task.category + ":" + id, anchor: .center) }
                     else if let id = model.gotoGroup { proxy.scrollTo(id, anchor: .top) }
                     model.gotoGroup = nil
                 }
@@ -121,6 +122,7 @@ extension MainWindow {
     }
 
     var listEntries: [TaskListEntry] {
+        if QAPerf.enabled { QAPerf.count(.taskListEntries) }
         var entries: [TaskListEntry] = []
         func extra(_ id: String, _ view: some View) {
             entries.append(.init(id: id, content: AnyView(view)))

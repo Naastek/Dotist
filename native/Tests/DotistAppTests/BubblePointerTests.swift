@@ -13,6 +13,17 @@ final class BubblePointerTests: XCTestCase {
         XCTAssertEqual(DotistDelegate.screenPlacement(for: preferred, screens: [main, external], main: main), preferred)
     }
 
+    func testPlacementUsesVisibleAreaAndClampsSize() {
+        let main = NSRect(x: 0, y: 0, width: 1000, height: 800)
+        let other = NSRect(x: 1000, y: 0, width: 600, height: 600)
+        let halfVisible = NSRect(x: 800, y: 100, width: 400, height: 400)
+        XCTAssertEqual(DotistDelegate.screenPlacement(for: halfVisible, screens: [main], main: main), halfVisible)
+        let mostlyOutside = NSRect(x: 1500, y: 100, width: 400, height: 400)
+        XCTAssertEqual(DotistDelegate.screenPlacement(for: mostlyOutside, screens: [main, other], main: main), NSRect(x: 1200, y: 100, width: 400, height: 400))
+        let oversized = NSRect(x: 900, y: 0, width: 1200, height: 900)
+        XCTAssertEqual(DotistDelegate.screenPlacement(for: oversized, screens: [other], main: main), other)
+    }
+
     private func event(_ type: NSEvent.EventType, at point: NSPoint, in window: NSWindow, modifiers: NSEvent.ModifierFlags = []) -> NSEvent {
         NSEvent.mouseEvent(with: type, location: window.convertPoint(fromScreen: point), modifierFlags: modifiers, timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
     }

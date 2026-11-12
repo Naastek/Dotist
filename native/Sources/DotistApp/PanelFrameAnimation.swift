@@ -34,6 +34,8 @@ final class PanelFrameAnimation {
         if duration <= 0 { currentProgress = 1; return }
         guard let window else { cancel(); return }
         began = ProcessInfo.processInfo.systemUptime
+        currentProgress = 0
+        if QAPerf.enabled { QAPerf.mark("initial_frame") }
         if window.isVisible, window.screen != nil {
             guard let view = window.contentView else { currentProgress = 1; return }
             let link = view.displayLink(target: PanelFrameDisplayTarget(animation: self),
@@ -66,6 +68,7 @@ final class PanelFrameAnimation {
     }
     fileprivate func advanceFrame() {
         guard completion != nil, duration > 0 else { return }
+        if QAPerf.enabled { QAPerf.tickStart() }; defer { if QAPerf.enabled { QAPerf.tickEnd() } }
         currentProgress = Float(min(1, (ProcessInfo.processInfo.systemUptime - began) / duration))
     }
     var currentProgress: Float = 0 {
@@ -74,7 +77,7 @@ final class PanelFrameAnimation {
             guard let window else { cancel(); return }
             let progress = CGFloat(currentProgress)
             let frame = Self.frame(from: start, to: target, progress: progress, previous: previous)
-            window.setFrame(frame, display: true)
+            if window.frame != frame { window.setFrame(frame, display: true) }
             previous = window.frame
             if progress >= 1 {
                 let done = completion
@@ -129,7 +132,7 @@ private final class PanelFrameDisplayTarget: NSObject {
     init(animation: PanelFrameAnimation) { self.animation = animation }
     @objc func tick(_ link: CADisplayLink) {
         guard let animation else { link.invalidate(); return }
-        animation.advanceFrame()
+        if QAPerf.enabled { QAPerf.updatePeriod(link.targetTimestamp - link.timestamp) }; animation.advanceFrame()
     }
 }
 

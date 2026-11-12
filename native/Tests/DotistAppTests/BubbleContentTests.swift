@@ -2,6 +2,7 @@ import AppKit
 import DotistCore
 import GRDB
 import XCTest
+import SwiftUI
 @testable import DotistApp
 
 @MainActor
@@ -11,6 +12,20 @@ final class BubbleContentTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-bubble-wJ3-\(UUID().uuidString)")
         addTeardownBlock { try FileManager.default.removeItem(at: directory) }
         return try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
+    }
+
+    func testCacheIgnoresSurfaceInsets() throws {
+        let model = try AppModel(store: store())
+        let state = TaskPanelState()
+        let cache = BubbleContentCache()
+        let surface = PanelSurfaceInsets()
+        _ = cache.content(model: model, state: state, title: "Panel")
+        surface.value = EdgeInsets(top: 2, leading: 1, bottom: 2, trailing: 1)
+        _ = cache.content(model: model, state: state, title: "Panel")
+        XCTAssertEqual(cache.buildCount, 1)
+        state.groupID = "other"
+        _ = cache.content(model: model, state: state, title: "Panel")
+        XCTAssertEqual(cache.buildCount, 2)
     }
 
     func testMainBubbleSelectsAndCountsOnlyOpenRoots() throws {

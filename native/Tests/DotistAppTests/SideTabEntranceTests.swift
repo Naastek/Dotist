@@ -242,6 +242,22 @@ final class SideTabEntranceControllerTests: XCTestCase {
             + children.flatMap(axRows)
     }
 
+    func testDisplayLinkSleepsAtRestAndResumesForEntranceAndHover() throws {
+        let h = try Harness()
+        defer { h.close() }
+        h.clock.visible = true
+        h.sample(10)
+        XCTAssertEqual(h.controller.displayLink?.isPaused, false)
+        h.sample(11)
+        XCTAssertEqual(h.controller.displayLink?.isPaused, true)
+        let row = h.controller.renderedRows[0].rect
+        h.clock.mouse = CGPoint(x: h.child.frame.minX + row.midX, y: h.child.frame.minY + row.midY)
+        h.sample(12)
+        XCTAssertEqual(h.controller.displayLink?.isPaused, false)
+        h.sample(13)
+        XCTAssertEqual(h.controller.displayLink?.isPaused, true)
+    }
+
     func testParentDragAndResizeCrossingPointerDoNotStartHoverUntilRelease() throws {
         for inward in [false, true] {
             for reduceMotion in [false, true] {
@@ -337,7 +353,8 @@ final class SideTabEntranceControllerTests: XCTestCase {
             let retracting = h.controller.renderedRows.map(\.opacity)
             h.motion.toggleBubble(in: CGRect(x: -1000, y: 0, width: 2000, height: 1000), animated: false)
             h.sample(10.08)
-            XCTAssertEqual(h.controller.renderedRows.map(\.opacity), retracting)
+            // Hidden tracks are sampled again only when the tabs reappear.
+            XCTAssertTrue(zip(h.controller.renderedRows.map(\.opacity), retracting).allSatisfy { $0 <= $1 })
             h.sample(10.5)
         }
         XCTAssertEqual(main.controller.renderedRows[0].rect.width, 15)
@@ -362,6 +379,7 @@ final class SideTabEntranceControllerTests: XCTestCase {
         try h.panelInput.sampleFrameAnimation(for: h.panel, progress: 0.6)
         h.sample(10.2)
         XCTAssertTrue(h.controller.renderedRows.allSatisfy { $0.opacity == 0 && !$0.interactive })
+        h.clock.time = 10.34
         try h.panelInput.completeFrameAnimation(for: h.panel)
         h.sample(10.34)
         XCTAssertTrue(h.controller.renderedRows.allSatisfy { $0.opacity == 0 && !$0.interactive })
