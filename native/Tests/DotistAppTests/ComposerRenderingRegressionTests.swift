@@ -82,8 +82,10 @@ final class LayoutMotionTestClock {
     func advance(by interval: TimeInterval) async throws {
         advanceTime(by: interval)
         // Let the unchanged production run-loop timers deliver this instant.
-        // Logical time stays fixed even if this task resumes much later.
-        try await Task.sleep(for: .milliseconds(25))
+        // Logical time stays fixed even if this task resumes much later, so a
+        // generous wait cannot change the result; 25 ms was too short for the
+        // release runner, which then captured the previous frame.
+        try await Task.sleep(for: .milliseconds(120))
     }
     func advanceTime(by interval: TimeInterval) { time += interval }
     func restore() { LayoutMotionInputs.testOverride = saved }
