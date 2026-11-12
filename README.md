@@ -10,14 +10,31 @@
 
 <p align="center"><sub>The floating task panel keeps groups, dates, and quick entry together (fictional English sample data).</sub></p>
 
-## Why Dotist
+## Features
 
-- **Native interface**: Built with SwiftUI and AppKit exclusively for Apple Silicon Macs running macOS 26+. Liquid Glass surfaces, keyboard-first navigation, and accessible motion controls.
-- **Floating panel & compact bubble**: Keep your task list on your screen edge, or collapse it into a minimal floating bubble that reveals the next task on hover.
-- **Hierarchical organization**: Up to 5 levels of nested tasks, multi-select, drag-and-drop reordering, and side group tabs.
-- **Multiple perspectives**: Switch smoothly across List, Calendar, Board, and Gantt task views.
-- **Local-first SQLite storage**: Tasks and preferences live on your Mac. No account sign-ups, and no cloud lock-in.
-- **Optional local MCP interface**: Off by default, with no bundled AI models. Connect local AI tools directly through a stdio proxy.
+**A sheet of glass on your desktop**
+- **Native interface**: Built with SwiftUI and AppKit for Apple Silicon Macs running macOS 26+, using the system Liquid Glass material.
+- **A floating panel that stays present**: The panel lives at the edge of your screen. When you switch to another app, its glass rim, depth, and shadow stay exactly as they were; the panel does not turn gray.
+- **Compact bubble**: Collapse the panel into a bubble that shows the number of remaining tasks. Hover over it to reveal a strip with the next task.
+- **Adjustable material**: Change main surface transparency, frost, unfocused content transparency, and group tab opacity in Settings. Changes apply immediately.
+
+**Organizing tasks**
+- **Hierarchy**: Up to 5 levels of subtasks. Drag a task or a whole subtree to reorder or change its level, and select several tasks to act on them together.
+- **Group tabs**: Groups appear as tabs attached to the panel's left edge, as one body with the panel. Hover to expand a tab and see its name, drag tabs up and down to reorder them, and give each group its own color.
+- **Tags**: Write `#tag` directly in a task title. Existing tags are suggested as you type.
+- **Date filters**: Today, Tomorrow, This Week, Next Week, Next 7 Days, Overdue, No Date, Completed, and a custom date range.
+- **Task views**: List, Calendar, Board, and Gantt, in a separate window for scheduling.
+
+**Fast to use**
+- **Keyboard first**: Shortcuts for adding, indenting, completing, multi-selecting, undo, and redo, with up to 100 undo steps per session.
+- **Command palette**: `⌘K` searches tasks, groups, and task views.
+- **Configurable shortcuts and toolbar**: Each of five actions can have a global shortcut, an in-app shortcut, or none. Toolbar buttons can be always visible, shown on hover, or hidden, in the order you choose.
+- **Fonts and languages**: Choose serif and sans-serif fonts separately for Chinese and Latin text. The interface is available in Simplified Chinese, Traditional Chinese, English, French, and German.
+- **Accessibility**: Follows the system Reduce Motion, Reduce Transparency, and Increase Contrast settings.
+
+**Your data stays with you**
+- **Local-first**: Tasks and preferences live in a SQLite database on your Mac. No account, and no cloud lock-in.
+- **Optional local MCP interface**: Off by default, with no bundled AI models. When enabled, local AI tools can read and write tasks through a stdio proxy.
 
 <p align="center">
   <img src="docs/images/dotist-calendar-en.png" width="900" alt="Dotist task views">
@@ -25,13 +42,42 @@
 
 <p align="center"><sub>Task views provide Calendar, Board, and Gantt layouts for scheduled work (fictional English sample data).</sub></p>
 
-## Quick Start
+## Usage
 
-- **Add tasks**: Type in the bottom input bar and press `Return`. Press `Return` again to keep adding sibling tasks. Use `Tab` to indent, `Shift-Tab` to outdent, or `Esc` to cancel.
-- **Edit & complete**: Click any task title to edit it inline. Press `Space` or `⌘Return` to complete a task.
-- **Organize**: Drag tasks or subtrees to reorder. Use `Shift`-click or `⌘`-click for multi-selection. Switch between categories using the left-hand group tabs. Undo and redo anytime with `⌘Z` and `Shift-⌘Z`.
-- **Search & focus**: Press `⌘K` to open the command search palette. Click the toolbar collapse button to switch the panel to a floating bubble.
-- **Settings**: Press `⌘,` to configure appearance, custom fonts, materials, and MCP settings.
+### Adding tasks
+- Type in the bottom input bar and press `Return`. The focused input appears as a glass field.
+- The group name on the left of the input bar chooses which group the task goes to. The calendar icon on the right sets a due date.
+- When a list is empty, click the plus in the middle to focus the input bar with the current group or date already applied.
+- To keep adding after a task: while editing, press `Return` for a new sibling, `Tab` to indent it as a subtask, `Shift-Tab` to outdent, or `Esc` to cancel. Empty tasks are not saved.
+
+### Editing and completing
+- Click a task title to edit it inline.
+- Press `Space` or `⌘Return` to complete the selected task.
+- `⌘Z` undoes and `Shift-⌘Z` redoes.
+
+### Organizing
+- **Drag**: Hold and drag a task to change its order or level, or to move it to another group. Dragging a task with subtasks moves the whole subtree.
+- **Multi-select**: `Shift`-click selects a range, `⌘`-click adds or removes a task, and `Shift-↑/↓` extends the selection. Press `Tab` to indent the selection together.
+- **Groups**: Click a tab on the left to switch groups. "All" is always first. Drag tabs up and down to reorder them. Choose "Manage Groups…" in the input bar's group menu to create, rename, recolor, or delete groups. Deleting a group keeps its tasks and moves them to no group.
+- **Collapse**: Groups and completed tasks can be collapsed.
+
+### Finding and filtering
+- Press `⌘K` to open the command palette and search tasks, groups, and task views. Press it again to close.
+- Use the date filter at the top of the panel to switch between Today, Tomorrow, This Week, and the other ranges.
+- Click the task views button in the toolbar to open Calendar, Board, and Gantt.
+
+### Panel and bubble
+- Click the rightmost toolbar button to collapse the panel into a bubble. Click the bubble to expand it again.
+- Drag any empty area of the panel to move it, and drag an edge to resize it.
+- The toolbar also has color, keep-on-top, and lock-window buttons, shown on hover by default. Hold `⌘` and drag to reorder the buttons.
+
+### Settings
+Press `⌘,` to open Settings. Options are searchable. Commonly used:
+- **Appearance and material**: theme, glass presets, main surface transparency, frost, unfocused content transparency, group tab opacity.
+- **Fonts**: serif and sans-serif fonts for Chinese and Latin text.
+- **Shortcuts**: set each action to global, in-app only, or off.
+- **Toolbar**: button visibility and order.
+- **MCP**: turn the local MCP interface on or off.
 
 ## Installation & Code Signing
 
