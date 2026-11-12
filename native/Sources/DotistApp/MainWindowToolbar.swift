@@ -229,7 +229,7 @@ extension MainWindow {
             }.padding(.horizontal, DateFilterEdgeMask.contentInset)
         }.frame(height: TaskDateFilterMetrics.rowHeight)
             .mask { DateFilterEdgeMask() }
-            .dotistGlass(.regular, in: RoundedRectangle(cornerRadius: 12)).dotistInlineShadow()
+            .dotistGlass(.regular.tint(DotistTheme.tint(model.themeColor(forGroup: state.groupID), scheme)), in: RoundedRectangle(cornerRadius: 12)).dotistInlineShadow()
             .background(DateFilterHoverObserver(enabled: filterPresentation.isOpen, changed: filterPresentation.hoverChanged))
             .padding(.horizontal, TaskRowMetrics.inset)
             .allowsHitTesting(filterPresentation.isOpen)
