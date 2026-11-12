@@ -98,8 +98,76 @@ final class BubbleGroupSelectionTests: XCTestCase {
         XCTAssertNil(view.bubbleContent.group)
         XCTAssertNil(view.bubbleContent.due)
         XCTAssertEqual(view.bubbleContent.remaining, 0)
-        XCTAssertEqual(view.bubbleContent.title, model.groupDisplayName("life"))
+        XCTAssertEqual(view.bubbleContent.title, model.text("这个分组还没有任务"))
         XCTAssertEqual(view.filter, [model.groupDisplayName("life")])
+    }
+
+    func testEmptyAndCompletedSelectedGroupsShowStatusInsteadOfRepeatingTheirName() throws {
+        let (initial, _, _) = try fixture()
+        try initial.core.database.write { db in
+            try db.execute(sql: "DELETE FROM tasks WHERE category='life'")
+        }
+        let emptyModel = try AppModel(store: initial.core)
+        let empty = view(emptyModel, state())
+        XCTAssertEqual(empty.filter, [emptyModel.groupDisplayName("life")])
+        XCTAssertEqual(empty.bubbleContent.title, emptyModel.text("这个分组还没有任务"))
+        XCTAssertEqual(empty.bubbleContent.remaining, 0)
+        XCTAssertNil(empty.bubbleContent.task)
+        let task = try initial.core.addTask(title: "Completed task", category: "life")
+        _ = try initial.core.patchTask(id: task.id, completed: true)
+        let completedModel = try AppModel(store: initial.core)
+        let completed = view(completedModel, state())
+        XCTAssertEqual(completed.filter, [completedModel.groupDisplayName("life")])
+        XCTAssertEqual(completed.bubbleContent.title, completedModel.text("今天的事都做完了"))
+        XCTAssertEqual(completed.bubbleContent.remaining, 0)
+    }
+
+    func testRealTaskNamedAfterItsGroupIsStillShownAndUnchanged() throws {
+        let (initial, _, _) = try fixture()
+        try initial.core.database.write { db in
+            try db.execute(sql: "DELETE FROM tasks WHERE category='life'")
+        }
+        let name = initial.groupDisplayName("life")
+        let task = try initial.core.addTask(title: name, category: "life")
+        let model = try AppModel(store: initial.core)
+        let selected = view(model, state())
+        XCTAssertEqual(selected.bubbleContent.task?.id, task.id)
+        XCTAssertEqual(selected.bubbleContent.title, name)
+        XCTAssertEqual(selected.bubbleContent.remaining, 1)
+        XCTAssertEqual(selected.filter, [name])
+        XCTAssertEqual(model.tasks.first(where: { $0.id == task.id })?.title, name)
+    }
+
+    func testEmptyGroupStripWindowCapture() async throws {
+        let (initial, _, _) = try fixture()
+        try await initial.core.database.write { db in
+            try db.execute(sql: "DELETE FROM tasks WHERE category='life'")
+            try db.execute(sql: "UPDATE task_groups SET name='work' WHERE id='life'")
+        }
+        let model = try AppModel(store: initial.core)
+        let selected = view(model, state())
+        selected.motion.toggleBubble(in: area, animated: false)
+        selected.motion.setHover(true, in: area)
+        let width = selected.motion.panel.frame.width
+        let size = CGSize(width: width, height: 48)
+        let content = FloatingBubble(model: model, motion: selected.motion, details: selected.bubbleContent,
+            groupName: nil, contextMenu: { _, _ in }, width: width, reveal: 1,
+            extra: selected.motion.filterExtra, filter: selected.filter)
+            .background(Color.white)
+            .environment(\.colorScheme, .light)
+        let host = NativeRenderingFixture(content, size: size)
+        defer { host.close() }
+        let bitmap = try await host.capture(scale: 2)
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let directory = repo.appendingPathComponent(".cache/group-strip-fix")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            .write(to: directory.appendingPathComponent("empty-group.png"))
+        XCTAssertEqual(selected.bubbleContent.title, model.text("这个分组还没有任务"))
+        XCTAssertEqual(selected.filter, ["work"])
+        XCTAssertNil(selected.bubbleContent.group)
+        XCTAssertEqual(selected.bubbleContent.remaining, 0)
     }
 
     func testMainDateAndTagFiltersStayWithinSelectedGroupIncludingEmptyResults() throws {

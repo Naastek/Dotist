@@ -38,8 +38,15 @@ struct BubbleContent {
         }
         task = next
         remaining = open.count
-        // A selected empty group must not borrow the global next task's title.
-        let emptyTitle = groupID.map { model.groupDisplayName($0) } ?? Self.clean(fallbackTitle) ?? model.bubbleTitle
+        // The selected group already appears in the strip's filter context. An empty
+        // group needs a status, not a second copy of its name (or the global next task).
+        let emptyTitle: String
+        if let groupID, next == nil {
+            let hasTasks = model.topLevelTasks.contains { $0.category == groupID }
+            emptyTitle = model.text(hasTasks ? "今天的事都做完了" : "这个分组还没有任务")
+        } else {
+            emptyTitle = Self.clean(fallbackTitle) ?? model.bubbleTitle
+        }
         title = filteredEmpty ? model.text("没有符合筛选的任务") : Self.clean(next?.title) ?? (next == nil ? emptyTitle : model.text("未命名任务"))
         group = next.flatMap { model.group(for: $0) }.flatMap { Self.clean($0.name) }
         due = next?.dueDate.flatMap(Self.clean).flatMap { Self.clean(model.dueLabel($0)) }
