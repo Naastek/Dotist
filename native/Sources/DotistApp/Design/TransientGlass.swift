@@ -2,13 +2,18 @@ import DotistCore
 import SwiftUI
 
 enum GlassSilhouette {
-    static let glassClip: CGFloat = 1
+    /// One physical pixel inside the shape. Measured with an HDR capture on an XDR display:
+    /// the system glass's dark hairline and pale halo lie just outside the shape, and its
+    /// own extended-range specular rim (brighter than SDR white, about 1.35x) lies just
+    /// inside. Inset 1 removes every XDR highlight and the glass looks dull; inset 0 keeps a
+    /// pixel darker than the fill at the boundary; 0.5 removes that pixel and keeps the gloss.
+    static let glassClip: CGFloat = 0.5
     static let expandedInset: CGFloat = ExpandedReadingMaterial.opticalClearance + glassClip
 }
 
 extension View {
-    // System glass paints a dark hairline and pale halo at its outermost edge.
-    // Clip that optical edge; any intentional highlight remains a separate overlay.
+    // System glass paints a dark hairline and pale halo at its outer boundary; see
+    // GlassSilhouette.glassClip for why the clip sits half a point inside the shape.
     func dotistGlass<S: InsettableShape>(_ glass: Glass, in shape: S) -> some View {
         glassEffect(glass, in: shape).clipShape(shape.inset(by: GlassSilhouette.glassClip))
     }

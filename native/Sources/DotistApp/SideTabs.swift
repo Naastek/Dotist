@@ -8,7 +8,8 @@ import SwiftUI
 enum SideTabGeometry {
     static let collapsedWidth: CGFloat = 10
     static let selectedWidth: CGFloat = 15
-    static let attachmentOverlap = GlassSilhouette.expandedInset + 1
+    // Whole points: child window frames are integral, so a fractional overlap would be rounded by AppKit.
+    static let attachmentOverlap: CGFloat = (GlassSilhouette.expandedInset + 1).rounded(.up)
     static let height: CGFloat = 34
     static let spacing: CGFloat = 6
     static let topInset: CGFloat = 40
