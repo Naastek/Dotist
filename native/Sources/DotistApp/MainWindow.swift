@@ -7,6 +7,7 @@ struct MainWindow: View {
     @Environment(\.accessibilityReduceMotion) var reduceMotion
     @Environment(\.accessibilityReduceTransparency) var reduceTransparency
     @Environment(\.colorSchemeContrast) var contrast
+    @Environment(\.colorScheme) var scheme
     @ObservedObject var model: AppModel
     @ObservedObject var state: TaskPanelState
     let showViews: () -> Void

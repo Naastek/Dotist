@@ -15,6 +15,43 @@ final class TransientGlassTests: XCTestCase {
         XCTAssertTrue(contents.contains("glassEffect(glass, in: shape).clipShape(shape.inset(by: 1))"))
     }
 
+    func testThemeEdgeAndCompactWashMatchExpanded() throws {
+        for scheme in [ColorScheme.light, .dark] {
+            func pixel<V: View>(_ view: V) throws -> NSColor {
+                let image = try bitmap(view.frame(width: 48, height: 48), scheme: scheme)
+                return try XCTUnwrap(image.colorAt(x: 48, y: 48)?.usingColorSpace(.sRGB))
+            }
+            let white = try pixel(Color.white)
+            let neutral = try pixel(GlassEdge.highlightColor(.none, scheme))
+            XCTAssertEqual(neutral.redComponent, white.redComponent, accuracy: 0.001)
+            XCTAssertEqual(neutral.greenComponent, white.greenComponent, accuracy: 0.001)
+            XCTAssertEqual(neutral.blueComponent, white.blueComponent, accuracy: 0.001)
+            for color in DotistGroupColor.allCases where color != .none {
+                let edge = try pixel(GlassEdge.highlightColor(color, scheme))
+                let swatch = try pixel(DotistTheme.swatch(color))
+                let edgeLight = 0.2126 * edge.redComponent + 0.7152 * edge.greenComponent + 0.0722 * edge.blueComponent
+                let swatchLight = 0.2126 * swatch.redComponent + 0.7152 * swatch.greenComponent + 0.0722 * swatch.blueComponent
+                XCTAssertGreaterThan(edgeLight, swatchLight)
+                XCTAssertLessThan(edgeLight, 0.999)
+                let compact = try pixel(FloatingPanelSurface(opacity: 0, frost: 0, compact: true,
+                    color: color, solid: false, scheme: scheme))
+                let reference = try pixel(ZStack {
+                    Color.clear.dotistGlass(.regular.tint(DotistTheme.tint(color, scheme)), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        .environment(\.appearsActive, true)
+                    RoundedRectangle(cornerRadius: 24, style: .continuous).fill(GlassTintMaterial.themeWash(color, scheme))
+                    if scheme == .dark { Color.black.opacity(GlassTintMaterial.compactDarkProtection) }
+                })
+                XCTAssertEqual(compact.redComponent, reference.redComponent, accuracy: 0.02)
+                XCTAssertEqual(compact.greenComponent, reference.greenComponent, accuracy: 0.02)
+                XCTAssertEqual(compact.blueComponent, reference.blueComponent, accuracy: 0.02)
+                let expanded = try pixel(ExpandedReadingMaterial(opacity: 0, frost: 0, color: color, scheme: scheme, cornerRadius: 24))
+                let wash = try pixel(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(GlassTintMaterial.themeWash(color, scheme)))
+                XCTAssertEqual(expanded.alphaComponent, wash.alphaComponent, accuracy: 0.01)
+                XCTAssertEqual(expanded.greenComponent, wash.greenComponent, accuracy: 0.02)
+            }
+        }
+    }
+
     private func bitmap<V: View>(_ view: V, scheme: ColorScheme) throws -> NSBitmapImageRep {
         let renderer = ImageRenderer(content: view.environment(\.colorScheme, scheme))
         renderer.scale = 2

@@ -171,7 +171,7 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
                     ExpandedReadingMaterial(opacity: 80, frost: 40, color: .pink, scheme: scheme, cornerRadius: radius)
                         .applyingBackgroundOpacity(amount).padding(clearance)
                     if variant != .focusNoManualEdge {
-                        GlassEdge(cornerRadius: radius, compact: false, scheme: scheme).padding(clearance)
+                        GlassEdge(cornerRadius: radius, compact: false, scheme: scheme, color: .pink).padding(clearance)
                     }
                 }
             }

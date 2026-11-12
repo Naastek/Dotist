@@ -148,7 +148,7 @@ struct FloatingPanelSurface: View {
                             .padding(ExpandedReadingMaterial.opticalClearance)
                     }
                     if !qa.contains(.noEdge) {
-                        GlassEdge(cornerRadius: radius, compact: false, scheme: scheme)
+                        GlassEdge(cornerRadius: radius, compact: false, scheme: scheme, color: color)
                             .padding(ExpandedReadingMaterial.opticalClearance)
                     }
                 }
@@ -193,7 +193,7 @@ struct ExpandedReadingMaterial: View {
         return ZStack {
             shape.fill(DotistDesign.paper.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false) * amount))
             shape.fill(DotistDesign.paper.opacity(Double(frost) / 100 * GlassTintMaterial.expandedFrostScale * amount))
-            shape.fill(DotistTheme.swatch(color).opacity((scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint) * amount))
+            shape.fill(GlassTintMaterial.themeWash(color, scheme).opacity(amount))
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
