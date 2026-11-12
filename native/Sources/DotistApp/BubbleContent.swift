@@ -3,6 +3,15 @@ import CoreText
 import DotistCore
 import SwiftUI
 
+enum BubbleLayout {
+    static let circle: CGFloat = 48
+    static let textGap: CGFloat = 18
+    static let outerMargin: CGFloat = 20
+    static let widthBudget = circle + textGap + outerMargin
+    static let filterGap: CGFloat = 4
+    static let filterBudget = filterGap + outerMargin
+}
+
 /// One source for the strip's task, metadata, count and measured width. Group identity
 /// is an ID, never a display name (names can be empty, duplicated or renamed).
 @MainActor
@@ -15,6 +24,7 @@ struct BubbleContent {
     var subtitle: String { [group, due].compactMap { $0 }.joined(separator: " · ") }
 
     init(model: AppModel, groupID: String? = nil, fallbackTitle: String? = nil, state: TaskPanelState? = nil) {
+        if QAPerf.enabled { QAPerf.count(.bubbleContent) }
         var open = model.topLevelTasks.filter { $0.parentId == nil && !$0.completed && (groupID == nil || $0.category == groupID) }
         var next = groupID == nil ? model.nextTask : model.ordered(open).first
         var filteredEmpty = false
@@ -49,3 +59,27 @@ struct BubbleContent {
     }
 }
 
+
+/// Retained by the panel view across geometry-only updates.
+@MainActor
+final class BubbleContentCache {
+    private struct Key: Equatable {
+        let tasks: [DotistTask], groups: [DotistGroup], settings: DotistSettings
+        let groupID: String?, scope: String, tag: String?, start: String?, end: String?, title: String
+        let language: String, minute: Int
+    }
+    private var key: Key?
+    private var value: BubbleContent?
+    private(set) var buildCount = 0
+    func content(model: AppModel, state: TaskPanelState, title: String) -> BubbleContent {
+        let next = Key(tasks: model.tasks, groups: model.groups, settings: model.settings,
+                       groupID: state.groupID, scope: state.scope, tag: state.activeTag,
+                       start: state.customStart, end: state.customEnd, title: title, language: model.language,
+                       minute: Int(Date().timeIntervalSinceReferenceDate / 60))
+        if key == next, let value { return value }
+        buildCount += 1
+        let result = BubbleContent(model: model, groupID: state.groupID, fallbackTitle: title, state: state)
+        key = next; value = result
+        return result
+    }
+}

@@ -86,9 +86,9 @@ struct FloatingBubble: View {
         Button(action: motion.toggleBubble) {
             ZStack(alignment: motion.bubbleOnRight ? .trailing : .leading) {
                 BubbleText(lines: textLines)
-                    .frame(width: max(0, width - 78 - extra), height: 48, alignment: .leading)
-                    .padding(motion.bubbleOnRight ? .leading : .trailing, 12)
-                    .padding(motion.bubbleOnRight ? .trailing : .leading, 18 + extra)
+                    .frame(width: max(0, width - BubbleLayout.widthBudget - extra), height: 48, alignment: .leading)
+                    .padding(motion.bubbleOnRight ? .leading : .trailing, BubbleLayout.outerMargin)
+                    .padding(motion.bubbleOnRight ? .trailing : .leading, BubbleLayout.textGap + extra)
                     .offset(x: (1 - reveal) * max(0, width - 48) * (motion.bubbleOnRight ? 1 : -1))
                     .frame(width: max(0, width - 48), height: 48)
                     .clipped()
@@ -98,8 +98,8 @@ struct FloatingBubble: View {
                 if !filter.isEmpty, extra > 0 {
                     // One line per condition, the block centered on the ball's axis.
                     BubbleText(lines: filter.map { label($0, size: 12, color: DotistDesign.muted) })
-                        .frame(width: max(0, extra - 16), height: 48, alignment: .leading)
-                        .padding(motion.bubbleOnRight ? .trailing : .leading, 52)
+                        .frame(width: max(0, extra - BubbleLayout.filterBudget), height: 48, alignment: .leading)
+                        .padding(motion.bubbleOnRight ? .trailing : .leading, BubbleLayout.circle + BubbleLayout.filterGap)
                         .transition(.opacity)
                         .accessibilityHidden(true)
                 }

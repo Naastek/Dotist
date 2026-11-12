@@ -154,7 +154,7 @@ final class PanelMotionLifecycleTests: XCTestCase {
         let area = NSRect(x: 0, y: 0, width: 1440, height: 1000)
         motion.toggleBubble(in: area, animated: false)
         let collapsedFrame = panel.frame
-        let contentWidth = ceil(78 + BubbleContent(model: model).textWidth(language: model.language))
+        let contentWidth = ceil(86 + BubbleContent(model: model).textWidth(language: model.language))
         let expectedWidth = min(contentWidth, min(440, area.width / 2))
         motion.setHover(true, in: area)
         XCTAssertEqual(panel.frame.width, expectedWidth)

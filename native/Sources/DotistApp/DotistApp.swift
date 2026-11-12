@@ -121,6 +121,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     private var appliedShortcutSignature: ShortcutSignature?
     private(set) var expandedSize = NSSize(width: 364, height: 620)
     private var idleTimer: Timer?
+    private var qaPerfDriver: QAPerfDriver?
     private var moveCheck: DispatchWorkItem?
     private var menuStates: [(NSMenuItem, Bool)] = []
     private var preferredWindowFrame = NSRect.zero
@@ -280,9 +281,29 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
                 NotificationCenter.default.post(name: .init("DotistQAComposer"), object: nil)
             }
         }
+        if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa", ProcessInfo.processInfo.environment["DOTIST_QA_OPEN"] == "strip" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                guard let self else { return }
+                if !self.bubble { self.toggleBubble() }
+                var readyAt: Date?
+                var releaseAt: Date?
+                Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] timer in
+                    MainActor.assumeIsolated {
+                        guard let self else { timer.invalidate(); return }
+                        if self.animationInProgress || !self.bubble { readyAt = nil; return }
+                        if readyAt == nil { readyAt = Date().addingTimeInterval(0.3) }
+                        guard Date() >= readyAt! else { return }
+                        if releaseAt == nil { releaseAt = Date().addingTimeInterval(8) }
+                        guard Date() < releaseAt! else { timer.invalidate(); return }
+                        if !self.motion.hovering { self.motion.setHover(true) }
+                    }
+                }
+            }
+        }
+        if QAPerf.enabled { qaPerfDriver = QAPerfDriver(panel: panel, toggle: { [weak self] in self?.toggleBubble() }, isBubble: { [weak self] in self?.bubble ?? false }); qaPerfDriver?.start() }
         if model.settings.mcpEnabled { model.mcp.start() }
         idleTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.updateIdleState() }
+            Task { @MainActor in if QAPerf.enabled { QAPerf.count(.idleTimer) }; self?.updateIdleState() }
         }
     }
 
@@ -365,22 +386,29 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         preferredWindowFrame = frame
     }
 
-    static func screenPlacement(for frame: NSRect, screens: [NSRect], main: NSRect) -> NSRect {
-        if screens.contains(where: {
-            let overlap = $0.intersection(frame)
-            return overlap.width >= 80 && overlap.height >= 80
-        }) { return frame }
-        return NSRect(x: min(max(frame.minX, main.minX), max(main.minX, main.maxX - frame.width)),
-                      y: min(max(frame.minY, main.minY), max(main.minY, main.maxY - frame.height)),
-                      width: frame.width, height: frame.height)
+    static func screenPlacement(for frame: NSRect, screens: [NSRect], main: NSRect, minimumSize: NSSize = NSSize(width: 320, height: 440)) -> NSRect {
+        func overlapArea(_ screen: NSRect) -> CGFloat {
+            let overlap = screen.intersection(frame)
+            return overlap.isNull ? 0 : overlap.width * overlap.height
+        }
+        if screens.contains(where: { overlapArea($0) >= frame.width * frame.height / 2 }) { return frame }
+        let best = screens.max(by: { overlapArea($0) < overlapArea($1) }).flatMap { overlapArea($0) > 0 ? $0 : nil } ?? main
+        let width = min(frame.width, max(minimumSize.width, best.width))
+        let height = min(frame.height, max(minimumSize.height, best.height))
+        return NSRect(x: min(max(frame.minX, best.minX), max(best.minX, best.maxX - width)),
+                      y: min(max(frame.minY, best.minY), max(best.minY, best.maxY - height)),
+                      width: width, height: height)
     }
 
     @objc private func screensChanged() {
         guard !userMoveInProgress, !animationInProgress, let main = NSScreen.main?.visibleFrame else { return }
         moveCheck?.cancel()
-        let target = Self.screenPlacement(for: preferredWindowFrame, screens: NSScreen.screens.map(\.visibleFrame), main: main)
+        let target = Self.screenPlacement(for: preferredWindowFrame, screens: NSScreen.screens.map(\.visibleFrame), main: main, minimumSize: panel.minSize)
         let offset = NSPoint(x: target.minX - preferredWindowFrame.minX, y: target.minY - preferredWindowFrame.minY)
-        panel.setFrameOrigin(NSPoint(x: panel.frame.minX + offset.x - displayOffset.x, y: panel.frame.minY + offset.y - displayOffset.y))
+        var frame = panel.frame
+        frame.origin = NSPoint(x: frame.minX + offset.x - displayOffset.x, y: frame.minY + offset.y - displayOffset.y)
+        if !bubble { frame.size = target.size }
+        panel.setFrame(frame, display: true)
         displayOffset = offset
     }
 
@@ -743,6 +771,8 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         mainState.groupID = task.category
         model.scope = "all"
         model.selectTag(nil)
+        mainState.setGroupCollapsed(false, id: task.category)
+        if task.completed || TaskHierarchy(model.tasks).ancestors(of: task.id).contains(where: \.completed) { mainState.hideCompleted = false }
         for parent in TaskHierarchy(model.tasks).ancestors(of: task.id) {
             mainState.expanded.insert(parent.id)
             if parent.completed { mainState.folded.insert(task.category) }

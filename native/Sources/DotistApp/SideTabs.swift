@@ -475,7 +475,7 @@ private final class SideTabHostingView<Content: View>: NSHostingView<Content> {
 @MainActor
 private final class SideTabDisplayTarget: NSObject {
     weak var controller: SideTabsController?
-    @objc func tick(_ link: CADisplayLink) { controller?.synchronize() }
+    @objc func tick(_ link: CADisplayLink) { if QAPerf.enabled { QAPerf.count(.sideTabTick) }; controller?.synchronize() }
 }
 
 /// A transparent child hosts independently painted tabs. Window-level mouse
@@ -493,6 +493,8 @@ final class SideTabsController: NSObject {
         var reduceMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
         var desktopEvents = true
         var inputMonitors = true
+        var didSynchronize: () -> Void = {}
+        var didSetFrame: () -> Void = {}
     }
     private let environment: Environment
     private var entrance = SideTabEntrance()
@@ -504,7 +506,7 @@ final class SideTabsController: NSObject {
     private let window: NSPanel
     private let presentation = SideTabPresentation()
     private let displayTarget = SideTabDisplayTarget()
-    private var displayLink: CADisplayLink?
+    private(set) var displayLink: CADisplayLink?
     private var observers: [NSObjectProtocol] = []
     private var localMonitor: Any?
     private var globalMonitor: Any?
@@ -521,6 +523,15 @@ final class SideTabsController: NSObject {
     private var placement = SideTabPlacement()
     private var childOrder: NSWindow.OrderingMode = .below
     private var restingHost: SideTabHostingView<SideTabsView>?
+    private var observations: [AnyCancellable] = []
+    private var hiddenSynchronized = false
+    private var lastPlacement: ChildFramePlacement?
+    private var lastParentOrigin: CGPoint?
+    private var frameVerification: DispatchWorkItem?
+    private var needsFrameVerification = false
+    private var pointerInterest = CGRect.null
+    private var pointerWasInside = false
+    private var pointerAnimationRunning = false
 
     init(parent: NSPanel, model: AppModel, state: TaskPanelState, motion: PanelMotion, environment: Environment = Environment()) {
         self.environment = environment
@@ -556,14 +567,29 @@ final class SideTabsController: NSObject {
         for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification, NSWindow.didChangeScreenNotification,
                      NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: parent, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.synchronize() }
+                MainActor.assumeIsolated {
+                    if name == NSWindow.didResizeNotification || name == NSWindow.didChangeScreenNotification { self?.needsFrameVerification = true }
+                    if name != NSWindow.didMoveNotification && name != NSWindow.didResizeNotification { self?.hostVisibleCache = nil }
+                    self?.synchronize()
+                }
             })
+        }
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.hostVisibleCache = nil; self?.synchronize() }
         }
         // Unlike a default-mode Timer, this runs during live dragging, live resize,
         // and every frame of PanelMotion's animator().setFrame animation.
+        motion.tabsTransitionDidChange = { [weak self] in self?.needsFrameVerification = true; self?.synchronize() }
         displayTarget.controller = self
         displayLink = parent.displayLink(target: displayTarget, selector: #selector(SideTabDisplayTarget.tick(_:)))
+        displayLink?.isPaused = true
         displayLink?.add(to: .main, forMode: .common)
+        // Published values are read on the next turn, after objectWillChange.
+        for publisher in [model.objectWillChange.eraseToAnyPublisher(), state.objectWillChange.eraseToAnyPublisher(), motion.objectWillChange.eraseToAnyPublisher()] {
+            observations.append(publisher.sink { [weak self] _ in
+                DispatchQueue.main.async { [weak self] in self?.synchronize() }
+            })
+        }
         if environment.desktopEvents && environment.inputMonitors {
             localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .leftMouseDown, .leftMouseUp, .keyDown]) { [weak self] event in
                 guard let self else { return event }
@@ -571,13 +597,32 @@ final class SideTabsController: NSObject {
                     self.cancelDrag(); self.synchronize(); return nil
                 }
                 guard event.type != .keyDown else { return event }
+                guard !self.motion.bubble, !self.motion.animationInProgress else { self.pointerWasInside = false; return event }
                 let point = event.window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
-                self.synchronize(mouse: point)
+                self.handlePointerEvent(at: point)
                 return event
             }
-            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .leftMouseDown, .leftMouseUp]) { [weak self] _ in self?.synchronize() }
+            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .leftMouseDown, .leftMouseUp]) { [weak self] _ in
+                guard let self else { return }
+                guard !self.motion.bubble, !self.motion.animationInProgress else { self.pointerWasInside = false; return }
+                self.handlePointerEvent(at: NSEvent.mouseLocation)
+            }
         }
         synchronize()
+    }
+
+    /// `isOnActiveSpace` is a synchronous WindowServer round trip (about 4 ms). Its answer
+    /// only changes on space, occlusion, screen or visibility changes, so it is cached
+    /// between those events instead of being asked on every move and pointer event.
+    private var hostVisibleCache: (windowVisible: Bool, value: Bool)?
+    private var spaceObserver: NSObjectProtocol?
+    private func resolveHostVisible() -> Bool {
+        guard environment.desktopEvents else { return environment.visible(parent) }
+        let windowVisible = parent.isVisible
+        if let cache = hostVisibleCache, cache.windowVisible == windowVisible { return cache.value }
+        let value = environment.visible(parent)
+        hostVisibleCache = (windowVisible, value)
+        return value
     }
 
     func stop() {
@@ -585,8 +630,12 @@ final class SideTabsController: NSObject {
         stopped = true
         motion.shadowController?.setTabRects([])
         collapseWork?.cancel(); collapseWork = nil
+        frameVerification?.cancel(); frameVerification = nil
+        motion.tabsTransitionDidChange = nil
+        observations.removeAll()
         displayLink?.invalidate(); displayLink = nil
         observers.forEach(NotificationCenter.default.removeObserver); observers.removeAll()
+        if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver) }; spaceObserver = nil
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }; localMonitor = nil
         if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }; globalMonitor = nil
         restingHost?.removeFromSuperview(); restingHost = nil
@@ -626,8 +675,27 @@ final class SideTabsController: NSObject {
         synchronize()
     }
 
+    func handlePointerEvent(at point: CGPoint) {
+        guard !stopped, !motion.bubble, !motion.animationInProgress else {
+            pointerWasInside = false
+            return
+        }
+        let inside = pointerInterest.contains(point)
+        let shouldSynchronize = inside || pointerWasInside || press != nil || dragging ||
+            expanded || collapseWork != nil || pointerAnimationRunning || needsFrameVerification
+        pointerWasInside = inside
+        if shouldSynchronize { synchronize(mouse: point) }
+    }
+
     func synchronize(mouse: CGPoint? = nil) {
+        if QAPerf.enabled { QAPerf.count(.sideTabsSynchronize) }
+        environment.didSynchronize()
         guard !stopped else { return }
+        let hidden = motion.bubble || motion.animationInProgress
+        // A pending verification stays pending while hidden: the parent resizes on every
+        // transition frame, and the reveal path verifies the frame before painting.
+        if hidden && hiddenSynchronized { displayLink?.isPaused = true; return }
+        hiddenSynchronized = hidden
         let mouse = mouse ?? environment.mouse()
         let groups = model.visibleGroups
         let ids = groups.map(\.id)
@@ -653,7 +721,7 @@ final class SideTabsController: NSObject {
         placement.update(availableSpace: frame.minX - visibleMinX, expandedWidth: maxWidth,
             canSwitch: press == nil)
         let inward = placement.inward
-        let hostVisible = environment.visible(parent)
+        let hostVisible = resolveHostVisible()
         let visible = hostVisible && !motion.bubble && !motion.animationInProgress
         let reduceMotion = environment.reduceMotion()
         let selectedIndex = items.firstIndex { $0.groupID == state.groupID }
@@ -688,14 +756,42 @@ final class SideTabsController: NSObject {
             collapseWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + SideTabGeometry.collapseDelay, execute: work)
         }
-        expansion.setExpanded(expanded, at: now, reduceMotion: reduceMotion || !hostVisible)
+        expansion.setExpanded(expanded, at: now, reduceMotion: reduceMotion || !visible)
         let sample = SideTabGeometry.snapshot(panel: frame, fullWidths: widths,
             progress: expansion.progress(at: now), inward: inward, visibleMinX: visibleMinX,
             selectedIndex: selectedIndex, entrance: arrivals)
         let bounds = SideTabGeometry.paintedFrame(sample.window, inward: inward)
-        // AppKit moves child windows with the parent. Compare the actual frame,
-        // then update frame + SwiftUI layout from the very same animation sample.
-        if window.frame != bounds { window.setFrame(bounds, display: false) }
+        // AppKit moves attached children while their reported frame may be stale.
+        // Apply every relative placement change, and verify absolute frames later.
+        let placement = ChildFramePlacement(child: bounds, parent: frame)
+        let verifyFrame = needsFrameVerification || (visible && !presentation.visible)
+        needsFrameVerification = false
+        let translated = lastParentOrigin != frame.origin
+        lastParentOrigin = frame.origin
+        if placement == lastPlacement && !verifyFrame && translated {
+            frameVerification?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                self?.needsFrameVerification = true
+                self?.synchronize()
+            }
+            frameVerification = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+        } else if placement != lastPlacement || verifyFrame {
+            if placement != lastPlacement || window.frame != bounds {
+                if QAPerf.enabled { QAPerf.count(.sideTabSetFrame) }; environment.didSetFrame(); window.setFrame(bounds, display: false)
+            }
+            lastPlacement = placement
+            if translated && !verifyFrame {
+                // AppKit shifts attached children by the parent's delta after didMove is
+                // delivered, which displaces a frame applied here. Correct it on the next
+                // synchronisation (the always-running display link used to mask this).
+                needsFrameVerification = true
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, !self.stopped, self.needsFrameVerification else { return }
+                    self.synchronize()
+                }
+            }
+        }
         if window.appearance != parent.appearance { window.appearance = parent.appearance }
         if window.level != parent.level { window.level = parent.level }
         var hitRects: [CGRect] = []
@@ -711,6 +807,11 @@ final class SideTabsController: NSObject {
                 rect: rect.offsetBy(dx: -bounds.minX, dy: -bounds.minY), fullWidth: widths[index], dragged: lifted,
                 opacity: sample.opacities[index], interactive: interactive)
         }
+        pointerInterest = hitRects.reduce(sensor) { $0.union($1) }
+        let hovered = rows.first { $0.interactive && $0.rect.offsetBy(dx: bounds.minX, dy: bounds.minY).contains(mouse) }?.id
+        let presentationChanged = presentation.size != bounds.size || presentation.inward != inward ||
+            presentation.textOpacity != sample.textOpacity || presentation.rows != rows ||
+            presentation.hovered != hovered || presentation.visible != visible
         if presentation.size != bounds.size { presentation.size = bounds.size }
         if presentation.inward != inward { presentation.inward = inward }
         if presentation.textOpacity != sample.textOpacity { presentation.textOpacity = sample.textOpacity }
@@ -718,23 +819,32 @@ final class SideTabsController: NSObject {
         if presentation.rows != rows { presentation.rows = rows }
         (window.contentView as? SideTabHostingView<SideTabsView>)?.screenHitRects = hitRects
         // Resolve the new SwiftUI layout before the resized child is composited.
-        window.contentView?.layoutSubtreeIfNeeded()
-        let hovered = rows.first { $0.interactive && $0.rect.offsetBy(dx: bounds.minX, dy: bounds.minY).contains(mouse) }?.id
+
         if presentation.hovered != hovered { presentation.hovered = hovered }
         if presentation.visible != visible { presentation.visible = visible }
+        if presentationChanged {
+            if QAPerf.enabled { QAPerf.count(.sideTabsLayout) }; window.contentView?.layoutSubtreeIfNeeded()
+        }
         window.ignoresMouseEvents = !visible || (press == nil && !hitRects.contains { $0.contains(mouse) })
-        let painted = hostVisible && rows.contains { $0.opacity > 0 }
+        let painted = visible && rows.contains { $0.opacity > 0 }
         let shadowTabs = SideTabGeometry.shadowRects(rows: rows, bounds: bounds, panel: frame, painted: painted, visible: visible, inward: inward)
         motion.shadowController?.setTabRects(shadowTabs)
         window.alphaValue = painted ? 1 : 0
         let ordering = SideTabGeometry.childOrder(inward: inward, expanded: expanded,
             progress: expansion.progress(at: now))
         if let restingHost {
-            restingHost.frame = parent.contentView?.convert(parent.convertFromScreen(bounds), from: nil) ?? .zero
+            let restFrame = parent.contentView?.convert(parent.convertFromScreen(bounds), from: nil) ?? .zero
+            let restSizeChanged = restingHost.frame.size != restFrame.size
+            if restingHost.frame != restFrame { restingHost.frame = restFrame }
             restingHost.screenHitRects = hitRects
             restingHost.isHidden = !painted || !inward || ordering == .above || bounds.maxX <= frame.minX
-            restingHost.layoutSubtreeIfNeeded()
+            if presentationChanged || restSizeChanged {
+                if QAPerf.enabled { QAPerf.count(.sideTabsLayout) }; restingHost.layoutSubtreeIfNeeded()
+            }
         }
+        let moving = visible && (expansion.progress(at: now) != expansion.target || arrivals.contains { $0 < 1 })
+        pointerAnimationRunning = moving
+        displayLink?.isPaused = !moving
         if painted && environment.desktopEvents {
             if window.parent !== parent || childOrder != ordering {
                 // AppKit preserves the ordering relationship established by
@@ -746,8 +856,8 @@ final class SideTabsController: NSObject {
             if !window.isVisible { window.order(ordering, relativeTo: parent.windowNumber) }
             childOrder = ordering
         } else if !visible {
-            // Frames continue synchronizing while collapsed or animating. On expansion
-            // there is never a stale child frame to flash at the old panel location.
+            // AppKit carries the attached child while hidden; reveal synchronizes its
+            // frame before making it visible, including after parent resize.
             // orderOut removes an NSWindow from its parent. Keep an invisible child
             // instead, otherwise the first collapse silently breaks drag following.
             expanded = false; collapseWork?.cancel(); collapseWork = nil; cancelDrag()

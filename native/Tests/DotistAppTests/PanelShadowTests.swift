@@ -196,6 +196,25 @@ final class PanelShadowTests: XCTestCase {
         try pixelEvidence.joined(separator: "\n").write(to: evidence.appendingPathComponent("exterior-pixels.csv"), atomically: true, encoding: .utf8)
     }
 
+    func testPureTranslationDoesNotRenderShadowAgain() throws {
+        let model = try model()
+        let frame = NSRect(x: 100, y: 100, width: 364, height: 620)
+        let panel = DotistPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let motion = PanelMotion(model: model, panel: panel, size: frame.size, title: { "" },
+                                 environment: PanelMotionTestEnvironment().environment)
+        defer { motion.stop(); panel.close() }
+        let shadow = try XCTUnwrap(motion.shadowController)
+        let ambient = try XCTUnwrap(shadow.window.contentView?.layer?.sublayers?.first)
+        ambient.shadowRadius = 123
+        panel.setFrameOrigin(NSPoint(x: 180, y: 160))
+        shadow.synchronize()
+        XCTAssertEqual(ambient.shadowRadius, 123)
+        panel.setFrame(NSRect(x: 180, y: 160, width: 400, height: 620), display: false)
+        shadow.synchronize()
+        XCTAssertNotEqual(ambient.shadowRadius, 123)
+    }
+
     func testTaskPanelStateAndOtherPanelsUseExpectedShadowChildren() throws {
         let model = try model()
         let frame = NSRect(x: 100, y: 100, width: 364, height: 620)

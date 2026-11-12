@@ -32,6 +32,7 @@ final class TaskPanelState: ObservableObject {
     @Published var groupID: String?
     @Published var scope: String
     @Published var activeTag: String?
+    @Published var hideCompleted = false
     /// A calendar-picked range; it overrides the preset scope while set.
     @Published var customStart: String?
     @Published var customEnd: String?

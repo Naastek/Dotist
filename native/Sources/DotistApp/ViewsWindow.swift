@@ -424,15 +424,17 @@ private struct ViewTaskCard: View {
             ZStack {
                 Circle().stroke(task.completed ? DotistDesign.accent : DotistDesign.faint, lineWidth: 1.5)
                 if task.completed { Circle().fill(DotistDesign.accent); OpticalSymbol(name: "checkmark", size: calendarColumn ? 8 : 10, weight: .bold).foregroundColor(.white) }
-            }.frame(width: calendarColumn ? 14 : 18, height: calendarColumn ? 14 : 18).contentShape(Rectangle())
+            }.frame(width: calendarColumn ? 14 : 18, height: calendarColumn ? 14 : 18)
+                .frame(width: 24, height: 24).contentShape(Rectangle())
         }.buttonStyle(.plain).modifier(DotistFocusRing())
+            .padding(calendarColumn ? -5 : -3)
             .accessibilityLabel(Text(model.text(task.completed ? "恢复 {title}" : "完成 {title}").replacingOccurrences(of: "{title}", with: task.title)))
     }
 
     private var adjustmentButton: some View {
         Button { open = true } label: {
-            OpticalSymbol(name: "ellipsis", size: 12, weight: .medium).frame(width: 18, height: 18).contentShape(Rectangle())
-        }.buttonStyle(.plain).modifier(DotistFocusRing())
+            OpticalSymbol(name: "ellipsis", size: 12, weight: .medium).frame(width: 24, height: 24).contentShape(Rectangle())
+        }.buttonStyle(.plain).modifier(DotistFocusRing()).padding(-3)
             .foregroundColor(hovered || open ? DotistDesign.ink : DotistDesign.faint)
             .accessibilityLabel(Text(model.text("调整任务") + " " + task.title))
             .help(model.text("调整任务"))

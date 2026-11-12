@@ -54,17 +54,19 @@ struct FloatingPanelView<Content: View>: View {
     let contextMenu: (NSEvent, NSView) -> Void
     let content: Content
     @State private var hoverReveal: CGFloat = 0
+    @State private var contentCache = BubbleContentCache()
     var filter: [String] { colorState.filterParts(in: model, includeGroup: groupName == nil) }
     var bubbleContent: BubbleContent {
         // groupName controls panel wording, never the selected task scope.
-        BubbleContent(model: model, groupID: colorState.groupID, fallbackTitle: title, state: colorState)
+        contentCache.content(model: model, state: colorState, title: title)
     }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var scheme
     var body: some View {
-        GeometryReader { geometry in
+        let _ = QAPerf.enabled ? QAPerf.count(.floatingPanelBody) : ()
+        return GeometryReader { geometry in
             let fixed = motion.bubble || motion.animationInProgress
             let width = fixed ? motion.transitionSize.width : geometry.size.width
             let height = fixed ? motion.transitionSize.height : geometry.size.height
@@ -93,10 +95,10 @@ struct FloatingPanelView<Content: View>: View {
             .clipShape(FloatingPanelContentShape(panelShape: FloatingPanelShape(compact: motion.bubble, transitioning: motion.animationInProgress,
                 onRight: motion.bubbleOnRight, reveal: hoverReveal, base: 48 + extra,
                 debug: glassDebug.enabled && !reduceTransparency && contrast != .increased ? glassDebug.parameters : nil)))
-            .background(FloatingSurface(opacity: model.settings.opacity, frost: model.settings.frost,
+            .background(ObservedFloatingSurface(surface: motion.surface, opacity: model.settings.opacity, frost: model.settings.frost,
                 compact: motion.bubble, transitioning: motion.animationInProgress, onRight: motion.bubbleOnRight,
                 size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID), base: 48 + extra,
-                frameInsets: motion.surfaceInsets, idleContentOpacity: motion.idleContentOpacity))
+                idleContentOpacity: motion.idleContentOpacity))
             .background(WindowShadowInvalidation())
         }
         .environment(\.glassDebugParameters, glassDebug.enabled ? glassDebug.parameters : nil)
@@ -127,3 +129,22 @@ struct FloatingPanelView<Content: View>: View {
     }
 }
 
+
+private struct ObservedFloatingSurface: View {
+    @ObservedObject var surface: PanelSurfaceInsets
+    let opacity: UInt8
+    let frost: UInt8
+    let compact: Bool
+    let transitioning: Bool
+    let onRight: Bool
+    let size: CGSize
+    let reveal: CGFloat
+    let color: DotistGroupColor
+    let base: CGFloat
+    let idleContentOpacity: Double
+    var body: some View {
+        FloatingSurface(opacity: opacity, frost: frost, compact: compact, transitioning: transitioning,
+            onRight: onRight, size: size, reveal: reveal, color: color, base: base,
+            frameInsets: surface.value, idleContentOpacity: idleContentOpacity)
+    }
+}

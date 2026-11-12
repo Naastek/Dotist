@@ -30,8 +30,8 @@ final class CommandPaletteSectionsTests: XCTestCase {
         let single = PaletteMetrics.height(sectionCounts: [1])
         let several = PaletteMetrics.height(sectionCounts: [3, 2, 1])
         // A short result set should not leave a mostly empty panel behind.
-        XCTAssertEqual(empty, PaletteMetrics.searchRow + PaletteMetrics.emptyContent + PaletteMetrics.footer)
-        XCTAssertEqual(single, 52 + 18 + 14 + 4 + 38 + 10 + 32)
+        XCTAssertEqual(empty, PaletteMetrics.searchRow + PaletteMetrics.emptyContent)
+        XCTAssertEqual(single, 52 + 18 + 14 + 4 + 38 + 10)
         XCTAssertGreaterThan(several, single)
         XCTAssertLessThan(several, PaletteMetrics.maxHeight)
         // Long lists stay bounded; the list scrolls beyond that.
@@ -46,7 +46,9 @@ final class CommandPaletteSectionsTests: XCTestCase {
         _ = try store.addTask(title: "整理会议记录")
         _ = try store.addGroup(name: "Palette A")
         let model = try AppModel(store: store)
-        let sections = CommandPaletteSections.build(query: "", tasks: model.ordered(model.tasks), groups: model.groups, viewsTitle: "任务视图")
+        XCTAssertFalse(model.visibleGroups.contains { $0.id == DotistGroup.inboxID })
+        let sections = CommandPaletteSections.build(query: "", tasks: model.ordered(model.tasks), groups: model.visibleGroups, viewsTitle: "任务视图")
+        XCTAssertEqual(sections.first(where: { $0.title == "分组" })?.items.count, model.visibleGroups.count)
         let height = PaletteMetrics.height(sectionCounts: sections.map(\.items.count))
         XCTAssertLessThan(height, PaletteMetrics.maxHeight)
         let host = NSHostingView(rootView: CommandPalette(model: model, close: {}, reveal: { _ in }, revealGroup: { _ in }, showViews: {})

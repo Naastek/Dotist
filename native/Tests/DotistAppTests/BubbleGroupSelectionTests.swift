@@ -66,7 +66,7 @@ final class BubbleGroupSelectionTests: XCTestCase {
         XCTAssertEqual(view.filter, [model.groupDisplayName("life")])
         view.motion.toggleBubble(in: area, animated: false)
         view.motion.setHover(true, in: area)
-        let expected = min(ceil(78 + view.bubbleContent.textWidth(language: model.language)) + view.motion.filterExtra, 440)
+        let expected = min(ceil(86 + view.bubbleContent.textWidth(language: model.language)) + view.motion.filterExtra, 440)
         XCTAssertEqual(view.motion.panel.frame.width, expected, accuracy: 0.01,
                        "Hover geometry and rendered content must use the same selection")
     }
@@ -170,7 +170,7 @@ final class BubbleGroupSelectionTests: XCTestCase {
         controller.state.groupID = "life"
         controller.motion.toggleBubble(in: area, animated: false)
         controller.motion.setHover(true, in: area)
-        let expected = min(ceil(78 + view.bubbleContent.textWidth(language: model.language)) + controller.motion.filterExtra, 440)
+        let expected = min(ceil(86 + view.bubbleContent.textWidth(language: model.language)) + controller.motion.filterExtra, 440)
         XCTAssertEqual(controller.motion.panel.frame.width, expected, accuracy: 0.01)
         controller.state.groupID = "study"
         XCTAssertNil(controller.bubbleContent.task)

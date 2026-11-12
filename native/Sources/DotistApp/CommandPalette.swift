@@ -9,11 +9,10 @@ enum CommandPaletteVisibility {
 
 /// The palette is a resizable overlay, so its height is derived from the same
 /// values that lay it out: a search field, section headers, single-line rows and
-/// a footer. Few results produce a short panel instead of a mostly empty one.
+/// a list. Few results produce a short panel instead of a mostly empty one.
 enum PaletteMetrics {
     static let width: CGFloat = 640
     static let searchRow: CGFloat = 52
-    static let footer: CGFloat = 32
     static let row: CGFloat = 38
     static let headerTop: CGFloat = 18
     static let headerLine: CGFloat = 14
@@ -23,11 +22,11 @@ enum PaletteMetrics {
     static let maxHeight: CGFloat = 520
 
     static func height(sectionCounts: [Int]) -> CGFloat {
-        guard !sectionCounts.isEmpty else { return searchRow + emptyContent + footer }
+        guard !sectionCounts.isEmpty else { return searchRow + emptyContent }
         let list = sectionCounts.reduce(CGFloat.zero) { total, count in
             total + headerTop + headerLine + headerBottom + CGFloat(count) * row
         }
-        return min(maxHeight, searchRow + list + listBottom + footer)
+        return min(maxHeight, searchRow + list + listBottom)
     }
 }
 
@@ -66,6 +65,7 @@ struct CommandPalette: View {
     let revealGroup: (DotistGroup) -> Void
     let showViews: () -> Void
     var resize: (CGFloat) -> Void = { _ in }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var query = ""
     @State private var selectedID: String?
     @State private var scrollRequest: String?
@@ -73,7 +73,7 @@ struct CommandPalette: View {
     @FocusState private var focused: Bool
 
     private var sections: [CommandPaletteSections] {
-        CommandPaletteSections.build(query: query, tasks: model.ordered(model.tasks), groups: model.groups, viewsTitle: model.text("任务视图"))
+        CommandPaletteSections.build(query: query, tasks: model.ordered(model.tasks), groups: model.visibleGroups, viewsTitle: model.text("任务视图"))
     }
     private var results: [PaletteItem] { sections.flatMap(\.items) }
     private var metricsHeight: CGFloat { PaletteMetrics.height(sectionCounts: sections.map(\.items.count)) }
@@ -99,9 +99,12 @@ struct CommandPalette: View {
                             ForEach(section.items) { result in
                                 Button { selectedID = result.id; openSelected() } label: {
                                     row(result).padding(.horizontal, 20).frame(height: PaletteMetrics.row).contentShape(Rectangle())
-                                        .overlay(alignment: .bottom) {
-                                            if selectedID == result.id { Rectangle().fill(DotistDesign.accent).frame(height: 2).padding(.horizontal, 20) }
+                                        .background {
+                                            if selectedID == result.id {
+                                                RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(0.3)).padding(.horizontal, 8)
+                                            }
                                         }
+                                        .animation(LayoutMotionInputs.shouldReduceMotion(reduceMotion) ? nil : .easeOut(duration: 0.12), value: selectedID)
                                 }.buttonStyle(.plain)
                                     .onHover { hovering in
                                         if hovering && NSEvent.mouseLocation != pointerAtKeyMove { selectedID = result.id }
@@ -113,10 +116,6 @@ struct CommandPalette: View {
                 }.onChange(of: scrollRequest) { id in if let id { proxy.scrollTo(id) } }
             }
             }
-            Text(model.text("↑↓ 选择　↵ 打开　esc 关闭"))
-                .font(DotistDesign.font(11, language: model.language)).foregroundColor(DotistDesign.muted)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).frame(height: PaletteMetrics.footer)
-                .overlay(alignment: .top) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5) }
         }
         .accessibilityIdentifier("search-drag-handle")
         .foregroundColor(DotistDesign.ink)

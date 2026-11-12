@@ -3,6 +3,11 @@ import CoreText
 import DotistCore
 import SwiftUI
 
+@MainActor
+final class PanelSurfaceInsets: ObservableObject {
+    @Published var value = EdgeInsets()
+}
+
 /// All task panels share one motion implementation, with independent window state.
 @MainActor
 final class PanelMotion: ObservableObject {
@@ -31,7 +36,9 @@ final class PanelMotion: ObservableObject {
     var environment: Environment
     @Published private(set) var idleContentOpacity: Double = 1
     @Published private(set) var bubble = false
-    @Published private(set) var surfaceInsets = EdgeInsets()
+    var tabsTransitionDidChange: (() -> Void)?
+    let surface = PanelSurfaceInsets()
+    var surfaceInsets: EdgeInsets { surface.value }
     @Published private(set) var hovering = false
     @Published var bubbleOnRight = true
     /// Active-filter wording shown beside the collapsed ball (nil for "All").
@@ -41,7 +48,7 @@ final class PanelMotion: ObservableObject {
         guard !filterLines.isEmpty else { return 0 }
         let font = DotistDesign.nativeFont(12, language: model.language)
         let widest = filterLines.map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
-        return 16 + min(150, ceil(widest))
+        return BubbleLayout.filterBudget + min(150, ceil(widest))
     }
     var baseWidth: CGFloat { 48 + filterExtra }
     @Published private(set) var animationInProgress = false
@@ -89,7 +96,7 @@ final class PanelMotion: ObservableObject {
                     guard let self, !self.stopped, let transition = self.insetTransition else { return }
                     // Publish even when size is unchanged: an anchor-only move
                     // must invalidate FloatingPanelView's observed motion.
-                    self.surfaceInsets = transition.insets(at: self.panel.frame)
+                    if QAPerf.enabled { QAPerf.count(.surfaceInsets) }; self.surface.value = transition.insets(at: self.panel.frame)
                     self.shadowController?.synchronize()
                 }
             })
@@ -144,8 +151,8 @@ final class PanelMotion: ObservableObject {
             pendingHover = nil; pendingBubbleToggle = true
             return
         }
+        if QAPerf.enabled { QAPerf.begin(bubble ? "expand" : "collapse", period: 1.0 / Double(max(1, panel.screen?.maximumFramesPerSecond ?? 60))) }
         hoverClose?.cancel(); hoverClose = nil
-        panel.makeFirstResponder(nil)
         animationInProgress = true
         let old = panel.frame
         let target: NSRect
@@ -174,11 +181,15 @@ final class PanelMotion: ObservableObject {
             hovering = false
             bubble = false
         }
+        if QAPerf.enabled { QAPerf.mark("geometry_and_state") }
+        tabsTransitionDidChange?()
         refreshShadow()
+        if QAPerf.enabled { QAPerf.mark("tabs_and_shadow") }
         // Hidden windows have no visible movement to animate, and AppKit can
         // withhold their frame updates/completions even inside NSApplication.run.
         // A controlled test driver explicitly bypasses visibility/display checks.
         if !animated || (environment.animateFrame == nil && (!panel.isVisible || NSScreen.main == nil)) {
+            panel.makeFirstResponder(nil)
             panel.setFrame(target, display: true)
             finishBubbleTransition()
             return
@@ -190,6 +201,7 @@ final class PanelMotion: ObservableObject {
             self.finishBubbleTransition()
         }
         if let animate = environment.animateFrame {
+            panel.makeFirstResponder(nil)
             animate(panel, target, duration, complete)
             return
         }
@@ -198,20 +210,24 @@ final class PanelMotion: ObservableObject {
             complete()
         }
         frameAnimation = animation
+        if duration <= 0 { panel.makeFirstResponder(nil) }
         animation.startMotion()
+        if duration > 0 { panel.makeFirstResponder(nil) }
     }
 
     private func prepareSurfaceTransition(from frame: NSRect, to target: NSRect, compact: Bool) {
         let end = FloatingSurface.opticalInsets(compact: compact, reduceTransparency: false, increasedContrast: false)
         let transition = PanelSurfaceTransition(start: frame, target: target, from: surfaceInsets, to: end, onRight: bubbleOnRight)
         insetTransition = transition
-        surfaceInsets = transition.insets(at: frame)
+        if QAPerf.enabled { QAPerf.count(.surfaceInsets) }; surface.value = transition.insets(at: frame)
     }
 
     private func finishBubbleTransition() {
+        defer { if QAPerf.enabled { QAPerf.end() } }
         insetTransition = nil
-        surfaceInsets = FloatingSurface.opticalInsets(compact: bubble, reduceTransparency: false, increasedContrast: false)
+        if QAPerf.enabled { QAPerf.count(.surfaceInsets) }; surface.value = FloatingSurface.opticalInsets(compact: bubble, reduceTransparency: false, increasedContrast: false)
         animationInProgress = false
+        tabsTransitionDidChange?()
         refreshShadow()
         if bubble {
             // A collapse click often leaves the pointer inside the new circle.
@@ -257,7 +273,7 @@ final class PanelMotion: ObservableObject {
         hoverAnimating = true
         let frame = panel.frame
         let details = bubbleContent?() ?? BubbleContent(model: model, groupID: filterState?.groupID, fallbackTitle: title(), state: filterState)
-        let width: CGFloat = active ? min(ceil(78 + details.textWidth(language: model.language)) + filterExtra, max(baseWidth, min(440, area.width / 2))) : baseWidth
+        let width: CGFloat = active ? min(ceil(BubbleLayout.widthBudget + details.textWidth(language: model.language)) + filterExtra, max(baseWidth, min(440, area.width / 2))) : baseWidth
         let coreX = bubbleOnRight ? frame.maxX - 24 : frame.minX + 24
         let target = NSRect(x: bubbleOnRight ? coreX + 24 - width : coreX - 24, y: frame.minY, width: width, height: 48)
         // Resize the coordinate space without animation; only the glass surface morphs.
