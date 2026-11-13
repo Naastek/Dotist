@@ -68,3 +68,5 @@ The always-active `NSVisualEffectView` replacement was rejected and removed from
 # Panel and side-tab shadow
 
 The task panel and its visible outward tabs share one shadow silhouette and cutout; inward tabs and bubble transitions do not contribute. The shadow window grows around the sampled silhouette while preserving the panel shadow's screen position.
+
+- 收起完成及展开起始时，`FloatingSurfaceClipping` 保持同一材质子树，裁切策略通过同一 Shape 类型的路径切换，禁止在 content 与 content.clipShape 两个结构分支间切换。稳定紧凑态使用窗口矩形路径，保留 2pt 光学留白和原生 0.5pt 去暗缘裁切，不新增圆角二次裁切。守护：`FloatingSurfaceLifetimeTests`、`CompactNativeGlassTests`。生命周期检查证明额外挂载已消除，不代替本人流畅度验收。

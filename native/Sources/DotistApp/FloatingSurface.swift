@@ -62,16 +62,33 @@ struct FloatingSurface: View, Animatable {
             .padding(opticalInset)
             .frame(width: compact && !transitioning ? base + (size.width - base) * min(1, max(0, reveal)) : size.width, height: size.height)
             .frame(width: size.width, height: size.height, alignment: onRight ? .topTrailing : .topLeading)
-        if compact && !transitioning && !reduceTransparency && contrast != .increased {
-            // The native material owns its shape at the animated width. Leave
-            // its optical edge clipped by the shared glass helper.
-            material
-        } else {
-            // Keep the window/transition alpha constrained. Expanded native
-            // optics have their own clearance inside this outer silhouette.
-            material.clipShape(FloatingPanelShape(compact: compact, transitioning: transitioning,
-                onRight: onRight, reveal: reveal, base: base))
-        }
+        material.modifier(FloatingSurfaceClipping(shape: FloatingPanelShape(compact: compact, transitioning: transitioning,
+            onRight: onRight, reveal: reveal, base: base),
+            clipsSilhouette: !(compact && !transitioning && !reduceTransparency && contrast != .increased)))
+    }
+}
+
+/// Keep the material's lifetime independent of the transition's clipping policy.
+struct FloatingSurfaceClipping: ViewModifier {
+    let shape: FloatingPanelShape
+    let clipsSilhouette: Bool
+    func body(content: Content) -> some View {
+        content.clipShape(FloatingSurfaceClipShape(silhouette: shape, clipsSilhouette: clipsSilhouette))
+    }
+}
+
+struct FloatingSurfaceClipShape: Shape {
+    var silhouette: FloatingPanelShape
+    let clipsSilhouette: Bool
+    var animatableData: CGFloat {
+        get { silhouette.animatableData }
+        set { silhouette.animatableData = newValue }
+    }
+    func path(in rect: CGRect) -> Path {
+        // Settled compact optics already own their rounded edge and sit 2pt
+        // inside these bounds. A rectangular path preserves that edge without
+        // moving the native material into a different SwiftUI branch.
+        clipsSilhouette ? silhouette.path(in: rect) : Path(rect)
     }
 }
 

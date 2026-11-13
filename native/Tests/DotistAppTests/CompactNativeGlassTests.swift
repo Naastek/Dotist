@@ -14,10 +14,12 @@ final class CompactNativeGlassTests: XCTestCase {
 
     func testCompactMatchesChosenSingleNativeSurfaceWithoutPaintedLight() throws {
         for scheme in [ColorScheme.light, .dark] {
-            for color in [DotistGroupColor.none, .teal] {
+            for color in DotistGroupColor.allCases {
                 for width: CGFloat in [44, 236] {
                     let size = CGSize(width: width, height: 44)
-                    let actual = try bitmap(TransientGlassSurface(cornerRadius: 24, color: color, compact: true, solid: false, scheme: scheme), size: size, scheme: scheme)
+                    let actual = try bitmap(TransientGlassSurface(cornerRadius: 24, color: color, compact: true, solid: false, scheme: scheme)
+                        .modifier(FloatingSurfaceClipping(shape: FloatingPanelShape(compact: true, transitioning: false,
+                            onRight: true, reveal: 1), clipsSilhouette: false)), size: size, scheme: scheme)
                     let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
                     let reference = try bitmap(Color.clear.dotistGlass(.regular.tint(DotistTheme.tint(color, scheme)), in: shape)
                         .environment(\.appearsActive, true), size: size, scheme: scheme)

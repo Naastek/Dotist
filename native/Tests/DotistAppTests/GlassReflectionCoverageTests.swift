@@ -28,4 +28,37 @@ final class GlassReflectionCoverageTests: XCTestCase {
             }
         }
     }
+    func testEveryThemeLeavesTheWholeNativeRimUnpainted() throws {
+        let size = CGSize(width: 240, height: 140)
+        let radius: CGFloat = 18
+        let protectedInterior = RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .inset(by: 1).path(in: CGRect(origin: .zero, size: size))
+        for scheme in [ColorScheme.light, .dark] {
+            for color in DotistGroupColor.allCases {
+                let paint = ExpandedReadingMaterial(opacity: 100, frost: 100, color: color, scheme: scheme, cornerRadius: radius)
+                let edge = GlassEdge(cornerRadius: radius, compact: false, scheme: scheme, color: color)
+                let renderer = ImageRenderer(content: ZStack {
+                    paint
+                    GlassGloss(shape: RoundedRectangle(cornerRadius: radius, style: .continuous), intensity: .expanded, scheme: scheme)
+                    edge
+                }.frame(width: size.width, height: size.height).environment(\.colorScheme, scheme))
+                renderer.scale = 2
+                let bitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+                var maximumAlpha: CGFloat = 0
+                for y in 0..<bitmap.pixelsHigh { for x in 0..<bitmap.pixelsWide {
+                    let point = CGPoint(x: (CGFloat(x) + 0.5) / 2, y: (CGFloat(y) + 0.5) / 2)
+                    // 只检查整个像素都在保护区内的样本，避免把边界抗锯齿当作覆盖。
+                    let corners = [CGPoint(x: point.x - 0.25, y: point.y - 0.25),
+                                   CGPoint(x: point.x + 0.25, y: point.y - 0.25),
+                                   CGPoint(x: point.x - 0.25, y: point.y + 0.25),
+                                   CGPoint(x: point.x + 0.25, y: point.y + 0.25)]
+                    if corners.allSatisfy({ !protectedInterior.contains($0) }) {
+                        maximumAlpha = max(maximumAlpha, try XCTUnwrap(bitmap.colorAt(x: x, y: y)).alphaComponent)
+                    }
+                } }
+                XCTAssertLessThan(maximumAlpha, 0.02, "Native rim covered: \(scheme), \(color)")
+            }
+        }
+    }
+
 }
