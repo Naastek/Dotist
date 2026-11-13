@@ -125,7 +125,13 @@ final class TransientGlassTests: XCTestCase {
                 let uninsetAlpha = try XCTUnwrap(uninset.colorAt(x: boundaryX, y: 48)).alphaComponent
                 XCTAssertLessThan(insetAlpha, uninsetAlpha,
                     "Inset must reduce boundary coverage: width \(outerWidth), reveal \(reveal), right \(onRight)")
-                XCTAssertGreaterThan(try XCTUnwrap(actual.colorAt(x: Int((left + visibleWidth / 2) * 2), y: 48)).alphaComponent, 0.3)
+                // An offscreen host may omit native glass at the center. The old
+                // >0.3 requirement measured the removed 40% black veil, not geometry.
+                // Full raster equality above and boundary coverage below/above
+                // check the production inset against independently sized material.
+                let centerX = Int((left + visibleWidth / 2) * 2)
+                XCTAssertEqual(try XCTUnwrap(actual.colorAt(x: centerX, y: 48)).alphaComponent,
+                    try XCTUnwrap(expected.colorAt(x: centerX, y: 48)).alphaComponent, accuracy: 0.02)
                 XCTAssertLessThan(try XCTUnwrap(actual.colorAt(x: Int((left + visibleWidth / 2) * 2), y: 1)).alphaComponent, 0.02)
             }
         }
