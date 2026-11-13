@@ -141,27 +141,20 @@ struct TransientGlassSurface: View {
                 .overlay(shape.fill(DotistTheme.swatch(color).opacity(GlassTintMaterial.accessibilityTint)))
         } else if let debug {
             GlassDebugOpticalSurface(parameters: debug, color: color, scheme: scheme)
-        } else if compact {
-            opticalSurface(shape: FloatingPanelShape(compact: true, transitioning: false, onRight: false, reveal: 1))
         } else {
+            // FloatingSurface sizes the material during reveal; use the same
+            // native rounded shape as the user-approved white specimen.
             opticalSurface(shape: shape)
         }
     }
 
     private func opticalSurface<S: InsettableShape>(shape: S) -> some View {
-        // The local environment override does not prevent non-key graying.
+        // Window appearance remains owned by FloatingGlassAppearance.
         let tint = DotistTheme.tint(color, scheme).opacity(CompactGlassStyle.tintStrength)
+        // Match the chosen native specimen: no painted gloss, rim or extra clip.
         return Color.clear
             .dotistGlass(Glass.regular.tint(tint).interactive(compact ? false : interactive), in: shape)
             .environment(\.appearsActive, compact || appearsActive)
-            // Keep native reflections exposed: no secondary color wash or black veil.
-            .overlay {
-                if compact { GlassGloss(shape: shape.inset(by: GlassSilhouette.glassClip), intensity: .compact, scheme: scheme) }
-            }
-            .overlay {
-                if compact { GlassEdge(cornerRadius: cornerRadius, compact: true, scheme: scheme, color: color) }
-            }
-            .clipShape(shape.inset(by: GlassSilhouette.glassClip))
     }
 }
 
