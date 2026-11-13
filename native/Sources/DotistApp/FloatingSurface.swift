@@ -193,9 +193,10 @@ struct ExpandedReadingMaterial: View {
 
     private func paint(backgroundOpacity amount: Double) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let paper: Color = scheme == .light ? .white : DotistDesign.paper
         return ZStack {
-            shape.fill(DotistDesign.paper.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false) * amount))
-            shape.fill(DotistDesign.paper.opacity(Double(frost) / 100 * GlassTintMaterial.expandedFrostScale * amount))
+            shape.fill(paper.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false) * amount))
+            shape.fill(paper.opacity(Double(frost) / 100 * GlassTintMaterial.expandedFrostScale * amount))
             shape.fill(GlassTintMaterial.themeWash(color, scheme).opacity(amount))
         }
         .allowsHitTesting(false)

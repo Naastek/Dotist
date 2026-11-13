@@ -33,7 +33,6 @@ private struct DotistInlineShadow: ViewModifier {
 /// while keeping optical glass, tint density and accessibility fallback distinct.
 enum GlassTintMaterial {
     static let accessibilityTint = 0.08
-    static let compactDarkProtection = 0.4
     static let expandedLightTint = 0.16
     static let expandedDarkTint = 0.18
     static func themeWash(_ color: DotistGroupColor, _ scheme: ColorScheme) -> Color {
@@ -49,7 +48,6 @@ enum GlassTintMaterial {
 
 enum CompactGlassStyle {
     static let tintStrength: Double = 1.0
-    static func washOpacity(_ scheme: ColorScheme) -> Double { scheme == .dark ? 0.12 : 0.08 }
     enum Tier { case compact, expanded }
     static func specularTop(_ tier: Tier, _ scheme: ColorScheme) -> Double {
         switch tier {
@@ -143,18 +141,11 @@ struct TransientGlassSurface: View {
 
     private func opticalSurface<S: InsettableShape>(shape: S) -> some View {
         // The local environment override does not prevent non-key graying.
-        let tint: Color? = color == .none ? nil : DotistTheme.tint(color, scheme).opacity(CompactGlassStyle.tintStrength)
+        let tint = DotistTheme.tint(color, scheme).opacity(CompactGlassStyle.tintStrength)
         return Color.clear
             .dotistGlass(Glass.regular.tint(tint).interactive(compact ? false : interactive), in: shape)
             .environment(\.appearsActive, compact || appearsActive)
-            .overlay {
-                if compact { shape.fill(GlassTintMaterial.themeWash(color, scheme).opacity(CompactGlassStyle.washOpacity(scheme))).allowsHitTesting(false).accessibilityHidden(true) }
-            }
-            .overlay {
-                if compact && scheme == .dark {
-                    shape.fill(.black.opacity(GlassTintMaterial.compactDarkProtection)).allowsHitTesting(false).accessibilityHidden(true)
-                }
-            }
+            // Keep native reflections exposed: no secondary color wash or black veil.
             .overlay {
                 if compact { GlassGloss(shape: shape.inset(by: GlassSilhouette.glassClip), intensity: .compact, scheme: scheme) }
             }

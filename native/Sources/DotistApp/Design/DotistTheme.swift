@@ -4,7 +4,7 @@ import SwiftUI
 /// Soft color in the glass material, independent of selection and text colors.
 extension DotistTheme {
     static func tint(_ color: DotistGroupColor, _ scheme: ColorScheme) -> Color {
-        guard color != .none else { return .clear }
+        guard color != .none else { return Color.white.opacity(scheme == .dark ? 0.18 : 0.24) }
         let light: UInt32
         let dark: UInt32
         switch color {
@@ -18,7 +18,10 @@ extension DotistTheme {
         case .purple: (light, dark) = (0xd7cee6, 0x87739e)
         case .pink: (light, dark) = (0xe7ccd9, 0xa0748b)
         }
-        return rgb(scheme == .dark ? dark : light).opacity(scheme == .dark ? 0.18 : 0.24)
+        // Lift the material color rather than painting a white veil over its reflections.
+        return rgb(scheme == .dark ? dark : light)
+            .mix(with: .white, by: scheme == .dark ? 0.25 : 0.35)
+            .opacity(scheme == .dark ? 0.18 : 0.24)
     }
 
     static func tint(_ color: DotistGroupColor, scheme: ColorScheme) -> Color { tint(color, scheme) }

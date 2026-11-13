@@ -38,8 +38,6 @@ final class TransientGlassTests: XCTestCase {
                 let reference = try pixel(ZStack {
                     Color.clear.dotistGlass(.regular.tint(DotistTheme.tint(color, scheme)), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
                         .environment(\.appearsActive, true)
-                    RoundedRectangle(cornerRadius: 24, style: .continuous).fill(GlassTintMaterial.themeWash(color, scheme).opacity(CompactGlassStyle.washOpacity(scheme)))
-                    if scheme == .dark { Color.black.opacity(GlassTintMaterial.compactDarkProtection) }
                     GlassGloss(shape: RoundedRectangle(cornerRadius: 24, style: .continuous).inset(by: GlassSilhouette.glassClip), intensity: .compact, scheme: scheme)
                 })
                 XCTAssertEqual(compact.redComponent, reference.redComponent, accuracy: 0.02)
@@ -55,8 +53,6 @@ final class TransientGlassTests: XCTestCase {
 
     func testGlassGlossStyleParameters() {
         XCTAssertEqual(CompactGlassStyle.tintStrength, 1)
-        XCTAssertEqual(CompactGlassStyle.washOpacity(.light), 0.08)
-        XCTAssertEqual(CompactGlassStyle.washOpacity(.dark), 0.12)
         XCTAssertEqual(CompactGlassStyle.specularTop(.compact, .light), 0.55)
         XCTAssertEqual(CompactGlassStyle.specularTop(.compact, .dark), 0.34)
         XCTAssertEqual(CompactGlassStyle.specularTop(.expanded, .light), 0.10)
@@ -168,8 +164,7 @@ final class TransientGlassTests: XCTestCase {
                 let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
                 let reference = try bitmap(ZStack {
                     Color.white
-                    Color.clear.glassEffect(.regular, in: shape).environment(\.appearsActive, true)
-                    if scheme == .dark { shape.fill(Color.black.opacity(0.4)) }
+                    Color.clear.glassEffect(.regular.tint(DotistTheme.tint(.none, scheme)), in: shape).environment(\.appearsActive, true)
                 }.frame(width: CGFloat(width), height: 48), scheme: scheme)
                 for (opacity, frost): (UInt8, UInt8) in [(8, 4), (60, 40), (100, 100)] {
                     for active in [false, true] {
@@ -245,7 +240,7 @@ final class TransientGlassTests: XCTestCase {
             let actual = try bitmap(TaskLiftedBlock(drag: drag, motion: motion) { _ in Color.clear }
                 .frame(width: 320, height: 200, alignment: .topLeading), scheme: scheme)
             let reference = try bitmap(Color.clear.frame(width: 280, height: 32)
-                .glassEffect(.regular, in: .rect(cornerRadius: 12))
+                .glassEffect(.regular.tint(DotistTheme.tint(.none, scheme)), in: .rect(cornerRadius: 12))
                 .offset(x: 16, y: 100).frame(width: 320, height: 200, alignment: .topLeading), scheme: scheme)
             let a = try XCTUnwrap(actual.colorAt(x: 150 * 2, y: 116 * 2))
             let b = try XCTUnwrap(reference.colorAt(x: 150 * 2, y: 116 * 2))
@@ -293,8 +288,7 @@ final class TransientGlassTests: XCTestCase {
                         let image = try await fixture.capture(scale: 2)
                         fixture.close()
                         let reference = NativeRenderingFixture(ZStack {
-                            Color.clear.glassEffect(.regular, in: .rect(cornerRadius: 24)).environment(\.appearsActive, true)
-                            if scheme == .dark { RoundedRectangle(cornerRadius: 24, style: .continuous).fill(.black.opacity(0.4)) }
+                            Color.clear.glassEffect(.regular.tint(DotistTheme.tint(.none, scheme)), in: .rect(cornerRadius: 24)).environment(\.appearsActive, true)
                             GlassGloss(shape: RoundedRectangle(cornerRadius: 24, style: .continuous).inset(by: GlassSilhouette.glassClip), intensity: .compact, scheme: scheme)
                         }.frame(width: 260, height: 48).environment(\.colorScheme, scheme), size: CGSize(width: 260, height: 48))
                         let referenceImage = try await reference.capture(scale: 2)
