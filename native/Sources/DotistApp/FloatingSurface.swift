@@ -199,6 +199,7 @@ struct ExpandedReadingMaterial: View {
             shape.fill(paper.opacity(Double(frost) / 100 * GlassTintMaterial.expandedFrostScale * amount))
             shape.fill(GlassTintMaterial.themeWash(color, scheme).opacity(amount))
         }
+        .dotistGlassInterior(in: shape)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }

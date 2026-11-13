@@ -218,7 +218,8 @@ final class TransientGlassTests: XCTestCase {
                 let start = width == 48 ? 17 : 32
                 let end = width == 48 ? 22 : 80
                 for x in start...end {
-                    for y in 0..<6 {
+                    // The decorative arc now sits inside the native reflection band.
+                    for y in 4..<10 {
                         let top = try light(x * 2, y)
                         let bottom = try light((width - x - 1) * 2, image.pixelsHigh - 1 - y)
                         upperLight += top

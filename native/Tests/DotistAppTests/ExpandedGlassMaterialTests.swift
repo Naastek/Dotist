@@ -41,9 +41,8 @@ final class ExpandedGlassMaterialTests: XCTestCase {
                     ExpandedReadingMaterial(opacity: opacity, frost: frost, color: color, scheme: scheme, cornerRadius: 18)
                 }, size: size, scheme: scheme)
                 if !composite {
-                    XCTAssertEqual(try XCTUnwrap(image.colorAt(x: 260, y: 0)).alphaComponent,
-                        try XCTUnwrap(image.colorAt(x: 260, y: 140)).alphaComponent, accuracy: 1.0 / 255,
-                        "Reading paint must reach the straight edge without an inset step")
+                    XCTAssertEqual(try XCTUnwrap(image.colorAt(x: 260, y: 0)).alphaComponent, 0, accuracy: 1.0 / 255,
+                        "Reading paint must leave the native optical rim exposed")
                     XCTAssertEqual(try XCTUnwrap(image.colorAt(x: 0, y: 0)).alphaComponent, 0,
                         "Reading layers must not create a rectangular plate")
                 }

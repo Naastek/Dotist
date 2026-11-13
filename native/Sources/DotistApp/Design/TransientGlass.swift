@@ -18,6 +18,15 @@ extension View {
         glassEffect(glass, in: shape).clipShape(shape.inset(by: GlassSilhouette.glassClip))
     }
 
+    // SDR decoration and reading paint must not cover the native optical rim.
+    // Fade them into the interior rather than attenuating the system highlight.
+    func dotistGlassInterior<S: InsettableShape>(in shape: S) -> some View {
+        mask {
+            shape.inset(by: 3).fill(.white).blur(radius: 1)
+                .clipShape(shape.inset(by: 1))
+        }
+    }
+
     func dotistInlineShadow() -> some View { modifier(DotistInlineShadow()) }
 }
 
@@ -70,7 +79,7 @@ struct GlassGloss<S: InsettableShape>: View {
     var body: some View {
         Group {
             if intensity == .compact { slab } else { sheen }
-        }.clipShape(shape).allowsHitTesting(false).accessibilityHidden(true)
+        }.dotistGlassInterior(in: shape).allowsHitTesting(false).accessibilityHidden(true)
     }
 
     /// A clear, flat slab. There is deliberately NO closed line around the shape: any
@@ -87,9 +96,9 @@ struct GlassGloss<S: InsettableShape>: View {
         ], startPoint: .topLeading, endPoint: .bottomTrailing)
         return ZStack {
             // Soft light spilling a few points inside the lit edges.
-            shape.strokeBorder(arcs, lineWidth: 5).blur(radius: 3).opacity(0.45)
-            // The crisp part of the same highlight, right on the edge.
-            shape.strokeBorder(arcs, lineWidth: 1).blur(radius: 0.3)
+            shape.inset(by: 2).strokeBorder(arcs, lineWidth: 5).blur(radius: 3).opacity(0.45)
+            // The crisp part stays inside the native optical edge.
+            shape.inset(by: 2).strokeBorder(arcs, lineWidth: 1).blur(radius: 0.3)
         }
     }
 
@@ -203,7 +212,7 @@ struct GlassEdge: View {
         let highlight = Self.highlightColor(color, scheme)
         return GeometryReader { geometry in
             let p = profile(width: geometry.size.width)
-            let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).inset(by: 2)
             let light = LinearGradient(stops: [
                 .init(color: highlight.opacity(p.highlight), location: 0),
                 .init(color: highlight.opacity(p.highlight * 0.55), location: 0.20),
@@ -221,6 +230,7 @@ struct GlassEdge: View {
                 shape.strokeBorder(light, lineWidth: p.line)
             }
         }
+        .dotistGlassInterior(in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }

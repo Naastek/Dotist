@@ -16,7 +16,7 @@ final class CompactGlassPerimeterTests: XCTestCase {
                     let size = CGSize(width: width, height: 48)
                     let image = try render(GlassEdge(cornerRadius: 24, compact: true, scheme: scheme)
                         .frame(width: width, height: 48), size: size, scale: scale)
-                    let path = RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    let path = RoundedRectangle(cornerRadius: 24, style: .continuous).inset(by: 2)
                         .path(in: CGRect(origin: .zero, size: size)).cgPath
                     // The neighborhood includes the inward stroke and tolerates
                     // antialiasing at 1x without relying on one edge pixel.
