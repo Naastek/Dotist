@@ -123,8 +123,18 @@ final class TransientGlassTests: XCTestCase {
                 let boundaryX = Int((left + 1) * 2)
                 let insetAlpha = try XCTUnwrap(actual.colorAt(x: boundaryX, y: 48)).alphaComponent
                 let uninsetAlpha = try XCTUnwrap(uninset.colorAt(x: boundaryX, y: 48)).alphaComponent
-                XCTAssertLessThan(insetAlpha, uninsetAlpha,
-                    "Inset must reduce boundary coverage: width \(outerWidth), reveal \(reveal), right \(onRight)")
+                XCTAssertEqual(FloatingSurface.opticalInsets(compact: true, reduceTransparency: false, increasedContrast: false),
+                    EdgeInsets(top: 2, leading: 2, bottom: 2, trailing: 2))
+                XCTAssertLessThanOrEqual(insetAlpha, uninsetAlpha,
+                    "Inset must not increase boundary coverage")
+                if uninsetAlpha > 0.005 {
+                    XCTAssertLessThan(insetAlpha, uninsetAlpha,
+                        "Inset must reduce painted boundary coverage: width \(outerWidth), reveal \(reveal), right \(onRight)")
+                }
+                // A renderer without native optics can return zero for both
+                // pixels now that SDR decoration leaves this boundary clear.
+                // Full raster equality and explicit production insets above
+                // still validate placement; empty pixels cannot prove optics.
                 // An offscreen host may omit native glass at the center. The old
                 // >0.3 requirement measured the removed 40% black veil, not geometry.
                 // Full raster equality above and boundary coverage below/above
