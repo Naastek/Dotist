@@ -516,20 +516,23 @@ final class FeedbackFourRegressionTests: XCTestCase {
     }
 
     func testDisclosureReducedMotionSnapsAndNormalMotionRetargetsContinuously() async throws {
+        let clock = LayoutMotionTestClock()
+        defer { clock.restore() }
         let motion = DisclosureMotion(expanded: true)
+        defer { motion.stop() }
         motion.setExpanded(false, reduceMotion: true)
         XCTAssertEqual(motion.fraction, 0)
-        try await Task.sleep(for: .milliseconds(30))
+        try await clock.advance(by: 0.03)
         XCTAssertEqual(motion.fraction, 0)
         motion.setExpanded(true, reduceMotion: false)
-        try await Task.sleep(for: .milliseconds(55))
+        try await clock.advance(by: 0.055, until: { motion.fraction > 0 })
         let before = motion.fraction
         XCTAssertGreaterThan(before, 0); XCTAssertLessThan(before, 1)
         motion.setExpanded(false, reduceMotion: false)
         XCTAssertEqual(motion.fraction, before)
         motion.setExpanded(true, reduceMotion: true)
         XCTAssertEqual(motion.fraction, 1)
-        try await Task.sleep(for: .milliseconds(50))
+        try await clock.advance(by: 0.05)
         XCTAssertEqual(motion.fraction, 1, "Reduced motion cancels an in-flight clock")
     }
     func testFontPickerNativeFramesShareColumnsAtMinimumWidth() async throws {

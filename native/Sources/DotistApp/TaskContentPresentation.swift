@@ -92,6 +92,10 @@ final class TaskContentTransitionView: NSView {
     private var disabled = false
     weak var opacity: TaskContentTransitionOpacity?
     private(set) var outgoingOpacity: CGFloat = 0
+    #if DEBUG
+    // Observe timer readiness without advancing the production animation clock.
+    var isAnimatingForTesting: Bool { timer != nil && !pending }
+    #endif
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func isAccessibilityElement() -> Bool { false }

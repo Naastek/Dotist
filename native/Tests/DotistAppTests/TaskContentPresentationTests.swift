@@ -114,7 +114,8 @@ final class TaskContentPresentationTests: XCTestCase {
         XCTAssertEqual(surface.outgoingOpacity, 1)
         XCTAssertEqual(start.redComponent, before.redComponent, accuracy: 0.02)
         XCTAssertEqual(start.blueComponent, before.blueComponent, accuracy: 0.02)
-        try await clock.advance(by: 0.06)
+        try await clock.waitForDelivery { surface.isAnimatingForTesting }
+        try await clock.advance(by: 0.06, until: { surface.outgoingOpacity < 1 })
         let middle = try await pixel()
         XCTAssertGreaterThan(middle.redComponent, 0.1, "Outgoing red pixels must still be drawn")
         XCTAssertGreaterThan(middle.blueComponent, 0.05, "Incoming blue pixels must be drawn too")
@@ -123,7 +124,8 @@ final class TaskContentPresentationTests: XCTestCase {
         let retarget = try await pixel()
         XCTAssertEqual(retarget.redComponent, middle.redComponent, accuracy: 0.02)
         XCTAssertEqual(retarget.blueComponent, middle.blueComponent, accuracy: 0.02)
-        try await clock.advance(by: 0.2)
+        try await clock.waitForDelivery { surface.isAnimatingForTesting }
+        try await clock.advance(by: 0.2, until: { surface.outgoingOpacity == 0 })
         let after = try await pixel()
         XCTAssertGreaterThan(after.greenComponent, 0.4)
         XCTAssertEqual(surface.outgoingOpacity, 0)
@@ -131,7 +133,8 @@ final class TaskContentPresentationTests: XCTestCase {
         XCTAssertFalse(surface.isAccessibilityElement())
         state.groupID = nil; state.groupID = "life" // Reverse before a render.
         _ = try await fixture.capture(scale: 2)
-        try await clock.advance(by: 0.2)
+        try await clock.waitForDelivery { surface.isAnimatingForTesting || surface.outgoingOpacity == 0 }
+        try await clock.advance(by: 0.2, until: { surface.outgoingOpacity == 0 })
         _ = try await fixture.capture(scale: 2)
         XCTAssertEqual(surface.outgoingOpacity, 0, "An out-and-back must not retain a pending bitmap forever")
         XCTAssertFalse(fixture.window.isVisible)

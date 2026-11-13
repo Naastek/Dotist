@@ -87,6 +87,17 @@ final class LayoutMotionTestClock {
         // release runner, which then captured the previous frame.
         try await Task.sleep(for: .milliseconds(120))
     }
+    func waitForDelivery(_ condition: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while !condition(), Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(condition(), "Production callback was not delivered at the fixed logical instant")
+    }
+    func advance(by interval: TimeInterval, until condition: () -> Bool) async throws {
+        advanceTime(by: interval)
+        try await waitForDelivery(condition)
+    }
     func advanceTime(by interval: TimeInterval) { time += interval }
     func restore() { LayoutMotionInputs.testOverride = saved }
 }
