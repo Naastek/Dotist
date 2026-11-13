@@ -172,12 +172,12 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
                         .applyingBackgroundOpacity(amount).padding(clearance)
                     GlassGloss(shape: RoundedRectangle(cornerRadius: radius, style: .continuous).inset(by: GlassSilhouette.glassClip), intensity: .expanded, scheme: scheme)
                         .padding(clearance)
+                    GlassLensDepth(shape: RoundedRectangle(cornerRadius: radius, style: .continuous), compact: false, scheme: scheme).padding(clearance)
                     if variant != .focusNoManualEdge {
                         GlassEdge(cornerRadius: radius, compact: false, scheme: scheme, color: .pink).padding(clearance)
                     }
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius, style: .continuous).inset(by: GlassSilhouette.expandedInset))
             .clipShape(FloatingPanelShape(compact: false, transitioning: false, onRight: true, reveal: 1))
         }
     }

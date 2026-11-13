@@ -164,14 +164,16 @@ struct FloatingPanelSurface: View {
                             .opacity(idleContentOpacity)
                             .padding(ExpandedReadingMaterial.opticalClearance)
                     }
-                    GlassGloss(shape: opticalShape.inset(by: GlassSilhouette.glassClip), intensity: .expanded, scheme: scheme)
+                    GlassGloss(shape: opticalShape, intensity: .expanded, scheme: scheme)
+                        .padding(ExpandedReadingMaterial.opticalClearance)
+                    GlassLensDepth(shape: opticalShape, compact: false, scheme: scheme)
+                        .opacity(idleContentOpacity)
                         .padding(ExpandedReadingMaterial.opticalClearance)
                     if !qa.contains(.noEdge) {
                         GlassEdge(cornerRadius: radius, compact: false, scheme: scheme, color: color)
                             .padding(ExpandedReadingMaterial.opticalClearance)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius, style: .continuous).inset(by: GlassSilhouette.expandedInset))
             }
         }
     }
@@ -210,7 +212,7 @@ struct ExpandedReadingMaterial: View {
 
     private func paint(backgroundOpacity amount: Double) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        let paper: Color = scheme == .light ? .white : DotistDesign.paper
+        let paper: Color = color == .none || scheme == .dark ? DotistDesign.paper : .white
         return ZStack {
             shape.fill(paper.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false) * amount))
             shape.fill(paper.opacity(Double(frost) / 100 * GlassTintMaterial.expandedFrostScale * amount))

@@ -4,7 +4,8 @@ import SwiftUI
 /// Soft color in the glass material, independent of selection and text colors.
 extension DotistTheme {
     static func tint(_ color: DotistGroupColor, _ scheme: ColorScheme) -> Color {
-        guard color != .none else { return Color.white.opacity(scheme == .dark ? 0.18 : 0.24) }
+        // Gentle white tint preserves native specular highlight separation without graying out.
+        guard color != .none else { return Color.white.opacity(scheme == .dark ? 0.08 : 0.10) }
         let light: UInt32
         let dark: UInt32
         switch color {

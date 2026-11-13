@@ -27,10 +27,10 @@ struct ChildFramePlacement: Equatable {
 
 enum DotistShadow {
     case panel, compact, inline
-    var blur: CGFloat { switch self { case .panel: 24; case .compact: 16; case .inline: 12 } }
-    var y: CGFloat { switch self { case .panel: 8; case .compact: 5; case .inline: 4 } }
+    var blur: CGFloat { switch self { case .panel: 18; case .compact: 16; case .inline: 12 } }
+    var y: CGFloat { switch self { case .panel: 6; case .compact: 5; case .inline: 4 } }
     func opacity(dark: Bool) -> Float {
-        switch self { case .panel: dark ? 0.36 : 0.20; case .compact: dark ? 0.24 : 0.10; case .inline: dark ? 0.28 : 0.14 }
+        switch self { case .panel: dark ? 0.25 : 0.14; case .compact: dark ? 0.24 : 0.10; case .inline: dark ? 0.28 : 0.14 }
     }
 }
 
@@ -59,9 +59,28 @@ final class PanelShadowController {
     private var lastParentOrigin: CGPoint?
     private var frameVerification: DispatchWorkItem?
     private var wasTransitioning = false
+    enum TransitionBehavior {
+        case baseline
+        case continuousSmooth
+        case smoothReappear
+    }
+    var transitionBehavior: TransitionBehavior?
+    var effectiveTransitionBehavior: TransitionBehavior { transitionBehavior ?? .smoothReappear }
     private var reveal: CGFloat = 0, revealStart: CGFloat = 0, revealTarget: CGFloat = 0
     private var revealBegan: CFTimeInterval = 0
     private var lastHover = false
+    private var presence: CGFloat = 1, presenceStart: CGFloat = 1, presenceTarget: CGFloat = 1
+    private var presenceBegan: CFTimeInterval = 0, presenceDuration: CFTimeInterval = 0
+    private var transitionAnchorRight = true
+    private var transitionAnchorOffset: CGPoint = .zero
+    private var wasParentVisible = false
+    var clock: () -> CFTimeInterval = { CACurrentMediaTime() }
+    var forcedCanAnimateVisibility: Bool?
+    var shadowAlphaFraction: CGFloat { presence }
+    var isPresenceAnimating: Bool { presence != presenceTarget }
+
+    static let transitionFadeOutDuration: CFTimeInterval = 0.06
+    static let transitionFadeInDuration: CFTimeInterval = 0.22
 
     static func frame(for frame: NSRect) -> NSRect { frame.insetBy(dx: -margin, dy: -margin) }
 
@@ -108,6 +127,9 @@ final class PanelShadowController {
                 }
             })
         }
+        observers.append(NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: parent, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stop() }
+        })
         let target = PanelShadowDisplayTarget(self); self.target = target
         displayLink = parent.displayLink(target: target, selector: #selector(PanelShadowDisplayTarget.tick(_:)))
         displayLink?.isPaused = true
@@ -122,20 +144,90 @@ final class PanelShadowController {
     }
 
     func synchronize(verifyFrame: Bool = false) {
+        synchronize(verifyFrame: verifyFrame, at: clock())
+    }
+
+    func synchronize(verifyFrame: Bool = false, at now: CFTimeInterval, animateVisibility: Bool? = nil) {
         if QAPerf.enabled { QAPerf.count(.shadowSynchronize) }
         guard !stopped, let parent, let motion else { return }
-        let now = CACurrentMediaTime()
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let canAnimateVisibility = animateVisibility ?? forcedCanAnimateVisibility ?? (!reduceMotion && parent.isVisible && parent.screen != nil)
         if motion.hovering != lastHover {
             revealStart = reveal; revealTarget = motion.hovering ? 1 : 0
             revealBegan = now; lastHover = motion.hovering
         }
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { reveal = revealTarget }
+        if reduceMotion { reveal = revealTarget }
         else {
             let progress = min(1, max(0, (now - revealBegan) / 0.26))
             reveal = revealStart + (revealTarget - revealStart) * PanelFrameAnimation.easedProgress(CGFloat(progress))
         }
-        displayLink?.isPaused = !(reveal != revealTarget && !motion.animationInProgress)
         let compact = motion.bubble, transitioning = motion.animationInProgress
+        let behavior = effectiveTransitionBehavior
+        let suppressTransitionShadow = behavior == .smoothReappear
+        func stepPresence() {
+            if !canAnimateVisibility || presenceDuration <= 0 {
+                presence = presenceTarget
+                return
+            }
+            let elapsed = now - presenceBegan
+            if elapsed >= presenceDuration {
+                presence = presenceTarget
+                return
+            }
+            let raw = min(1, max(0, CGFloat(elapsed / presenceDuration)))
+            let eased = PanelFrameAnimation.easedProgress(raw)
+            presence = presenceStart + (presenceTarget - presenceStart) * eased
+        }
+        func startPresence(to targetValue: CGFloat, duration: CFTimeInterval) {
+            if !canAnimateVisibility || duration <= 0 {
+                presence = targetValue; presenceStart = targetValue; presenceTarget = targetValue
+                presenceBegan = now; presenceDuration = 0
+                return
+            }
+            if presenceTarget != targetValue {
+                presenceStart = presence
+                presenceTarget = targetValue
+                presenceBegan = now
+                presenceDuration = duration * Double(abs(targetValue - presence))
+            }
+        }
+        if suppressTransitionShadow && transitioning {
+            if !wasTransitioning {
+                wasTransitioning = true
+                transitionAnchorRight = compact || motion.bubbleOnRight
+                let anchorX = transitionAnchorRight ? (window.frame.maxX - parent.frame.maxX) : (window.frame.minX - parent.frame.minX)
+                transitionAnchorOffset = CGPoint(x: anchorX, y: window.frame.maxY - parent.frame.maxY)
+                startPresence(to: 0, duration: Self.transitionFadeOutDuration)
+            }
+            stepPresence()
+            window.alphaValue = parent.alphaValue * presence
+            if presence > 0 {
+                let desiredX = transitionAnchorRight
+                    ? (parent.frame.maxX + transitionAnchorOffset.x - window.frame.width)
+                    : (parent.frame.minX + transitionAnchorOffset.x)
+                let desiredY = parent.frame.maxY + transitionAnchorOffset.y - window.frame.height
+                let desiredOrigin = CGPoint(x: desiredX, y: desiredY)
+                if window.frame.origin != desiredOrigin { window.setFrameOrigin(desiredOrigin) }
+            }
+            let parentShown = parent.isVisible && !parent.isMiniaturized
+            if parentShown {
+                wasParentVisible = true
+                if !window.isVisible { window.order(.below, relativeTo: parent.windowNumber) }
+            } else {
+                wasParentVisible = false
+                if window.isVisible { window.orderOut(nil) }
+                presence = 0; presenceStart = 0; presenceTarget = 0; presenceDuration = 0
+                window.alphaValue = 0
+            }
+            displayLink?.isPaused = !(parentShown && presence != presenceTarget)
+            return
+        }
+        let landedFromSuppression = suppressTransitionShadow && wasTransitioning && !transitioning
+        let newlyVisible = parent.isVisible && !parent.isMiniaturized && !wasParentVisible
+        if landedFromSuppression {
+            // Keep current presence (typically 0) until target geometry and cutout mask align below.
+            presenceTarget = presence
+        }
         let tabs = compact || transitioning ? [] : tabRects
         let parentBounds = CGRect(origin: .zero, size: parent.frame.size)
         let silhouetteBounds = tabs.reduce(parentBounds) { $0.union($1) }
@@ -164,7 +256,6 @@ final class PanelShadowController {
         }
         if window.level != parent.level { window.level = parent.level }
         if window.collectionBehavior != parent.collectionBehavior { window.collectionBehavior = parent.collectionBehavior }
-        window.alphaValue = parent.alphaValue
         let bounds = CGRect(origin: .zero, size: frame.size)
         let accessible = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         let inset = accessible ? EdgeInsets() : motion.surfaceInsets
@@ -188,9 +279,31 @@ final class PanelShadowController {
             lastLayerInputs = inputs
             Self.render(ambient: ambient, cutout: cutout, bounds: bounds, rect: rect, radius: visibleRadius, dark: dark, compactProgress: compactProgress, tabs: localTabs, hideShadow: qa.contains(.noShadow))
         }
-        if parent.isVisible && !parent.isMiniaturized {
+        if landedFromSuppression {
+            startPresence(to: 1, duration: Self.transitionFadeInDuration)
+        } else if newlyVisible && behavior != .baseline {
+            presence = 0; presenceStart = 0; presenceTarget = 0; presenceDuration = 0
+            startPresence(to: 1, duration: Self.transitionFadeInDuration)
+        } else if behavior != .baseline {
+            startPresence(to: 1, duration: Self.transitionFadeInDuration)
+        } else {
+            presence = 1; presenceStart = 1; presenceTarget = 1; presenceDuration = 0
+        }
+        stepPresence()
+        let parentShown = parent.isVisible && !parent.isMiniaturized
+        if parentShown {
+            wasParentVisible = true
+            window.alphaValue = parent.alphaValue * presence
             if !window.isVisible { window.order(.below, relativeTo: parent.windowNumber) }
-        } else if window.isVisible { window.orderOut(nil) }
+        } else {
+            wasParentVisible = false
+            if window.isVisible { window.orderOut(nil) }
+            presence = 0; presenceStart = 0; presenceTarget = 0; presenceDuration = 0
+            window.alphaValue = 0
+        }
+        let needsHoverTick = reveal != revealTarget && !transitioning
+        let needsPresenceTick = presence != presenceTarget
+        displayLink?.isPaused = !(parentShown && (needsHoverTick || needsPresenceTick))
     }
 
     fileprivate static func render(ambient: CALayer, cutout: CAShapeLayer, bounds: CGRect, rect: CGRect, radius: CGFloat, dark: Bool, compactProgress: CGFloat, tabs: [CGRect] = [], hideShadow: Bool = false) {

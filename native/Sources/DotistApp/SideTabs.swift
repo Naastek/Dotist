@@ -62,8 +62,11 @@ enum SideTabGeometry {
     }
     static func shadowRects(rows: [SideTabLayout], bounds: CGRect, panel: CGRect, painted: Bool, visible: Bool, inward: Bool) -> [CGRect] {
         guard painted, visible, !inward else { return [] }
-        return rows.filter { $0.opacity > 0 }.map {
-            paintedFrame($0.rect, inward: false).offsetBy(dx: bounds.minX - panel.minX, dy: bounds.minY - panel.minY)
+        return rows.filter { $0.opacity > 0 }.map { row in
+            let full = paintedFrame(row.rect, inward: false).offsetBy(dx: bounds.minX - panel.minX, dy: bounds.minY - panel.minY)
+            let weight = min(1, max(0, CGFloat(row.opacity)))
+            let hiddenWidth = row.rect.width * (1 - weight)
+            return CGRect(x: full.minX + hiddenWidth, y: full.minY, width: max(0, full.width - hiddenWidth), height: full.height)
         }
     }
     static func snapshot(panel: CGRect, fullWidths: [CGFloat], progress: CGFloat, inward: Bool, visibleMinX: CGFloat? = nil,
@@ -829,11 +832,11 @@ final class SideTabsController: NSObject {
 
         if presentation.hovered != hovered { presentation.hovered = hovered }
         if presentation.visible != visible { presentation.visible = visible }
-        if presentationChanged {
+        let painted = visible && rows.contains { $0.opacity > 0 }
+        if presentationChanged && visible {
             if QAPerf.enabled { QAPerf.count(.sideTabsLayout) }; window.contentView?.layoutSubtreeIfNeeded()
         }
         window.ignoresMouseEvents = !visible || (press == nil && !hitRects.contains { $0.contains(mouse) })
-        let painted = visible && rows.contains { $0.opacity > 0 }
         let shadowTabs = SideTabGeometry.shadowRects(rows: rows, bounds: bounds, panel: frame, painted: painted, visible: visible, inward: inward)
         motion.shadowController?.setTabRects(shadowTabs)
         window.alphaValue = painted ? 1 : 0
@@ -845,7 +848,7 @@ final class SideTabsController: NSObject {
             if restingHost.frame != restFrame { restingHost.frame = restFrame }
             restingHost.screenHitRects = hitRects
             restingHost.isHidden = !painted || !inward || ordering == .above || bounds.maxX <= frame.minX
-            if presentationChanged || restSizeChanged {
+            if (presentationChanged || restSizeChanged) && !restingHost.isHidden {
                 if QAPerf.enabled { QAPerf.count(.sideTabsLayout) }; restingHost.layoutSubtreeIfNeeded()
             }
         }

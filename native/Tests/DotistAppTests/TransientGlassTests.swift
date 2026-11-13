@@ -12,7 +12,10 @@ final class TransientGlassTests: XCTestCase {
         let contents = try String(contentsOf: source, encoding: .utf8)
         let compact = try XCTUnwrap(contents.components(separatedBy: "struct TransientGlassSurface:").last)
         XCTAssertTrue(compact.contains(".dotistGlass(Glass.regular.tint(tint)"))
-        XCTAssertTrue(contents.contains("glassEffect(glass, in: shape).clipShape(shape.inset(by: GlassSilhouette.glassClip))"))
+        XCTAssertTrue(compact.contains("GlassLensDepth(shape: shape, compact: compact, scheme: scheme)"))
+        XCTAssertEqual(GlassSilhouette.glassClip, 0)
+        XCTAssertTrue(contents.contains("glassEffect(glass, in: shape)"))
+        XCTAssertFalse(contents.contains("glassEffect(glass, in: shape).clipShape"))
     }
 
     func testThemeEdgeAndCompactWashMatchExpanded() throws {

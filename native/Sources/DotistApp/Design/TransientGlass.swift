@@ -2,20 +2,15 @@ import DotistCore
 import SwiftUI
 
 enum GlassSilhouette {
-    /// One physical pixel inside the shape. Measured with an HDR capture on an XDR display:
-    /// the system glass's dark hairline and pale halo lie just outside the shape, and its
-    /// own extended-range specular rim (brighter than SDR white, about 1.35x) lies just
-    /// inside. Inset 1 removes every XDR highlight and the glass looks dull; inset 0 keeps a
-    /// pixel darker than the fill at the boundary; 0.5 removes that pixel and keeps the gloss.
-    static let glassClip: CGFloat = 0.5
+    /// Leave the native Liquid Glass perimeter unclipped so macOS renders its full
+    /// curved specular rim and outer optical refraction edge across every corner.
+    static let glassClip: CGFloat = 0
     static let expandedInset: CGFloat = ExpandedReadingMaterial.opticalClearance + glassClip
 }
 
 extension View {
-    // System glass paints a dark hairline and pale halo at its outer boundary; see
-    // GlassSilhouette.glassClip for why the clip sits half a point inside the shape.
     func dotistGlass<S: InsettableShape>(_ glass: Glass, in shape: S) -> some View {
-        glassEffect(glass, in: shape).clipShape(shape.inset(by: GlassSilhouette.glassClip))
+        glassEffect(glass, in: shape)
     }
 
     // SDR decoration and reading paint must not cover the native optical rim.
@@ -151,10 +146,35 @@ struct TransientGlassSurface: View {
     private func opticalSurface<S: InsettableShape>(shape: S) -> some View {
         // Window appearance remains owned by FloatingGlassAppearance.
         let tint = DotistTheme.tint(color, scheme).opacity(CompactGlassStyle.tintStrength)
-        // Match the chosen native specimen: no painted gloss, rim or extra clip.
+        // Preserve the unclipped native rim and add soft optical lens depth inside inset(1).
         return Color.clear
             .dotistGlass(Glass.regular.tint(tint).interactive(compact ? false : interactive), in: shape)
+            .overlay { GlassLensDepth(shape: shape, compact: compact, scheme: scheme) }
             .environment(\.appearsActive, compact || appearsActive)
+    }
+}
+
+/// Soft inner optical thickness bevel confined inside inset(1), keeping the
+/// outer 1pt native Liquid Glass rim untouched and avoiding any closed outline.
+struct GlassLensDepth<S: InsettableShape>: View {
+    let shape: S
+    let compact: Bool
+    let scheme: ColorScheme
+
+    var body: some View {
+        let dark = scheme == .dark
+        let ring = LinearGradient(stops: [
+            .init(color: .white.opacity(dark ? 0.08 : 0.36), location: 0),
+            .init(color: .white.opacity(0), location: 0.36),
+            .init(color: .clear, location: 0.86),
+            .init(color: .white.opacity(dark ? 0.04 : 0.20), location: 1.0)
+        ], startPoint: .topLeading, endPoint: .bottomTrailing)
+        shape.inset(by: 1.5)
+            .strokeBorder(ring, lineWidth: compact ? 3.5 : 3.0)
+            .blur(radius: 1.6)
+            .clipShape(shape.inset(by: 1.25))
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

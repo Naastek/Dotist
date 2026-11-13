@@ -12,24 +12,29 @@ final class GlassBrightnessTests: XCTestCase {
         return try XCTUnwrap(bitmap.colorAt(x: 40, y: 40)?.usingColorSpace(.sRGB))
     }
 
-    func testNeutralGlassRequestsWhiteInsteadOfDefaultUntintedMaterial() throws {
-        for scheme in [ColorScheme.light, .dark] {
-            let tint = try center(DotistTheme.tint(.none, scheme))
-            XCTAssertGreaterThan(tint.alphaComponent, 0.1)
-            XCTAssertEqual(tint.redComponent, 1, accuracy: 0.005)
-            XCTAssertEqual(tint.greenComponent, 1, accuracy: 0.005)
-            XCTAssertEqual(tint.blueComponent, 1, accuracy: 0.005)
-        }
+    func testNeutralGlassRequestsGentleWhiteInsteadOfOverbrightOrUntintedMaterial() throws {
+        let lightTint = try center(DotistTheme.tint(.none, .light))
+        XCTAssertEqual(lightTint.alphaComponent, 0.10, accuracy: 0.005)
+        XCTAssertEqual(lightTint.redComponent, 1, accuracy: 0.005)
+        XCTAssertEqual(lightTint.greenComponent, 1, accuracy: 0.005)
+        XCTAssertEqual(lightTint.blueComponent, 1, accuracy: 0.005)
+
+        let darkTint = try center(DotistTheme.tint(.none, .dark))
+        XCTAssertEqual(darkTint.alphaComponent, 0.08, accuracy: 0.005)
+        XCTAssertEqual(darkTint.redComponent, 1, accuracy: 0.005)
+        XCTAssertEqual(darkTint.greenComponent, 1, accuracy: 0.005)
+        XCTAssertEqual(darkTint.blueComponent, 1, accuracy: 0.005)
     }
 
-    func testFullyOpaqueNeutralReadingSurfaceIsWhite() throws {
+    func testFullyOpaqueNeutralReadingSurfaceUsesSoftPaperWhite() throws {
+        let expectedPaper = try center(DotistDesign.paper)
         for frost: UInt8 in [0, 40, 100] {
             let pixel = try center(ExpandedReadingMaterial(opacity: 100, frost: frost, color: .none,
                 scheme: .light, cornerRadius: 20))
             XCTAssertEqual(pixel.alphaComponent, 1, accuracy: 0.005)
-            XCTAssertEqual(pixel.redComponent, 1, accuracy: 0.005)
-            XCTAssertEqual(pixel.greenComponent, 1, accuracy: 0.005)
-            XCTAssertEqual(pixel.blueComponent, 1, accuracy: 0.005)
+            XCTAssertEqual(pixel.redComponent, expectedPaper.redComponent, accuracy: 0.005)
+            XCTAssertEqual(pixel.greenComponent, expectedPaper.greenComponent, accuracy: 0.005)
+            XCTAssertEqual(pixel.blueComponent, expectedPaper.blueComponent, accuracy: 0.005)
         }
     }
 }

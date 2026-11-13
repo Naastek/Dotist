@@ -47,8 +47,8 @@ final class GroupTagThemeModelTests: XCTestCase {
         model.setGroupColor("work", .none)
         try await idle(model)
         XCTAssertEqual(model.themeColor(forGroup: "work"), .blue)
-        XCTAssertEqual(DotistTheme.tint(.none, .light), Color.white.opacity(0.24))
-        XCTAssertEqual(DotistTheme.tint(.none, .dark), Color.white.opacity(0.18))
+        XCTAssertEqual(DotistTheme.tint(.none, .light), Color.white.opacity(0.10))
+        XCTAssertEqual(DotistTheme.tint(.none, .dark), Color.white.opacity(0.08))
         XCTAssertEqual(DotistTheme.swatch(.none), .clear)
         XCTAssertNotEqual(DotistTheme.tint(.blue, .light), DotistTheme.tint(.blue, .dark))
     }
