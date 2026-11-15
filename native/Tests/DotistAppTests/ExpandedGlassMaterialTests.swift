@@ -51,12 +51,16 @@ final class ExpandedGlassMaterialTests: XCTestCase {
             // Independent source-over formula catches ignored/clamped inputs,
             // omitted frost/tint, or an accidental extra whole-layer fade.
             for (opacity, frost): (UInt8, UInt8) in [(20, 0), (20, 100), (80, 40), (100, 100)] {
-                let expected = 1 - (1 - Double(opacity) / 100) * (1 - Double(frost) / 100 * 0.12) * (1 - (scheme == .dark ? 0.18 : 0.16))
+                let density = Double(opacity) / 100
+                let expected = 1 - (1 - density) * (1 - density * Double(frost) / 100 * 0.12) * (1 - density * (scheme == .dark ? 0.18 : 0.16))
                 XCTAssertEqual(try center(opacity, frost).alphaComponent, CGFloat(expected), accuracy: 2.0 / 255)
             }
             XCTAssertGreaterThan(try center(80, 40).alphaComponent, 0.8, "80/40 must retain the reading backing")
             XCTAssertGreaterThan(try center(80, 40).alphaComponent, try center(20, 40).alphaComponent + 0.2)
-            XCTAssertGreaterThan(try center(20, 100).alphaComponent, try center(20, 0).alphaComponent + 0.04)
+            let wash = scheme == .dark ? 0.18 : 0.16
+            let scaledFrostDelta = 0.8 * (1 - 0.2 * wash) * 0.2 * 0.12
+            XCTAssertEqual(try center(20, 100).alphaComponent - center(20, 0).alphaComponent,
+                           CGFloat(scaledFrostDelta), accuracy: 2.0 / 255)
             let pink = try XCTUnwrap(center(80, 40).usingColorSpace(.deviceRGB))
             let neutral = try XCTUnwrap(center(80, 40, .none).usingColorSpace(.deviceRGB))
             XCTAssertGreaterThan(abs(pink.redComponent - neutral.redComponent)
@@ -70,7 +74,7 @@ final class ExpandedGlassMaterialTests: XCTestCase {
             // RGB must still change when destination alpha is saturated. The
             // guarded desktop fixture separately checks the full native surface.
             XCTAssertGreaterThan(try rgbDistance(center(20, 40, composite: true), center(80, 40, composite: true)), 0.1)
-            XCTAssertGreaterThan(try rgbDistance(center(20, 0, composite: true), center(20, 100, composite: true)), 0.02)
+            XCTAssertGreaterThan(try rgbDistance(center(50, 0, composite: true), center(50, 100, composite: true)), 0.02)
             XCTAssertGreaterThan(try rgbDistance(center(80, 40, composite: true), center(80, 40, .none, composite: true)), 0.01)
         }
     }

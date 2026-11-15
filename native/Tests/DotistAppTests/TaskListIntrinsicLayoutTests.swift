@@ -192,8 +192,54 @@ final class TaskListIntrinsicLayoutTests: XCTestCase {
         _ = try store.addTask(title: "甲任务 #alpha")
         _ = try store.addTask(title: "乙任务 #beta")
         let model = try AppModel(store: store)
+        // Native glass in a scroll view is not represented by unwindowed
+        // cacheDisplay. Inspect the real window-hosted controls without TCC.
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        func elements(_ object: NSObject) -> [NSObject] {
+            let selector = #selector(NSAccessibilityProtocol.accessibilityChildren)
+            guard object.responds(to: selector),
+                  let children = object.perform(selector)?.takeUnretainedValue() as? [NSObject] else { return [object] }
+            return [object] + children.flatMap(elements)
+        }
+        var groupBaseline: [String: CGFloat] = [:]
+        XCTAssertFalse(model.visibleGroups.isEmpty)
+        for height: CGFloat in [620, 900, 1400] {
+            let fixture = NativeRenderingFixture(
+                GroupManager(model: model, close: {}, tags: {}).environment(\.colorScheme, .light),
+                size: CGSize(width: 364, height: height))
+            defer { fixture.close() }
+            try await Task.sleep(for: .milliseconds(100))
+            fixture.host.layoutSubtreeIfNeeded()
+            let nodes = elements(fixture.host)
+            for group in model.visibleGroups {
+                let node = try XCTUnwrap(nodes.first { object in
+                    let selector = #selector(NSAccessibilityProtocol.accessibilityLabel)
+                    return object.responds(to: selector)
+                        && object.perform(selector)?.takeUnretainedValue() as? String == group.name
+                }, "Missing rendered group row: \(group.name)")
+                let element = try XCTUnwrap(node as? any NSAccessibilityElementProtocol)
+                let frame = element.accessibilityFrame()
+                XCTAssertGreaterThan(frame.width, 0)
+                XCTAssertGreaterThan(frame.height, 0)
+                XCTAssertTrue(fixture.window.frame.contains(frame))
+                let top = fixture.window.frame.maxY - frame.maxY
+                XCTAssertGreaterThanOrEqual(top, 44)
+                if let original = groupBaseline[group.id] {
+                    XCTAssertEqual(top, original, accuracy: 0.5, group.name)
+                } else { groupBaseline[group.id] = top }
+            }
+            let input = try XCTUnwrap(fixture.descendants(ComposerTextField.self).first {
+                $0.accessibilityIdentifier() == "manager-new-group"
+            })
+            XCTAssertGreaterThan(input.bounds.width, 0)
+            XCTAssertGreaterThan(input.bounds.height, 0)
+            XCTAssertFalse(fixture.window.isVisible)
+        }
+        XCTAssertEqual(groupBaseline.count, model.visibleGroups.count)
         let views: [(String, AnyView, [CGRect])] = [
-            ("groups", AnyView(GroupManager(model: model, close: {}, tags: {})), [CGRect(x: 42, y: 44, width: 120, height: 40), CGRect(x: 42, y: 84, width: 120, height: 40)]),
             ("tags", AnyView(TagManager(model: model, close: {}, groups: {}, select: { _ in })), [CGRect(x: 42, y: 44, width: 120, height: 40), CGRect(x: 42, y: 84, width: 120, height: 40)]),
             ("command", AnyView(CommandPalette(model: model, close: {}, reveal: { _ in }, revealGroup: { _ in }, showViews: {})), [CGRect(x: 18, y: 60, width: 220, height: 44), CGRect(x: 18, y: 104, width: 220, height: 44)]),
         ]

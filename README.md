@@ -69,7 +69,7 @@
 ### Panel and bubble
 - Click the rightmost toolbar button to collapse the panel into a bubble. Click the bubble to expand it again.
 - Drag any empty area of the panel to move it, and drag an edge to resize it.
-- 尺寸与菜单栏行为更新：展开时主面板最小408×440pt，独立分组面板最小432×440pt；最小尺寸不锁定宽高。主面板尺寸会保存，独立分组面板仅在本次打开期间保留收展尺寸。菜单栏0计数只显示图标，非零恢复数字，超过99显示99+；原计数范围不变。
+- Expanded panels support independent width and height changes, with minimum sizes of 408×440 pt for the main panel and 432×440 pt for group panels. The main panel saves its size; group panels retain their size through collapse and expansion until closed. The menu bar shows only the icon at zero, restores digits for nonzero counts, and shows 99+ above 99; the counting scope is unchanged.
 - The toolbar also has color, keep-on-top, and lock-window buttons, shown on hover by default. Hold `⌘` and drag to reorder the buttons.
 
 ### Settings

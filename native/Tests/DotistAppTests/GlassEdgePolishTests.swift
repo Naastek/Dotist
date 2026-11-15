@@ -174,7 +174,7 @@ final class GlassEdgePolishTests: XCTestCase {
                 // Interior glass with reading planes, without the edge.
                 let control = Color.clear.glassEffect(.regular.tint(DotistTheme.tint(.orange, scheme)), in: shape)
                     .opacity(1 - 0.6 * (1 - amount))
-                    .overlay(DotistDesign.paper.opacity(amount * amount))
+                    .overlay(DotistDesign.paper.opacity(amount))
                     .overlay(DotistDesign.paper.opacity(0.4 * GlassTintMaterial.expandedFrostScale * amount))
                     .overlay(DotistTheme.swatch(.orange).opacity((scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint) * amount))
                     .clipShape(shape)
