@@ -69,8 +69,9 @@ final class FeedbackFourRegressionTests: XCTestCase {
                 x0 = min(x0, x); x1 = max(x1, x); y0 = min(y0, y); y1 = max(y1, y)
             }
         }
-        XCTAssertGreaterThanOrEqual(x1, x0, "Missing ink: \(rect)")
-        return CGRect(x: CGFloat(x0) / scale, y: CGFloat(y0) / scale, width: CGFloat(x1 - x0 + 1) / scale, height: CGFloat(y1 - y0 + 1) / scale)
+        return try XCTUnwrap(x1 >= x0 && y1 >= y0
+            ? CGRect(x: CGFloat(x0) / scale, y: CGFloat(y0) / scale, width: CGFloat(x1 - x0 + 1) / scale, height: CGFloat(y1 - y0 + 1) / scale)
+            : nil, "Missing ink: \(rect)")
     }
     func testActualMainWindowComposerWithReportedFonts() async throws {
         let nativeScale = NSScreen.main?.backingScaleFactor
@@ -233,7 +234,31 @@ final class FeedbackFourRegressionTests: XCTestCase {
                 fixture.host.convert(fixture.window.convertFromScreen(element.accessibilityFrame()), from: nil)
             }
             let captureScale = fixture.window.backingScaleFactor
-            let baselineImage = try await fixture.capture(scale: captureScale)
+            // CacheDisplay can initially capture native glyph backing before its
+            // first paint has settled. Require real, stable ink before starting
+            // motion; the animation itself must still preserve the exact mask.
+            func headerInk(_ image: NSBitmapImageRep) -> [Bool] {
+                let rect = frame(header)
+                return (Int(rect.minY * captureScale)..<Int(rect.maxY * captureScale)).flatMap { y in
+                    (Int(rect.minX * captureScale)..<Int(rect.maxX * captureScale)).map { x in
+                        let c = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                        return c.map { $0.alphaComponent * (1 - max($0.redComponent, $0.greenComponent, $0.blueComponent)) > 0.2 } ?? false
+                    }
+                }
+            }
+            var baselineImage = try await fixture.capture(scale: captureScale)
+            var previousInk: [Bool] = []
+            var stablePaints = 0
+            let paintDeadline = Date().addingTimeInterval(2)
+            repeat {
+                let current = headerInk(baselineImage)
+                stablePaints = current.contains(true) && current == previousInk ? stablePaints + 1 : 0
+                if stablePaints >= 2 { break }
+                previousInk = current
+                try await Task.sleep(for: .milliseconds(20))
+                baselineImage = try await fixture.capture(scale: captureScale)
+            } while Date() < paintDeadline
+            _ = try XCTUnwrap(stablePaints >= 2 ? baselineImage : nil, "Native title ink never settled before animation")
             // Use the baseline painted title, not its font advance: the latter
             // includes whitespace that can contain the rotating disclosure.
             try save(baselineImage, "animation-\(scope)-baseline", directory: animationEvidence)
@@ -594,7 +619,12 @@ final class FeedbackFourRegressionTests: XCTestCase {
                     rows.append("\(scheme),\(opacity),0,\(protection == 1),\(protection == 2),\(background.alphaComponent),\(maxText)")
                     if protection == 0 {
                         let glossAllowance = CGFloat(CompactGlassStyle.specularTop(.expanded, scheme))
-                        XCTAssertLessThanOrEqual(background.alphaComponent, CGFloat(opacity) / 100 + glossAllowance + 0.015)
+                        let density = CGFloat(opacity) / 100
+                        let wash: CGFloat = scheme == .dark ? 0.18 : 0.16
+                        // Source-over reading planes, not the obsolete paper-only bound.
+                        let readingAlpha = 1 - (1 - density) * (1 - wash * density)
+                        XCTAssertGreaterThanOrEqual(background.alphaComponent, readingAlpha - 0.015)
+                        XCTAssertLessThanOrEqual(background.alphaComponent, readingAlpha + glossAllowance + 0.015)
                         if opacity >= 95 { XCTAssertGreaterThan(background.alphaComponent, 0.85) }
                     } else { XCTAssertEqual(background.alphaComponent, 1, accuracy: 0.01) }
                     XCTAssertGreaterThan(maxText, 0.9, "Surface opacity must never fade normal text")

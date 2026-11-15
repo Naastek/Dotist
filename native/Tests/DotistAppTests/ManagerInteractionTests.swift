@@ -75,9 +75,19 @@ final class ManagerInteractionTests: XCTestCase {
         return children.lazy.compactMap { self.accessibilityElement($0, id: id) }.first
     }
 
+    private func visibleFilterToolbar() throws -> ToolbarConfig {
+        let suite = "dotist-filter-manager-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let config = ToolbarConfig(defaults: defaults)
+        config.setVisibility(.always, for: .filters)
+        return config
+    }
+
     func testMainWindowHasUnifiedFilterEntryWithoutAnyTags() async throws {
         let model = try model()
-        let fixture = NativeRenderingFixture(MainWindow(model: model, state: TaskPanelState(), showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, collapse: {}), size: CGSize(width: 364, height: 620))
+        let config = try visibleFilterToolbar()
+        let fixture = NativeRenderingFixture(MainWindow(model: model, state: TaskPanelState(), showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, collapse: {}, toolbarConfig: config), size: CGSize(width: 364, height: 620))
         defer { fixture.close() }
         try await Task.sleep(for: .milliseconds(80))
         XCTAssertNotNil(accessibilityElement(fixture.host, id: "unified-filter"))
@@ -90,7 +100,8 @@ final class ManagerInteractionTests: XCTestCase {
         }
         let state = TaskPanelState(scope: "done")
         state.activeTag = "archive"
-        let fixture = NativeRenderingFixture(MainWindow(model: model, state: state, showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, collapse: {}), size: CGSize(width: 364, height: 620))
+        let config = try visibleFilterToolbar()
+        let fixture = NativeRenderingFixture(MainWindow(model: model, state: state, showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, collapse: {}, toolbarConfig: config), size: CGSize(width: 364, height: 620))
         defer { fixture.close() }
         try await Task.sleep(for: .milliseconds(80))
         XCTAssertNotNil(accessibilityElement(fixture.host, id: "unified-filter"))

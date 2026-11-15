@@ -47,9 +47,7 @@ final class TransientGlassTests: XCTestCase {
                 XCTAssertEqual(compact.greenComponent, reference.greenComponent, accuracy: 0.02)
                 XCTAssertEqual(compact.blueComponent, reference.blueComponent, accuracy: 0.02)
                 let expanded = try pixel(ExpandedReadingMaterial(opacity: 0, frost: 0, color: color, scheme: scheme, cornerRadius: 24))
-                let wash = try pixel(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(GlassTintMaterial.themeWash(color, scheme)))
-                XCTAssertEqual(expanded.alphaComponent, wash.alphaComponent, accuracy: 0.01)
-                XCTAssertEqual(expanded.greenComponent, wash.greenComponent, accuracy: 0.02)
+                XCTAssertEqual(expanded.alphaComponent, 0, accuracy: 0.01, "Zero background opacity must clear reading paint for every theme")
             }
         }
     }

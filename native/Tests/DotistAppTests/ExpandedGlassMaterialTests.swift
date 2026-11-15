@@ -182,7 +182,7 @@ final class ExpandedGlassMaterialTests: XCTestCase {
             (false, 300, false), (false, 900, true), (true, 300, false), (true, 900, true)
         ] {
             let area = NSRect(x: 0, y: 0, width: 1400, height: 1000)
-            let initial = NSRect(x: initialX, y: 200, width: 364, height: 620)
+            let initial = NSRect(x: initialX, y: 200, width: PanelLayoutMetrics.primaryWidth, height: 620)
             let panel = DotistPanel(contentRect: initial, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             panel.isReleasedWhenClosed = false
             var environment = PanelMotion.Environment()

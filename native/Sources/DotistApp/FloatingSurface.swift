@@ -199,20 +199,24 @@ struct ExpandedReadingMaterial: View {
     }
 
     var body: some View {
-        paint(backgroundOpacity: 1)
+        let amount = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
+        // Paper follows the selected density once; tint and frost must still
+        // reach zero with the user's background-opacity endpoint.
+        return paint(paperOpacity: amount, backgroundOpacity: amount)
     }
 
     /// Legacy full-background opacity multiplies every paint plane. Applying it
     /// after compositing the planes would change density.
     func applyingBackgroundOpacity(_ amount: Double) -> some View {
-        paint(backgroundOpacity: amount)
+        paint(paperOpacity: DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false) * amount,
+              backgroundOpacity: amount)
     }
 
-    private func paint(backgroundOpacity amount: Double) -> some View {
+    private func paint(paperOpacity: Double, backgroundOpacity amount: Double) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         let paper: Color = color == .none || scheme == .dark ? DotistDesign.paper : .white
         return ZStack {
-            shape.fill(paper.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false) * amount))
+            shape.fill(paper.opacity(paperOpacity))
             shape.fill(paper.opacity(Double(frost) / 100 * GlassTintMaterial.expandedFrostScale * amount))
             shape.fill(GlassTintMaterial.themeWash(color, scheme).opacity(amount))
         }

@@ -168,8 +168,8 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
                             }.compositingGroup()
                         }
                     }
-                    ExpandedReadingMaterial(opacity: 80, frost: 40, color: .pink, scheme: scheme, cornerRadius: radius)
-                        .applyingBackgroundOpacity(amount).padding(clearance)
+                    ReadingDensityContract(opacity: 80, frost: 40, color: .pink, scheme: scheme, cornerRadius: radius)
+                        .padding(clearance)
                     GlassGloss(shape: RoundedRectangle(cornerRadius: radius, style: .continuous).inset(by: GlassSilhouette.glassClip), intensity: .expanded, scheme: scheme)
                         .padding(clearance)
                     GlassLensDepth(shape: RoundedRectangle(cornerRadius: radius, style: .continuous), compact: false, scheme: scheme).padding(clearance)

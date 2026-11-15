@@ -39,8 +39,7 @@ final class ExpandedOpacityContractTests: XCTestCase {
                                     .opacity(1 - glassAlpha).blendMode(.destinationOut)
                             }.compositingGroup()
                         }
-                    ExpandedReadingMaterial(opacity: opacity, frost: 40, color: .pink, scheme: scheme, cornerRadius: radius)
-                        .applyingBackgroundOpacity(amount)
+                    ReadingDensityContract(opacity: opacity, frost: 40, color: .pink, scheme: scheme, cornerRadius: radius)
                     GlassGloss(shape: shape.inset(by: GlassSilhouette.glassClip), intensity: .expanded, scheme: scheme)
                 }.clipShape(shape.inset(by: GlassSilhouette.glassClip)).padding(ExpandedReadingMaterial.opticalClearance).environment(\.colorScheme, scheme)
                 let reference = NativeRenderingFixture(control, size: size)
@@ -66,6 +65,47 @@ final class ExpandedOpacityContractTests: XCTestCase {
                 var maxInk: CGFloat = 0
                 for y in 45..<75 { for x in 60..<240 { maxInk = max(maxInk, actual.colorAt(x: x, y: y)?.alphaComponent ?? 0) } }
                 XCTAssertGreaterThan(maxInk, 0.9, "Background opacity must not fade foreground text")
+            }
+        }
+    }
+
+    func testApprovedReadingDensityEndpointsAndIntermediateSamples() throws {
+        // Frozen numeric source-over alpha table for 12% frost and 16%/18% wash.
+        // The production helper/constants are deliberately not used as the oracle.
+        let samples: [(UInt8, UInt8, Double, Double)] = [
+            (0, 0, 0.0000000000, 0.0000000000),
+            (0, 40, 0.0000000000, 0.0000000000),
+            (0, 100, 0.0000000000, 0.0000000000),
+            (4, 0, 0.0461440000, 0.0469120000),
+            (4, 40, 0.0479754035, 0.0487419290),
+            (4, 100, 0.0507225088, 0.0514868224),
+            (38, 0, 0.4176960000, 0.4224080000),
+            (38, 40, 0.4283172250, 0.4329432781),
+            (38, 100, 0.4442490624, 0.4487461952),
+            (80, 0, 0.8256000000, 0.8288000000),
+            (80, 40, 0.8322969600, 0.8353740800),
+            (80, 100, 0.8423424000, 0.8452352000),
+            (95, 0, 0.9576000000, 0.9585500000),
+            (95, 40, 0.9595334400, 0.9604401200),
+            (95, 100, 0.9624336000, 0.9632753000),
+            (100, 0, 1.0000000000, 1.0000000000),
+            (100, 40, 1.0000000000, 1.0000000000),
+            (100, 100, 1.0000000000, 1.0000000000),
+        ]
+        for scheme in [ColorScheme.light, .dark] {
+            for (opacity, frost, light, dark) in samples {
+                let paint = ExpandedReadingMaterial(opacity: opacity, frost: frost, color: .pink,
+                    scheme: scheme, cornerRadius: 18).environment(\.colorScheme, scheme)
+                let bitmap = try fixedBitmap(paint)
+                let actual = try XCTUnwrap(bitmap.colorAt(x: 300, y: 120)).alphaComponent
+                XCTAssertEqual(actual, scheme == .dark ? dark : light, accuracy: 0.015,
+                    "Approved linear paper/frost/wash: \(scheme), opacity=\(opacity), frost=\(frost)")
+            }
+            for opacity: UInt8 in [0, 4, 38, 80, 95, 100] {
+                let bitmap = try fixedBitmap(ExpandedReadingMaterial(opacity: opacity, frost: 0,
+                    color: .none, scheme: scheme, cornerRadius: 18).environment(\.colorScheme, scheme))
+                XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 300, y: 120)).alphaComponent,
+                    Double(opacity) / 100, accuracy: 0.015, "Paper density is linear, never squared")
             }
         }
     }

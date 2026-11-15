@@ -323,7 +323,7 @@ final class PanelShadowTests: XCTestCase {
     func testHiddenPanelFrameRequestsCompleteSynchronouslyWithShadowChild() throws {
         let model = try model()
         let area = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 1000)
-        let frame = NSRect(x: area.minX + 20, y: area.minY + 20, width: min(364, area.width), height: min(620, area.height))
+        let frame = NSRect(x: area.minX + 20, y: area.minY + 20, width: min(PanelLayoutMetrics.primaryWidth, area.width), height: min(620, area.height))
         let panel = DotistPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false
         let input = PanelMotionTestEnvironment(area: area, frameAnimations: .native)
@@ -360,7 +360,7 @@ final class PanelShadowTests: XCTestCase {
     func testControlledFrameAnimationsKeepWindowShadowDisabledAtIntermediateSizes() throws {
         let model = try model()
         let input = PanelMotionTestEnvironment()
-        let frame = NSRect(x: 100, y: 100, width: 364, height: 620)
+        let frame = NSRect(x: 100, y: 100, width: PanelLayoutMetrics.primaryWidth, height: 620)
         let panel = DotistPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false
         let motion = PanelMotion(model: model, panel: panel, size: frame.size, title: { "" }, environment: input.environment)
