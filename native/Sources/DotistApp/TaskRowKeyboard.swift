@@ -68,7 +68,17 @@ struct TaskRowKeyboard: NSViewRepresentable {
         view.setAccessibilityLabel(label)
     }
     static func dismantleNSView(_ view: Row, coordinator: ()) {
-        if view.selection?.responder === view { view.selection?.responder = nil; view.selection?.rowFocused = false }
+        let selection = view.selection
+        view.selection = nil
+        view.handle = nil
+        guard selection?.responder === view else { return }
+        selection?.responder = nil
+        // SwiftUI is invalidating its graph here. Publishing synchronously can
+        // reenter that graph; detach now and publish after teardown has returned.
+        DispatchQueue.main.async { [weak selection] in
+            guard let selection, selection.responder == nil, selection.rowFocused else { return }
+            selection.rowFocused = false
+        }
     }
 }
 
@@ -230,8 +240,14 @@ struct TaskNativeAction: NSViewRepresentable {
         button.needsDisplay = true
     }
     static func dismantleNSView(_ button: Button, coordinator: ()) {
-        if button.selection?.actionFocused === button { button.selection?.actionFocused = nil }
-        button.selection?.buttons.removeAll { $0.value == nil || $0.value === button }
+        let selection = button.selection
+        button.selection = nil
+        button.run = nil
+        selection?.buttons.removeAll { $0.value == nil || $0.value === button }
+        DispatchQueue.main.async { [weak selection] in
+            guard let selection, selection.actionFocused === button else { return }
+            selection.actionFocused = nil
+        }
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: Button, context: Context) -> CGSize? { CGSize(width: 22, height: 22) }
 }

@@ -96,6 +96,54 @@ final class TaskRowKeyboardTests: XCTestCase {
         XCTAssertFalse(fixture.window.isVisible)
     }
 
+    func testDismantleDefersPublicationAndDoesNotClearReplacementFocus() async throws {
+        let selection = TaskRowSelection()
+        let row = TaskRowKeyboard.Row()
+        row.selection = selection
+        selection.responder = row
+        XCTAssertTrue(row.becomeFirstResponder())
+        var publications = 0
+        let subscription = selection.objectWillChange.sink { publications += 1 }
+        defer { subscription.cancel() }
+        TaskRowKeyboard.dismantleNSView(row, coordinator: ())
+        XCTAssertEqual(publications, 0, "销毁回调不得同步发布并重入 SwiftUI 图")
+        XCTAssertNil(row.selection)
+        XCTAssertNil(selection.responder)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertFalse(selection.rowFocused)
+        XCTAssertEqual(publications, 1)
+
+        row.selection = selection
+        selection.responder = row
+        XCTAssertTrue(row.becomeFirstResponder())
+        TaskRowKeyboard.dismantleNSView(row, coordinator: ())
+        let replacement = TaskRowKeyboard.Row()
+        replacement.selection = selection
+        selection.responder = replacement
+        XCTAssertTrue(replacement.becomeFirstResponder())
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertTrue(selection.rowFocused, "旧回调不得清除新行焦点")
+
+        let button = TaskNativeAction.Button()
+        button.selection = selection
+        selection.actionFocused = button
+        publications = 0
+        TaskNativeAction.dismantleNSView(button, coordinator: ())
+        XCTAssertEqual(publications, 0)
+        XCTAssertNil(button.selection)
+        let next = TaskNativeAction.Button()
+        selection.actionFocused = next
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertTrue(selection.actionFocused === next, "旧按钮销毁不得清除新按钮焦点")
+        next.selection = selection
+        publications = 0
+        TaskNativeAction.dismantleNSView(next, coordinator: ())
+        XCTAssertEqual(publications, 0)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertNil(selection.actionFocused)
+        XCTAssertEqual(publications, 1)
+    }
+
     func testHiddenActionIsExcludedFromNativeKeyViews() async throws {
         let selection = TaskRowSelection()
         let fixture = NativeRenderingFixture(TaskNativeAction(symbol: "plus", label: "隐藏动作", identifier: "hidden", selection: selection, visible: false) {}, size: CGSize(width: 22, height: 22))
