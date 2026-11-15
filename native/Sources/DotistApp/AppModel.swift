@@ -55,7 +55,7 @@ final class AppModel: ObservableObject {
     private var dateFilterObservers = Set<AnyCancellable>()
 
     init(store: TaskStore? = nil) throws {
-        core = try store ?? TaskStore()
+        core = try store ?? TaskStore(includeExamples: true)
         mcp = MCPService(store: core)
         let snapshot = try core.snapshot()
         tasks = snapshot.tasks

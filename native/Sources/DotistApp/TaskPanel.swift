@@ -129,9 +129,9 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
         self.didClose = didClose
         // Inbox is storage for ungrouped tasks, never an independent group panel.
         guard groupID != DotistGroup.inboxID else { super.init(window: nil); return }
-        let size = NSSize(width: 364, height: 620)
+        let size = NSSize(width: PanelLayoutMetrics.secondaryWidth, height: 620)
         let panel = DotistPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.minSize = NSSize(width: 320, height: 440)
+        panel.minSize = NSSize(width: PanelLayoutMetrics.secondaryWidth, height: 440)
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
@@ -139,7 +139,7 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
         super.init(window: panel)
-        motion = PanelMotion(model: model, panel: panel, size: size, title: { [weak self] in self?.bubbleTitle ?? "" },
+        motion = PanelMotion(model: model, panel: panel, size: size, minimumWidth: PanelLayoutMetrics.secondaryWidth, title: { [weak self] in self?.bubbleTitle ?? "" },
             bubbleContent: { [weak self, model] in self?.bubbleContent ?? BubbleContent(model: model) })
         panel.delegate = self
         applyAppearance()

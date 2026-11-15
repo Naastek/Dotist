@@ -50,14 +50,14 @@ struct RangeCalendar: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
+            if single { HStack(spacing: 12) {
                 ForEach(quick, id: \.0) { label, from, to in
                     Button(model.text(label)) { anchor = nil; hover = nil; choose(from, to) }.buttonStyle(.plain).modifier(DotistFocusRing())
                         .lineLimit(1).fixedSize()
                         .font(font(12, start == from && end == to ? .medium : .regular)).foregroundColor(start == from && end == to ? DotistDesign.ink : DotistDesign.faint)
                 }
                 if let clear, !start.isEmpty { Button(model.text("清除"), action: clear).buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted) }
-            }.font(font(12))
+            }.font(font(12)) }
             HStack {
                 Button { month = calendar.date(byAdding: .month, value: -1, to: first)! } label: { OpticalSymbol(name: "chevron.left", size: 11).frame(width: 22, height: 28) }.buttonStyle(.plain).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("上个月")))
                 OpticalText(title: format(month, "yyyyMMMM"), size: 14, weight: .semibold, language: model.language)

@@ -28,7 +28,11 @@ struct MainWindow: View {
     @State var toolbarDrag: ToolbarDragSession?
     @GestureState var toolbarGestureActive = false
     @State private var toolbarFrames: [ToolbarItem: CGRect] = [:]
-    @State var showColorPicker = false
+    @StateObject var headerPresentation = HeaderPresentation()
+    var headerPopover: HeaderPopover? {
+        get { headerPresentation.active }
+        nonmutating set { headerPresentation.active = newValue }
+    }
     @State var shelfTarget: String?
     @State var composer = ""
     @State var composerSubmitting = false
@@ -50,9 +54,32 @@ struct MainWindow: View {
     @State var editSaving = false
     @State var editHeight: CGFloat = 20
     @State var pendingEdit: DotistTask?
-    @State var manageGroups = false
-    @State var manageTags = false
-    @State var showCalendar = false
+    var manageGroups: Bool {
+        get { headerPresentation.manageGroups }
+        nonmutating set { headerPresentation.manageGroups = newValue }
+    }
+    var manageTags: Bool {
+        get { headerPresentation.manageTags }
+        nonmutating set { headerPresentation.manageTags = newValue }
+    }
+    var showCalendar: Bool {
+        get { headerPopover == .calendar }
+        nonmutating set { setHeaderPopover(.calendar, presented: newValue) }
+    }
+    var showFilters: Bool {
+        get { headerPopover == .filters }
+        nonmutating set { setHeaderPopover(.filters, presented: newValue) }
+    }
+    var showColorPicker: Bool {
+        get { headerPopover == .color }
+        nonmutating set { setHeaderPopover(.color, presented: newValue) }
+    }
+    func setHeaderPopover(_ target: HeaderPopover, presented: Bool) {
+        headerPresentation.set(target, presented: presented)
+    }
+    func popoverBinding(_ target: HeaderPopover) -> Binding<Bool> {
+        Binding(get: { headerPopover == target }, set: { setHeaderPopover(target, presented: $0) })
+    }
     @StateObject var filterPresentation = DateFilterPresentation()
     var hideCompleted: Bool {
         get { state.hideCompleted }
@@ -126,6 +153,14 @@ struct MainWindow: View {
     private var autoScrollTicks: AnyPublisher<Date, Never> { ticks(every: 1.0 / 30, active: drag != nil) }
     private var toastTicks: AnyPublisher<Date, Never> { ticks(every: 0.1, active: undoToastVisible || notice != nil) }
 
+    private func disappear() {
+        headerPresentation.dismiss()
+        filterPresentation.dismiss()
+        traceReorder("lifecycle.disappear")
+        cancelReorder(); reorderRuntime.handleInput = nil
+        leaveInputs(); selection.update { $0.clear() }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if let error = model.error {
@@ -139,8 +174,7 @@ struct MainWindow: View {
                 header
                 DateFilterPushdown(isOpen: filterPresentation.isOpen) { filterStrip }
                 VStack(spacing: 0) {
-                    activeFilterLine
-                    if model.tagCounts.contains(where: { $0.open > 0 }) { tagBar }
+                    additionalFilterLine
                     taskList
                 }.background(DateFilterContentClickObserver(enabled: filterPresentation.isOpen, dismiss: filterPresentation.contentClicked))
             }
@@ -197,10 +231,11 @@ struct MainWindow: View {
         .onReceive(autoScrollTicks) { (_: Date) in autoScrollTick() }
         .onReceive(model.$undo) { (entry: AppModel.UndoEntry?) in undoChanged(entry) }
         .onReceive(toastTicks) { (_: Date) in expireToasts() }
-        .onDisappear { filterPresentation.dismiss(); traceReorder("lifecycle.disappear"); cancelReorder(); reorderRuntime.handleInput = nil; leaveInputs(); selection.update { $0.clear() } }
+        .onDisappear(perform: disappear)
         .onHover { panelHovered = $0 }
         .foregroundColor(textColor)
         .onAppear { category = state.groupID ?? DotistGroup.inboxID; reorderRuntime.handleInput = handleReorderInput }
+        .onChange(of: manageTags || manageGroups) { _, open in if open { headerPresentation.dismiss() } }
         .onChange(of: showCalendar) { _, open in filterPresentation.dateControlsChanged(open) }
         .onChange(of: state.groupID) { id in
             cancelReorder()
@@ -217,7 +252,7 @@ struct MainWindow: View {
         .onChange(of: customStart) { _ in dismissComposerCue() }
         .onChange(of: customEnd) { _ in dismissComposerCue() }
         .onChange(of: model.tagDescription) { _ in
-            if let tag = state.activeTag, !model.tagCounts.contains(where: { $0.tag == tag && $0.open > 0 }) { state.activeTag = nil }
+            if let tag = state.activeTag, !model.tagCounts.contains(where: { $0.tag == tag }) { state.activeTag = nil }
         }
         .onChange(of: model.scope) { scope in if primary { state.scope = scope } }
         .onChange(of: state.scope) { scope in dismissComposerCue(); cancelReorder(); leaveInputs(); selection.update { $0.clear() }; if primary { model.scope = scope } }

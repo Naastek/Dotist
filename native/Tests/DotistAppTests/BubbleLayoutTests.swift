@@ -42,14 +42,14 @@ final class BubbleLayoutTests: XCTestCase {
 
     private func capture(model: AppModel, motion: PanelMotion, width: CGFloat, reveal: CGFloat,
                          surface: Bool, scale: CGFloat = 1, scheme: ColorScheme = .light,
-                         expectedOnRight: Bool? = nil) throws -> NSBitmapImageRep {
+                         expectedOnRight: Bool? = nil, filters: [String] = []) throws -> NSBitmapImageRep {
         let onRight = expectedOnRight ?? motion.bubbleOnRight
         XCTAssertEqual(motion.bubbleOnRight, onRight, "The fixture must enter the capture on the requested side")
         XCTAssertFalse(motion.hoverAnimating, "Finish the previous geometry handoff before replacing its host")
         let size = CGSize(width: width, height: 48)
         let shape = FloatingPanelShape(compact: true, transitioning: false, onRight: onRight, reveal: reveal)
         let content = FloatingBubble(model: model, motion: motion, details: BubbleContent(model: model),
-            groupName: nil, contextMenu: { _, _ in }, width: width, reveal: reveal)
+            groupName: nil, contextMenu: { _, _ in }, width: width, reveal: reveal, extra: filters.isEmpty ? 0 : 150, filter: filters)
             // Production clips its content before adding the native glass shell.
             .clipShape(shape)
             .background {
@@ -348,7 +348,7 @@ final class BubbleLayoutTests: XCTestCase {
                 }
                 host.layoutSubtreeIfNeeded()
                 let bitmap = try snapshot(host)
-                XCTAssertEqual(motion.panel.frame.width, active ? 188 : 48, accuracy: 1)
+                XCTAssertEqual(motion.panel.frame.width, active ? 197 : 48, accuracy: 1)
                 XCTAssertFalse(motion.hoverAnimating)
                 var redPixels = 0
                 for y in 0..<bitmap.pixelsHigh {
@@ -439,6 +439,18 @@ final class BubbleLayoutTests: XCTestCase {
             motion.finishHover(false)
             XCTAssertFalse(motion.hoverAnimating)
             XCTAssertEqual(motion.panel.frame.width, 48)
+        }
+    }
+}
+
+extension BubbleLayoutTests {
+    func testArgonCompactConditionsRenderInTwoLines() throws {
+        let (model, motion) = try fixture(title: "Plan the next release", metadata: true)
+        let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["DOTIST_ARGON_EVIDENCE"] ?? "/tmp/dotist-argon-evidence")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        for dark in [false, true] {
+            let bitmap = try capture(model: model, motion: motion, width: 440, reveal: 1, surface: false, scale: 2, scheme: dark ? .dark : .light, filters: ["Next 7 days", "#planning", "Only open"])
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("compact-conditions-\(dark ? "dark" : "light").png"))
         }
     }
 }

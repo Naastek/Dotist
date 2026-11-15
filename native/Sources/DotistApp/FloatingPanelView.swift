@@ -61,7 +61,12 @@ struct FloatingPanelView<Content: View>: View {
     let content: Content
     @State private var hoverReveal: CGFloat = 0
     @State private var contentCache = BubbleContentCache()
-    var filter: [String] { colorState.filterParts(in: model, includeGroup: groupName == nil) }
+    var filter: [String] {
+        var parts = colorState.filterParts(in: model, includeGroup: groupName == nil)
+        if colorState.hideCompleted { parts.append(model.text("只看未完成")) }
+        return BubbleFilterSummary.lines(parts)
+    }
+    var hidesTaskGroup: Bool { groupName != nil || colorState.groupID != nil }
     var bubbleContent: BubbleContent {
         // groupName controls panel wording, never the selected task scope.
         contentCache.content(model: model, state: colorState, title: title)
@@ -98,7 +103,7 @@ struct FloatingPanelView<Content: View>: View {
             FloatingBubble(model: model, motion: motion,
                 details: bubbleContent,
                 groupName: groupName, contextMenu: contextMenu, width: bubbleWidth, reveal: hoverReveal,
-                extra: extra, filter: filter)
+                extra: extra, filter: filter, hidesTaskGroup: hidesTaskGroup)
                 .frame(width: geometry.size.width, height: geometry.size.height, alignment: bubbleAlignment)
                 .opacity(motion.bubble ? 1 : 0)
                 .allowsHitTesting(motion.bubble && !motion.animationInProgress)

@@ -46,12 +46,13 @@ final class PanelMotion: ObservableObject {
     weak var filterState: TaskPanelState?
     var filterExtra: CGFloat {
         guard !filterLines.isEmpty else { return 0 }
-        let font = DotistDesign.nativeFont(12, language: model.language)
-        let widest = filterLines.map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        let font = DotistDesign.nativeFont(11, language: model.language)
+        let widest = BubbleFilterSummary.lines(filterLines).map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
         return BubbleLayout.filterBudget + min(150, ceil(widest))
     }
     var baseWidth: CGFloat { 48 + filterExtra }
     @Published private(set) var animationInProgress = false
+    let minimumWidth: CGFloat
     var expandedSize: NSSize
     private(set) var transitionSize: NSSize
     private(set) var hoverAnimating = false
@@ -73,7 +74,8 @@ final class PanelMotion: ObservableObject {
     private var insetTransition: PanelSurfaceTransition?
     private var insetObservations: [NSObjectProtocol] = []
 
-    init(model: AppModel, panel: DotistPanel, size: NSSize, title: @escaping () -> String, bubbleContent: (() -> BubbleContent)? = nil, environment: Environment = Environment(), rememberFrame: @escaping (NSRect) -> Void = { _ in }) {
+    init(model: AppModel, panel: DotistPanel, size: NSSize, minimumWidth: CGFloat = PanelLayoutMetrics.primaryWidth, title: @escaping () -> String, bubbleContent: (() -> BubbleContent)? = nil, environment: Environment = Environment(), rememberFrame: @escaping (NSRect) -> Void = { _ in }) {
+        self.minimumWidth = minimumWidth
         self.model = model
         self.panel = panel
         self.environment = environment
@@ -170,7 +172,7 @@ final class PanelMotion: ObservableObject {
             panel.styleMask.remove(.resizable)
             bubble = true
         } else {
-            let width = min(expandedSize.width, area.width)
+            let width = min(max(minimumWidth, expandedSize.width), area.width)
             let height = min(expandedSize.height, area.height)
             let center = bubbleOnRight ? old.maxX - 24 : old.minX + 24
             let right = min(max(center + 22, area.minX + width), area.maxX)
@@ -235,7 +237,7 @@ final class PanelMotion: ObservableObject {
             hoverRequiresExit = panel.frame.contains(environment.mouseLocation())
             return
         }
-        panel.minSize = NSSize(width: 320, height: 440)
+        panel.minSize = NSSize(width: minimumWidth, height: 440)
         panel.styleMask.insert(.resizable)
         rememberFrame(panel.frame)
     }
@@ -341,7 +343,7 @@ final class PanelMotion: ObservableObject {
         let y = min(max(frame.minY, area.minY), max(area.minY, area.maxY - frame.height))
         if x != frame.minX || y != frame.minY { panel.setFrameOrigin(NSPoint(x: x, y: y)) }
         if !hovering && !hoverAnimating && frame.width <= baseWidth + 1 { bubbleOnRight = x + frame.width / 2 > area.midX }
-        let width = min(expandedSize.width, area.width)
+        let width = min(max(minimumWidth, expandedSize.width), area.width)
         let height = min(expandedSize.height, area.height)
         let center = bubbleOnRight ? x + frame.width - 24 : x + 24
         let right = min(max(center + 22, area.minX + width), area.maxX)

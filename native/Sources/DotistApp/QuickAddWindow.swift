@@ -24,7 +24,7 @@ struct QuickAddWindow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             QuickInput(text: $title, placeholder: model.text("写下一件小事"), label: model.text("快速添加"), font: DotistDesign.nativeFont(22, language: model.language), commit: add, cancel: close, cycle: cycle)
-                .frame(height: 30)
+                .padding(.horizontal, 12).frame(height: 44).modifier(DotistInputBackground())
             HStack(spacing: 14) {
                 if let group {
                     Button { cycle(1) } label: {

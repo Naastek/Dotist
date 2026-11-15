@@ -125,7 +125,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     private var settingsObserver: AnyCancellable?
     private var appliedLanguage: String?
     private var appliedShortcutSignature: ShortcutSignature?
-    private(set) var expandedSize = NSSize(width: 364, height: 620)
+    private(set) var expandedSize = NSSize(width: PanelLayoutMetrics.primaryWidth, height: 620)
     private var idleTimer: Timer?
     private var qaPerfDriver: QAPerfDriver?
     private var moveCheck: DispatchWorkItem?
@@ -140,11 +140,11 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         do {
             if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa",
                ["groups", "strip2"].contains(ProcessInfo.processInfo.environment["DOTIST_QA_SEED"] ?? "") {
-                let store = try TaskStore()
+                let store = try TaskStore(includeExamples: true)
                 if try store.listGroups().allSatisfy({ $0.id == DotistGroup.inboxID }) {
-                    for name in ["工作", "生活", "阅读"] {
+                    for name in ["Work", "Life", "Reading"] {
                         let group = try store.addGroup(name: name)
-                        try store.addTask(title: name, category: group.id)
+                        try store.addTask(title: "Explore " + name + " #example", category: group.id)
                     }
                 }
                 if ProcessInfo.processInfo.environment["DOTIST_QA_SEED"] == "strip2" {
@@ -170,12 +170,12 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         updater = NativeUpdater(model: model)
         mainState.scope = model.settings.defaultFilter
         if model.settings.windowWidth > 0 && model.settings.windowHeight > 0 {
-            expandedSize = NSSize(width: Int(model.settings.windowWidth), height: Int(model.settings.windowHeight))
+            expandedSize = NSSize(width: max(Int(PanelLayoutMetrics.primaryWidth), Int(model.settings.windowWidth)), height: Int(model.settings.windowHeight))
         }
         panel = DotistPanel(contentRect: NSRect(origin: .zero, size: expandedSize), styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Dotist"
         panel.identifier = NSUserInterfaceItemIdentifier("dotist.main")
-        panel.minSize = NSSize(width: 320, height: 440)
+        panel.minSize = NSSize(width: PanelLayoutMetrics.primaryWidth, height: 440)
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
@@ -338,7 +338,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
 
     func windowDidResize(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === panel,
-              !bubble, !animationInProgress, panel.frame.width >= 320, panel.frame.height >= 440 else { return }
+              !bubble, !animationInProgress, panel.frame.width >= PanelLayoutMetrics.primaryWidth, panel.frame.height >= 440 else { return }
         expandedSize = panel.frame.size
     }
 
@@ -366,7 +366,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     func windowDidEndLiveResize(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === panel, !bubble, !animationInProgress else { return }
         var patch = DotistSettingsPatch()
-        patch.windowWidth = UInt32(max(320, panel.frame.width.rounded()))
+        patch.windowWidth = UInt32(max(PanelLayoutMetrics.primaryWidth, panel.frame.width.rounded()))
         patch.windowHeight = UInt32(max(440, panel.frame.height.rounded()))
         model.updateSettings(patch)
         preferredWindowFrame = panel.frame
@@ -421,7 +421,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         preferredWindowFrame = frame
     }
 
-    static func screenPlacement(for frame: NSRect, screens: [NSRect], main: NSRect, minimumSize: NSSize = NSSize(width: 320, height: 440)) -> NSRect {
+    static func screenPlacement(for frame: NSRect, screens: [NSRect], main: NSRect, minimumSize: NSSize = NSSize(width: PanelLayoutMetrics.primaryWidth, height: 440)) -> NSRect {
         func overlapArea(_ screen: NSRect) -> CGFloat {
             let overlap = screen.intersection(frame)
             return overlap.isNull ? 0 : overlap.width * overlap.height
@@ -724,11 +724,11 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         patch.windowWidth = 0; patch.windowHeight = 0
         model.updateSettings(patch) { [weak self] success in
             guard success, let self else { return }
-            self.expandedSize = NSSize(width: 364, height: 620)
+            self.expandedSize = NSSize(width: PanelLayoutMetrics.primaryWidth, height: 620)
             self.motion.expandedSize = self.expandedSize
             guard !self.bubble else { return }
             let old = self.panel.frame
-            self.panel.setFrame(NSRect(x: old.maxX - 364, y: old.maxY - 620, width: 364, height: 620), display: true, animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+            self.panel.setFrame(NSRect(x: old.maxX - PanelLayoutMetrics.primaryWidth, y: old.maxY - 620, width: PanelLayoutMetrics.primaryWidth, height: 620), display: true, animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         }
     }
 

@@ -1,7 +1,23 @@
 import AppKit
 import SwiftUI
 
-struct TaskEditor: NSViewRepresentable {
+struct TaskEditor: View {
+    @Binding var text: String
+    @Binding var height: CGFloat
+    let font: NSFont
+    let label: String
+    let commit: () -> Void
+    let cancel: () -> Void
+    let indent: (Bool) -> Void
+    let blur: () -> Void
+    var body: some View {
+        NativeTaskEditor(text: $text, height: $height, font: font, label: label,
+                         commit: commit, cancel: cancel, indent: indent, blur: blur)
+            .modifier(DotistInputBackground(horizontalOutset: 8, verticalOutset: 4))
+    }
+}
+
+struct NativeTaskEditor: NSViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
     let font: NSFont
@@ -73,8 +89,8 @@ struct TaskEditor: NSViewRepresentable {
             baselineOffset.pointee = (geometry.baseline * scale).rounded() / scale
             return true
         }
-        var parent: TaskEditor
-        init(_ parent: TaskEditor) { self.parent = parent }
+        var parent: NativeTaskEditor
+        init(_ parent: NativeTaskEditor) { self.parent = parent }
         func textDidChange(_ notification: Notification) {
             guard let editor = notification.object as? TaskTextView else { return }
             parent.text = editor.string

@@ -29,7 +29,9 @@ public final class TaskStore: @unchecked Sendable {
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.dotist.app")
     }
 
-    public init(databasePath: String? = nil) throws {
+    /// The app opts into examples; tools and test stores can create an empty task library.
+    /// Existing libraries are never reseeded, regardless of this flag.
+    public init(databasePath: String? = nil, includeExamples: Bool = false) throws {
         path = databasePath ?? Self.dataDirectory.appendingPathComponent("tasks.sqlite").path
         let directory = URL(fileURLWithPath: path).deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -66,9 +68,28 @@ public final class TaskStore: @unchecked Sendable {
                     );
                     PRAGMA user_version=5;
                     """)
-                for (position, pair) in [("work", "工作"), ("life", "生活"), ("study", "学习")].enumerated() {
+                for (position, pair) in [("work", "Work"), ("life", "Life"), ("study", "Study")].enumerated() {
                     try db.execute(sql: "INSERT INTO task_groups VALUES (?,?,?,?,?,?,NULL)",
                                    arguments: [pair.0, pair.1, pair.0, position, Self.timestamp(), Self.timestamp()])
+                }
+                // Seed only during schema creation, in the same transaction.
+                // Reopening an existing (even empty) library never adds examples.
+                if includeExamples {
+                    let examples = [
+                        ("work", "Plan the week #planning"),
+                        ("work", "Share a project update #work"),
+                        ("life", "Make a grocery list #home"),
+                        ("life", "Go for a walk #wellbeing"),
+                        ("study", "Read a chapter #reading"),
+                        ("study", "Practice a new skill #learning")
+                    ]
+                    for (position, example) in examples.enumerated() {
+                        let now = Self.timestamp()
+                        try db.execute(sql: """
+                            INSERT INTO tasks (id,title,category,completed,position,created_at,updated_at,revision,status)
+                            VALUES (?,?,?,0,?,?,?,1,'todo')
+                            """, arguments: [UUID().uuidString.lowercased(), example.1, example.0, position, now, now])
+                    }
                 }
             }
         }

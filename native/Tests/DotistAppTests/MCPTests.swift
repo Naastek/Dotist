@@ -26,7 +26,7 @@ final class MCPTests: XCTestCase {
         let typo = await tools.call("add_tasks", ["category": "work", "tasks": [["title": "日期拼错", "due_data": "2026-11-10"]]])
         XCTAssertEqual(typo.isError, true)
         XCTAssertTrue(try store.listTasks().isEmpty)
-        let created = await tools.call("add_tasks", ["category": "工作", "tasks": [["title": "第一项"], ["title": "第二项"]]])
+        let created = await tools.call("add_tasks", ["category": "work", "tasks": [["title": "第一项"], ["title": "第二项"]]])
         XCTAssertNotEqual(created.isError, true)
         XCTAssertEqual(try store.listTasks().count, 2)
         XCTAssertFalse(focused)

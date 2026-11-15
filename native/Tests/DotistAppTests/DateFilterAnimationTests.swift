@@ -196,7 +196,7 @@ final class DateFilterAnimationTests: XCTestCase {
                 try await clock.advance(by: elapsed)
                 let image = try await fixture.capture(scale: 2)
                 let headerY = try XCTUnwrap(groups.first { $0.id == "work" }).frame.minY
-                let horizontal = try XCTUnwrap(fixture.descendants(NSScrollView.self).first { $0.bounds.height <= 34.5 })
+                let horizontal = try XCTUnwrap(fixture.descendants(NSScrollView.self).first { $0.bounds.height <= 34.5 && abs($0.bounds.width - (size.width - 32)) < 1 })
                 // The scroll view retains its full 34pt bounds while the
                 // pushdown clips it to the currently reserved inline height.
                 let bottom = fixture.host.convert(horizontal.visibleRect, from: horizontal).maxY
@@ -219,7 +219,10 @@ final class DateFilterAnimationTests: XCTestCase {
                         for edgeX in [frame.minX + 2, frame.maxX - 3] {
                             for y in stride(from: frame.midY - 6, through: frame.midY + 6, by: 1) {
                                 let color = try XCTUnwrap(scrolled.colorAt(x: Int(edgeX * 2), y: Int(y * 2)))
-                                XCTAssertGreaterThan(min(color.redComponent, color.greenComponent, color.blueComponent), 0.94)
+                                // cacheDisplay may omit native glass/backdrop layers in a hidden window.
+                                // Compare ink over white; transparent safety bands are also clear.
+                                let ink = min(color.redComponent, color.greenComponent, color.blueComponent)
+                                XCTAssertGreaterThan(ink * color.alphaComponent + (1 - color.alphaComponent), 0.94)
                             }
                         }
                         try scrolled.representation(using: .png, properties: [:])?.write(to:

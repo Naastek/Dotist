@@ -83,7 +83,7 @@ struct CommandPalette: View {
             SearchRow(text: $query, placeholder: model.text("搜索任务、分组或视图"), language: model.language, size: 16, iconSize: 14, focusOnAppear: true, commit: openSelected, navigate: { direction in move(direction); return true }, cancel: close)
                 .accessibilityIdentifier("command-search")
                 .frame(height: PaletteMetrics.searchRow)
-                .overlay(alignment: .bottom) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5) }
+                .padding(.horizontal, 10).modifier(DotistInputBackground())
                 .padding(.horizontal, 20)
             if results.isEmpty {
                 Text(model.text("没有找到匹配的内容")).font(DotistDesign.font(13, language: model.language)).foregroundColor(DotistDesign.faint)

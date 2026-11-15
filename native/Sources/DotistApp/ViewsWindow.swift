@@ -553,8 +553,7 @@ private struct TaskDateField: View {
                 TextField("YYYY-MM-DD", text: $draft, onCommit: save)
                     .textFieldStyle(.plain)
                     .padding(.horizontal, 8).padding(.vertical, 6)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.surface))
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(DotistDesign.rule, lineWidth: 0.5))
+                    .modifier(DotistInputBackground())
                     .modifier(DotistFocusRing())
                     .accessibilityLabel(Text(model.text(start ? "开始日" : "到期日")))
             }
