@@ -161,7 +161,7 @@ struct TaskNativeAction: NSViewRepresentable {
             }
             // 加号与叉号共用笔画长度，叉号旋转 45°，而非拉伸不同 SF glyph。
             let path = NSBezierPath()
-            path.lineWidth = isHighlighted ? 2.1 : (active ? 1.9 : 1.5)
+            path.lineWidth = isHighlighted ? 1.35 : (active ? 1.2 : 1.05)
             path.lineCapStyle = .round
             path.lineJoinStyle = .round
             let cx = bounds.midX, cy = bounds.midY
@@ -177,10 +177,17 @@ struct TaskNativeAction: NSViewRepresentable {
                 let d: CGFloat = 3.68
                 line(-d, -d, d, d); line(-d, d, d, -d)
             case "calendar":
-                // 与加号共用 10pt 外包围；减少内部横线的密度，保留双挂耳语义。
-                path.appendRoundedRect(NSRect(x: cx - 5, y: cy - 5, width: 10, height: 8.5), xRadius: 1.5, yRadius: 1.5)
-                line(-5, 0.5, 5, 0.5)
-                line(-2.5, 3, -2.5, 5); line(2.5, 3, 2.5, 5)
+                // 顶栏 OpticalSymbol 使用 SF calendar / regular / medium。
+                // 直接复用同一系统矢量，保留顶部结构与日期点阵；状态以颜色反馈。
+                if let image = NSImage(systemSymbolName: "calendar", accessibilityDescription: nil)?
+                    .withSymbolConfiguration(.init(pointSize: 11, weight: .regular, scale: .medium))?
+                    .withSymbolConfiguration(.init(paletteColors: [color])) {
+                    let size = image.size
+                    image.draw(in: NSRect(x: cx - size.width / 2, y: cy - size.height / 2,
+                                          width: size.width, height: size.height),
+                               from: .zero, operation: .sourceOver, fraction: 1,
+                               respectFlipped: false, hints: nil)
+                }
             default: break
             }
             color.setStroke()
