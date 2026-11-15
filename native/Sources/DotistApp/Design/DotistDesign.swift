@@ -236,7 +236,7 @@ struct DotistGlassTabs: View {
                         .lineLimit(1).fixedSize().frame(height: 28).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).focusable(true).focused($focused, equals: option.0)
-                .modifier(DotistTabFocusDecoration(focused: focused == option.0))
+                .focusEffectDisabled()
                 .accessibilityAddTraits(selection == option.0 ? .isSelected : [])
                 .onMoveCommand { direction in
                     guard let index = options.firstIndex(where: { $0.0 == (focused ?? selection) }) else { return }
@@ -247,12 +247,5 @@ struct DotistGlassTabs: View {
         }
         .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.9), value: selection)
         .accessibilityElement(children: .contain)
-    }
-}
-
-private struct DotistTabFocusDecoration: ViewModifier {
-    let focused: Bool
-    func body(content: Content) -> some View {
-        content.focusEffectDisabled()
     }
 }

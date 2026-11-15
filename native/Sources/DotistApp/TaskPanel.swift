@@ -62,12 +62,6 @@ final class TaskPanelState: ObservableObject {
 
     var dateFilterActive: Bool { customStart != nil || scope != "all" }
 
-    /// Panel header line and floating bubble share this wording. nil means "All".
-    func filterSummary(in model: AppModel, includeGroup: Bool = true) -> String? {
-        let parts = filterParts(in: model, includeGroup: includeGroup)
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
     /// One entry per active condition, in group, date, tag order.
     func filterParts(in model: AppModel, includeGroup: Bool = true) -> [String] {
         var parts: [String] = []

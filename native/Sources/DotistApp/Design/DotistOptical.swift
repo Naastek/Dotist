@@ -23,11 +23,6 @@ extension VerticalAlignment {
             case .digits: return "0123456789"
             }
         }
-        static func forText(_ text: String) -> Script {
-            if text.unicodeScalars.contains(where: { $0.value >= 0x2e80 }) { return .cjk }
-            if !text.isEmpty && text.allSatisfy({ $0.isNumber || "/:-. ".contains($0) }) { return .digits }
-            return .latin
-        }
     }
     struct Measurement {
         let inkOffset: CGFloat

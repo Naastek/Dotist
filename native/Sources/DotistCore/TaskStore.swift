@@ -464,7 +464,6 @@ public final class TaskStore: @unchecked Sendable {
         }
     }
     public func move(_ id: String, direction: Int) throws { try move(id, direction: direction, statusColumn: false) }
-    public func moveStatus(_ id: String, direction: Int) throws { try move(id, direction: direction, statusColumn: true) }
     private func move(_ id: String, direction: Int, statusColumn: Bool) throws {
         guard [-1, 1].contains(direction) else { throw TaskStoreError("排序方向无效") }
         try write { db in
