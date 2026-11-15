@@ -88,6 +88,7 @@ struct TaskNativeAction: NSViewRepresentable {
         var eligible = false
         var destructive = false
         var hovered = false
+        var actionSymbol = ""
         override var acceptsFirstResponder: Bool { eligible && isEnabled }
         override var canBecomeKeyView: Bool { acceptsFirstResponder && !isHiddenOrHasHiddenAncestor }
         override func becomeFirstResponder() -> Bool {
@@ -149,10 +150,35 @@ struct TaskNativeAction: NSViewRepresentable {
                           options: [])
                 NSGraphicsContext.restoreGraphicsState()
             }
-            if let image {
-                let side: CGFloat = isHighlighted ? 10 : 11
-                let rect = NSRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side)
-                image.withSymbolConfiguration(.init(paletteColors: [color]))?.draw(in: rect)
+            // 加号与叉号共用笔画长度，叉号旋转 45°，而非拉伸不同 SF glyph。
+            let path = NSBezierPath()
+            path.lineWidth = isHighlighted ? 2.1 : (active ? 1.9 : 1.5)
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
+            let cx = bounds.midX, cy = bounds.midY
+            func line(_ x1: CGFloat, _ y1: CGFloat, _ x2: CGFloat, _ y2: CGFloat) {
+                path.move(to: NSPoint(x: cx + x1, y: cy + y1))
+                path.line(to: NSPoint(x: cx + x2, y: cy + y2))
+            }
+            switch actionSymbol {
+            case "plus":
+                line(-5, 0, 5, 0); line(0, -5, 0, 5)
+            case "xmark":
+                // 对角线端点距中心 5.2pt，轻微光学校正斜线的视觉收缩。
+                let d: CGFloat = 3.68
+                line(-d, -d, d, d); line(-d, d, d, -d)
+            case "calendar":
+                path.appendRoundedRect(NSRect(x: cx - 4.5, y: cy - 4.5, width: 9, height: 8), xRadius: 1, yRadius: 1)
+                line(-4.5, 1, 4.5, 1)
+                line(-2.5, 2.5, -2.5, 5); line(2.5, 2.5, 2.5, 5)
+            default: break
+            }
+            color.setStroke()
+            path.stroke()
+            if eligible && hovered && !focused {
+                color.setFill()
+                NSBezierPath(roundedRect: NSRect(x: cx - 3, y: 1, width: 6, height: isHighlighted ? 2 : 1),
+                             xRadius: 0.5, yRadius: 0.5).fill()
             }
             if focused {
                 NSColor(DotistDesign.accent).setFill()
@@ -177,8 +203,7 @@ struct TaskNativeAction: NSViewRepresentable {
         button.isEnabled = visible
         button.destructive = destructive
         button.run = action
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-        button.symbolConfiguration = .init(pointSize: 11, weight: .regular)
+        button.actionSymbol = symbol
         button.setAccessibilityLabel(label)
         button.setAccessibilityIdentifier(identifier)
         button.toolTip = visible ? (tooltip ?? label) : nil

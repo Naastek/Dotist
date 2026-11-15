@@ -138,8 +138,16 @@ struct HeaderToolStyle: ButtonStyle {
         @State private var hovered = false
         var body: some View {
             configuration.label
-                .background(RoundedRectangle(cornerRadius: 8).fill(DotistDesign.rule.opacity(configuration.isPressed ? 0.16 : hovered ? 0.10 : 0.04)))
+                .background(RoundedRectangle(cornerRadius: 8).fill(DotistDesign.rule.opacity(configuration.isPressed ? 0.26 : hovered ? 0.15 : 0)))
+                .overlay(alignment: .bottom) {
+                    if hovered {
+                        Capsule().fill(DotistDesign.accent)
+                            .frame(width: 8, height: configuration.isPressed ? 2 : 1)
+                            .allowsHitTesting(false)
+                    }
+                }
                 .onHover { hovered = $0 }
+                .onDisappear { hovered = false }
         }
     }
 }

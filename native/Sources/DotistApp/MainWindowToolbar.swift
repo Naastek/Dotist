@@ -61,8 +61,7 @@ extension MainWindow {
 
     private func headerCluster<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         HStack(spacing: 1, content: content).padding(1)
-            .background(RoundedRectangle(cornerRadius: 9).fill(DotistDesign.rule.opacity(0.06)))
-            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(DotistDesign.rule.opacity(0.14), lineWidth: 0.5))
+
     }
 
     /// A control whose state differs from the default stays visible even when hover-only.
