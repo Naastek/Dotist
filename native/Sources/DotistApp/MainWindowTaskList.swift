@@ -44,6 +44,10 @@ extension MainWindow {
                             .background(TaskReorderScrollBridge(runtime: reorderRuntime))
                     }
                 .background(TaskPickupFrameProbe(runtime: reorderRuntime, role: .viewport))
+                .background(TaskListBlankDoubleClick(enabled: state.groupID != nil && editing == nil && draftAfter == nil && addingToGroup == nil && drag == nil && model.dragId == nil,
+                    origin: listViewport.origin, excluded: rowFrames.map(\.frame) + groupFrames.map(\.frame) + Array(composerFrames.values)) {
+                    if let id = state.groupID { activateGroupComposer(id) }
+                })
                 .background(GeometryReader { geometry in
                     Color.clear.onAppear { listViewport = geometry.frame(in: .named(Self.listSpace)) }
                         .onChange(of: geometry.frame(in: .named(Self.listSpace))) { listViewport = $0 }
@@ -222,21 +226,21 @@ extension MainWindow {
                 flat(values.today, section: "today", date: Date().dotistDay); hasSection = true
             }
             if !values.upcoming.matches.isEmpty { disclosure("接下来 {n} 天".replacingOccurrences(of: "{n}", with: "7"), result: values.upcoming, upcoming: true, gap: hasSection ? 20 : 0); hasSection = true }
-            if !values.completed.matches.isEmpty { disclosure("已完成", result: values.completed, upcoming: false, gap: hasSection ? 20 : 0) }
+            if !hideCompleted && !values.completed.matches.isEmpty { disclosure("已完成", result: values.completed, upcoming: false, gap: hasSection ? 20 : 0) }
         } else {
             let result = dateFilterResult()
             if customDateRange == nil && state.scope == "overdue" {
                 if !result.matches.isEmpty { section("已逾期", result: result, key: "overdue") }
             } else if customDateRange == nil && state.scope == "undated" { flat(result, section: "undated") }
             else if customDateRange == nil && state.scope == "done" {
-                if !result.matches.isEmpty { section("已完成", result: result, key: "done") }
+                if !hideCompleted && !result.matches.isEmpty { section("已完成", result: result, key: "done") }
             } else {
                 let dates = Array(Set(result.matches.compactMap(\.dueDate))).sorted()
                 for (index, date) in dates.enumerated() {
                     section(model.dueLabel(date), result: dateFilterResult(range: TaskDateRange(date, date)), key: date, date: date, gap: index > 0 ? 20 : 0)
                 }
                 let done = dateFilterResult(completed: true)
-                if !done.matches.isEmpty { disclosure("已完成", result: done, upcoming: false, gap: dates.isEmpty ? 0 : 20) }
+                if !hideCompleted && !done.matches.isEmpty { disclosure("已完成", result: done, upcoming: false, gap: dates.isEmpty ? 0 : 20) }
             }
         }
         return entries
@@ -257,17 +261,18 @@ extension MainWindow {
         TaskEmptyState(scope: state.scope, groupID: state.groupID, customRange: customDateRange)
     }
 
-    private var showsEmptyState: Bool {
-        if customDateRange == nil && state.scope == "all" { return panelTasks.isEmpty }
+    var showsEmptyState: Bool {
+        if customDateRange == nil && state.scope == "all" { return panelTasks.filter { !hideCompleted || !$0.completed }.isEmpty }
         if customDateRange == nil && state.scope == "today" {
             let sections = model.todayTaskSections(groupID: state.groupID, tag: state.activeTag)
             return sections.today.matches.isEmpty && sections.overdue.matches.isEmpty
                 && !(upcomingOpen && !sections.upcoming.matches.isEmpty)
-                && !(todayDoneOpen && !sections.completed.matches.isEmpty)
+                && !(!hideCompleted && todayDoneOpen && !sections.completed.matches.isEmpty)
         }
+        if hideCompleted && state.scope == "done" && customDateRange == nil { return true }
         let result = dateFilterResult()
         guard result.matches.isEmpty else { return false }
-        let showsCompletedRows = todayDoneOpen && !dateFilterResult(completed: true).matches.isEmpty
+        let showsCompletedRows = !hideCompleted && todayDoneOpen && !dateFilterResult(completed: true).matches.isEmpty
             && (customDateRange != nil || !["all", "overdue", "undated", "done"].contains(state.scope))
         return !showsCompletedRows
     }
@@ -277,18 +282,22 @@ extension MainWindow {
     private var emptyStateMinimumTop: CGFloat {
         if customDateRange == nil && state.scope == "today" {
             let sections = model.todayTaskSections(groupID: state.groupID, tag: state.activeTag)
-            let count = (sections.upcoming.matches.isEmpty ? 0 : 1) + (sections.completed.matches.isEmpty ? 0 : 1)
+            let count = (sections.upcoming.matches.isEmpty ? 0 : 1) + (hideCompleted || sections.completed.matches.isEmpty ? 0 : 1)
             return count == 0 ? 0 : CGFloat(count * 28 + (count - 1) * 20 + 16)
         }
         if (customDateRange != nil || !["all", "overdue", "undated", "done"].contains(state.scope)),
-           !dateFilterResult(completed: true).matches.isEmpty { return 44 }
+           !hideCompleted, !dateFilterResult(completed: true).matches.isEmpty { return 44 }
         return 0
     }
 
     private func emptyState(viewportHeight: CGFloat) -> some View {
         let context = emptyStateContext
         return TaskEmptyStateLayout(viewportHeight: viewportHeight, minimumTop: emptyStateMinimumTop) {
-            TaskEmptyStateContent(title: model.text(context.title), hint: context.hint.map { model.text($0) }, language: model.language) {
+            TaskEmptyStateContent(title: additionalFilterCount > 0 ? (model.text("没有符合条件的任务")) : model.text(context.title), hint: context.hint.map { model.text($0) }, language: model.language) {
+                if additionalFilterCount > 0 {
+                    Button(model.text("清除附加条件"), action: clearAdditionalFilters)
+                        .accessibilityIdentifier("empty-clear-filters")
+                }
                 if context.allowsAdding {
                     Button { focusEmptyStateComposer(context) } label: {
                         TaskEmptyAddLabel()
@@ -334,6 +343,15 @@ extension MainWindow {
         } else { composerFocused = true }
     }
 
+    func activateGroupComposer(_ groupID: String) {
+        guard model.groups.contains(where: { $0.id == groupID }) else { return }
+        leaveInputs()
+        dismissComposerCue()
+        category = groupID
+        dueDate = TaskEmptyState(scope: state.scope, groupID: groupID, customRange: customDateRange).dueDate.flatMap { Date.dotistDay($0) }
+        composerFocused = true
+    }
+
     func activateEmptyStateComposer() {
         if showsEmptyState && emptyStateContext.allowsAdding { focusEmptyStateComposer(emptyStateContext) }
         else { composerFocused = true }
@@ -353,6 +371,8 @@ extension MainWindow {
     }
 
     @ViewBuilder private var listMenu: some View {
+        Button(model.text("添加任务")) { activateGroupComposer(state.groupID ?? category) }
+        Divider()
         Button(model.text("新建分组…")) { manageGroups = true }
         Button(model.text("管理分组…")) { manageGroups = true }
         Button(model.text("管理标签…")) { manageTags = true }

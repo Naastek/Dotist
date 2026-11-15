@@ -5,7 +5,19 @@ import SwiftUI
 
 extension MainWindow {
     private var sortableToolbarItems: [ToolbarItem] {
-        toolbarConfig.order.filter { $0 != .collapse && toolbarConfig.visibility(of: $0) != .hidden }
+        toolbarConfig.order.filter { $0 != .collapse && $0 != .completion && toolbarConfig.visibility(of: $0) != .hidden }
+    }
+
+    var windowToolbarItems: [ToolbarItem] {
+        sortableToolbarItems.filter { $0 != .filter && $0 != .calendar }
+    }
+
+    var dateToolbarItems: [ToolbarItem] {
+        [.filter].filter { toolbarConfig.visibility(of: $0) != .hidden || toolbarConfig.visibility(of: .calendar) != .hidden }
+    }
+
+    func reorderItems(for item: ToolbarItem) -> [ToolbarItem] {
+        dateToolbarItems.contains(item) ? dateToolbarItems : windowToolbarItems
     }
 
     private var toolbarAnimation: Animation? {
@@ -13,32 +25,61 @@ extension MainWindow {
     }
 
     var header: some View {
-        HStack(spacing: 4) {
-            Spacer(minLength: 4)
-            ForEach(sortableToolbarItems, id: \.self) { item in
-                headerControl(item)
-                    .opacity(toolbarConfig.visibility(of: item) == .always || panelHovered || toolbarDrag != nil || isActive(item) ? 1 : 0)
-                    .allowsHitTesting(toolbarConfig.visibility(of: item) == .always || panelHovered || isActive(item))
-                    .accessibilityHidden(toolbarConfig.visibility(of: item) == .hover && !panelHovered)
-                    .offset(x: toolbarDrag?.offset(for: item) ?? 0)
-                    .zIndex(toolbarDrag?.item == item ? 1 : 0)
-                    .animation(toolbarDrag?.item == item ? nil : toolbarAnimation, value: toolbarDrag?.target)
-                    .animation(toolbarAnimation, value: panelHovered)
-                    .highPriorityGesture(toolbarReorderGesture(item))
+        HeaderClusterLayout(reservedWindowWidth: CGFloat(windowToolbarItems.count + 1 + (!primary && close != nil ? 1 : 0)) * 25 + 1) {
+            Group { if !primary { groupSelector } else { Color.clear.frame(width: 0, height: 24) } }
+            headerCluster {
+                ForEach(dateToolbarItems.filter { controlVisible($0) || toolbarDrag != nil }, id: \.self) { item in configuredHeaderControl(item) }
+                unifiedFilterButton
             }
-            if !primary, let close { toolbarButton("xmark", label: model.text("关闭面板"), action: close) }
-            toolbarItem(.collapse)
-        }.padding(.leading, 16).padding(.trailing, 10).frame(height: 44).background(WindowDragArea())
+            headerCluster {
+                ForEach(windowToolbarItems.filter { controlVisible($0) || toolbarDrag != nil }, id: \.self) { item in configuredHeaderControl(item) }
+                if !primary, let close { toolbarButton("xmark", label: model.text("关闭面板"), action: close) }
+                toolbarItem(.collapse)
+            }
+        }.padding(.leading, 16).padding(.trailing, 10).padding(.vertical, 10).background(WindowDragArea())
+            .overlayPreferenceValue(HeaderColorAnchorKey.self) { anchors in
+                GeometryReader { geometry in
+                    let anchor = anchors[.color]
+                    if let anchor {
+                        let rect = geometry[anchor]
+                        Color.clear.frame(width: rect.width, height: rect.height)
+                            .popover(isPresented: popoverBinding(.color)) { colorPicker }
+                            .position(x: rect.midX, y: rect.midY)
+                    }
+                }.allowsHitTesting(false)
+            }
+    }
+
+    private func controlVisible(_ item: ToolbarItem) -> Bool {
+        toolbarConfig.visibility(of: item) == .always || panelHovered || isActive(item)
+    }
+
+    private func configuredHeaderControl(_ item: ToolbarItem) -> some View {
+        headerControl(item)
+            .opacity(controlVisible(item) || toolbarDrag != nil ? 1 : 0)
+            .allowsHitTesting(controlVisible(item))
+            .accessibilityHidden(!controlVisible(item))
+            .offset(x: toolbarDrag?.offset(for: item) ?? 0)
+            .zIndex(toolbarDrag?.item == item ? 1 : 0)
+            .animation(toolbarDrag?.item == item ? nil : toolbarAnimation, value: toolbarDrag?.target)
+            .animation(toolbarAnimation, value: panelHovered)
+            .highPriorityGesture(toolbarReorderGesture(item, items: reorderItems(for: item)))
+    }
+
+    private func headerCluster<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 1, content: content).padding(1)
+            .background(RoundedRectangle(cornerRadius: 9).fill(DotistDesign.rule.opacity(0.06)))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(DotistDesign.rule.opacity(0.14), lineWidth: 0.5))
     }
 
     /// A control whose state differs from the default stays visible even when hover-only.
     private func isActive(_ item: ToolbarItem) -> Bool {
         switch item {
-        // Filter and calendar state is named by the line under the header, so their
-        // visibility follows the user setting; only an open popover or the completion toggle pins.
-        case .filter: filterPresentation.isOpen
+        // Active inline dates remain visible when their configured policy is hover-only.
+        case .filter: filterPresentation.isOpen || showCalendar || dateFilterActive
         case .completion: hideCompleted
-        case .calendar: showCalendar
+        case .calendar: showCalendar || customStart != nil
+        case .color: showColorPicker
         default: false
         }
     }
@@ -46,7 +87,7 @@ extension MainWindow {
     @ViewBuilder private func headerControl(_ item: ToolbarItem) -> some View {
         switch item {
         case .filter: filterButton.background(frameReporter(item))
-        case .completion: completionToggle.background(frameReporter(item))
+        case .completion: EmptyView()
         case .calendar: calendarButton.background(frameReporter(item))
         default: toolbarItem(item)
         }
@@ -58,14 +99,14 @@ extension MainWindow {
         }
     }
 
-    private func toolbarReorderGesture(_ item: ToolbarItem) -> some Gesture {
+    private func toolbarReorderGesture(_ item: ToolbarItem, items: [ToolbarItem]) -> some Gesture {
         DragGesture(minimumDistance: 3, coordinateSpace: .named(Self.listSpace))
             .updating($toolbarGestureActive) { _, active, _ in active = true }
             .onChanged { value in
                 guard item != .collapse else { return }
                 if toolbarDrag == nil {
                     guard (NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags).contains(.command) else { return }
-                    toolbarDrag = ToolbarDragSession(item: item, items: sortableToolbarItems)
+                    toolbarDrag = ToolbarDragSession(item: item, items: items)
                 }
                 guard toolbarDrag?.item == item else { return }
                 toolbarDrag?.translation = value.translation.width
@@ -81,8 +122,8 @@ extension MainWindow {
             }
     }
 
-    private func toolbarItem(_ item: ToolbarItem) -> some View {
-        let symbol: String = switch item {
+    private func toolbarSymbol(_ item: ToolbarItem) -> String {
+        switch item {
         case .filter, .completion, .calendar: ""
         case .views: "rectangle.split.2x1"
         case .pin: model.settings.alwaysOnTop ? "pin.fill" : "pin"
@@ -90,7 +131,10 @@ extension MainWindow {
         case .color: "circle"
         case .collapse: "arrow.down.right.and.arrow.up.left"
         }
-        let labelKey: String = switch item {
+    }
+
+    private func toolbarLabel(_ item: ToolbarItem) -> String {
+        switch item {
         case .filter, .completion, .calendar: ""
         case .views: "任务视图"
         case .pin: "置顶窗口"
@@ -98,8 +142,9 @@ extension MainWindow {
         case .color: "颜色"
         case .collapse: "收起为悬浮球"
         }
-        let label = model.text(labelKey)
-        return Button {
+    }
+
+    func performToolbarAction(_ item: ToolbarItem) {
             guard toolbarDrag == nil else { return }
             switch item {
             case .filter, .completion, .calendar: break
@@ -109,18 +154,22 @@ extension MainWindow {
             case .pin: var patch = DotistSettingsPatch(); patch.alwaysOnTop = !model.settings.alwaysOnTop; model.updateSettings(patch)
             case .lock: var patch = DotistSettingsPatch(); patch.locked = !model.settings.locked; model.updateSettings(patch)
             }
-        } label: {
+    }
+
+    private func toolbarItem(_ item: ToolbarItem) -> some View {
+        let label = model.text(toolbarLabel(item))
+        return Button { performToolbarAction(item) } label: {
             Group {
                 if item == .color {
                     let color = state.selectedColor(in: model)
                     Circle().fill(color == .none ? Color.clear : DotistTheme.swatch(color))
                         .overlay { if color == .none { Circle().strokeBorder(DotistDesign.faint, lineWidth: 1) } }
                         .frame(width: 14, height: 14)
-                } else { OpticalSymbol(name: symbol, size: 14) }
-            }.frame(width: 28, height: 28).contentShape(Rectangle())
-        }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted)
+                } else { OpticalSymbol(name: toolbarSymbol(item), size: 14) }
+            }.frame(width: 24, height: 24).contentShape(Rectangle())
+        }.buttonStyle(HeaderToolStyle()).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted)
+            .anchorPreference(key: HeaderColorAnchorKey.self, value: .bounds) { item == .color ? [.color: $0] : [:] }
             .help(label).accessibilityLabel(Text(label)).accessibilityIdentifier("toolbar:\(item.rawValue)")
-            .popover(isPresented: Binding(get: { item == .color && showColorPicker }, set: { if item == .color { showColorPicker = $0 } })) { colorPicker }
             .background(GeometryReader { geometry in
                 Color.clear.preference(key: ToolbarFrameKey.self, value: [item: geometry.frame(in: .named(Self.listSpace))])
             })
@@ -183,7 +232,7 @@ extension MainWindow {
     private var currentScopeLabel: String {
         if let start = customStart {
             let end = customEnd ?? start
-            return start == end ? model.dueLabel(start) : model.dueLabel(start) + " – " + model.dueLabel(end)
+            return HeaderDateLabel.full(start: start, end: end, language: model.language)
         }
         return model.text(filterLabel(state.scope))
     }
@@ -191,29 +240,36 @@ extension MainWindow {
     private var dateFilterActive: Bool { state.dateFilterActive }
 
     private var filterButton: some View {
-        Button { filterPresentation.toggle() } label: {
-            OpticalSymbol(name: "line.3.horizontal.decrease", size: 14).frame(width: 28, height: 28).contentShape(Rectangle())
-        }.buttonStyle(.plain).modifier(DotistFocusRing())
-            .foregroundColor(dateFilterActive || filterPresentation.isOpen ? DotistDesign.accent : DotistDesign.muted)
+        inlineDateControl(symbol: "calendar", active: dateFilterActive,
+                          title: customStart != nil ? HeaderDateLabel.compact(start: customStart, end: customEnd) : model.text(filterLabel(state.scope)), identifier: "date-filter-current", action: filterPresentation.toggle)
             .animation(DateFilterSelectionMotion.animation(reduceMotion: reduceMotion), value: dateFilterActive || filterPresentation.isOpen)
-            .help(model.text("日期筛选")).accessibilityLabel(Text(model.text("日期筛选")))
-            .accessibilityValue(Text(currentScopeLabel))
-            .accessibilityIdentifier("date-filter-current")
     }
 
-    /// Reserve the summary's 22pt even for All. Selection must not insert a
-    /// second, instantaneous push below the independently animated filter strip.
-    var activeFilterLine: some View {
-        let summary = state.filterSummary(in: model)
-        return HStack(spacing: 0) {
-            Spacer(minLength: 0)
-            Text(summary ?? "").font(DotistDesign.textFont(12, language: model.language))
-                .foregroundStyle(DotistDesign.faint).lineLimit(1)
-                .contentTransition(.opacity)
-        }.padding(.horizontal, 16).frame(height: 22)
-            .accessibilityHidden(summary == nil)
-            .accessibilityIdentifier("active-filter-line")
-            .animation(DateFilterSelectionMotion.animation(reduceMotion: reduceMotion), value: summary)
+    func clearDateFilter() { state.scope = "all"; customStart = nil; customEnd = nil }
+
+    private func inlineDateControl(symbol: String, active: Bool, title: String, identifier: String, action: @escaping () -> Void) -> some View {
+        HStack(spacing: 2) {
+            Button(action: action) {
+                HStack(spacing: 4) {
+                    OpticalSymbol(name: symbol, size: 14).frame(width: 14, height: 24)
+                    if active {
+                        Text(title).font(.system(size: 11.5, weight: .medium)).lineLimit(1)
+                            .frame(width: min(66, ceil((title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .medium)]).width)))
+                    }
+                }.frame(height: 24).frame(minWidth: active ? nil : 24).contentShape(Rectangle())
+            }.buttonStyle(HeaderToolStyle()).modifier(DotistFocusRing())
+                .accessibilityIdentifier(identifier).accessibilityLabel(Text(model.text(identifier == "date-filter-current" ? "日期筛选" : "日历")))
+                .accessibilityValue(Text(active ? currentScopeLabel : model.text("全部")))
+            if active && identifier == "date-filter-current" {
+                Button(action: clearDateFilter) { OpticalSymbol(name: "xmark", size: 9).frame(width: 14, height: 24).contentShape(Rectangle()) }
+                    .buttonStyle(HeaderToolStyle()).modifier(DotistFocusRing())
+                    .accessibilityLabel(Text(model.text("取消：") + currentScopeLabel)).accessibilityIdentifier(identifier + ":clear")
+            }
+        }.padding(.horizontal, active ? 6 : 0)
+            .foregroundStyle(active ? DotistDesign.accent : DotistDesign.muted)
+            .background(RoundedRectangle(cornerRadius: 8).fill(DotistDesign.accent.opacity(active ? 0.12 : 0)))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(DotistDesign.accent.opacity(active ? 0.25 : 0), lineWidth: 0.5).allowsHitTesting(false))
+            .help(currentScopeLabel)
     }
 
     var filterStrip: some View {
@@ -226,8 +282,9 @@ extension MainWindow {
                         filterPresentation.selected()
                     }.accessibilityIdentifier("date-filter:\(id)")
                 }
+                calendarButton
             }.padding(.horizontal, DateFilterEdgeMask.contentInset)
-        }.frame(height: TaskDateFilterMetrics.rowHeight)
+        }.focusSection().frame(height: TaskDateFilterMetrics.rowHeight)
             .mask { DateFilterEdgeMask() }
             .dotistGlass(.regular.tint(DotistTheme.tint(model.themeColor(forGroup: state.groupID), scheme)), in: RoundedRectangle(cornerRadius: 12)).dotistInlineShadow()
             .background(DateFilterHoverObserver(enabled: filterPresentation.isOpen, changed: filterPresentation.hoverChanged))
@@ -235,28 +292,10 @@ extension MainWindow {
             .allowsHitTesting(filterPresentation.isOpen)
     }
 
-    private var completionToggle: some View {
-        let label = model.text(hideCompleted ? "显示已完成任务" : "只看未完成")
-        return Button {
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { hideCompleted.toggle() }
-        } label: {
-            OpticalSymbol(name: hideCompleted ? "checkmark.circle.badge.xmark" : "checkmark.circle", size: 14).frame(width: 28, height: 28).contentShape(Rectangle())
-        }.buttonStyle(.plain).modifier(DotistFocusRing())
-            .foregroundColor(hideCompleted ? DotistDesign.accent : DotistDesign.muted)
-            .opacity(hideCompleted || panelHovered ? 1 : 0)
-            .allowsHitTesting(hideCompleted || panelHovered)
-            .help(label).accessibilityLabel(Text(label))
-            .accessibilityValue(Text(model.text(hideCompleted ? "已隐藏已完成" : "显示全部")))
-            .accessibilityIdentifier("completion-filter")
-            .animation(toolbarAnimation, value: panelHovered)
-    }
-
     private var calendarButton: some View {
-        Button { showCalendar.toggle() } label: { OpticalSymbol(name: "calendar", size: 14).frame(width: 28, height: 28).contentShape(Rectangle()) }
-            .buttonStyle(.plain).modifier(DotistFocusRing())
-            .foregroundColor(customStart == nil ? DotistDesign.muted : DotistDesign.accent)
-            .help(model.text("日历")).accessibilityLabel(Text(model.text("日历")))
-            .popover(isPresented: $showCalendar) {
+        inlineDateControl(symbol: "calendar", active: true,
+                          title: customStart != nil ? HeaderDateLabel.compact(start: customStart, end: customEnd) : model.text("自定义…"), identifier: "toolbar:calendar", action: { showCalendar.toggle() })
+            .popover(isPresented: popoverBinding(.calendar)) {
                 RangeCalendar(model: model, start: customStart ?? Date().dotistDay, end: customEnd ?? Date().dotistDay, choose: { start, end in
                     state.scope = "today"
                     customStart = start
@@ -266,20 +305,36 @@ extension MainWindow {
     }
 
     private func toolbarButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { OpticalSymbol(name: symbol, size: 14).frame(width: 28, height: 28).contentShape(Rectangle()) }
-            .buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted).help(label).accessibilityLabel(Text(label))
+        Button(action: action) { OpticalSymbol(name: symbol, size: 14).frame(width: 24, height: 24).contentShape(Rectangle()) }
+            .buttonStyle(HeaderToolStyle()).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted).help(label).accessibilityLabel(Text(label)).accessibilityIdentifier("toolbar:close")
     }
 
     var tagBar: some View {
-        HStack(spacing: 14) {
-            ForEach(model.tagCounts.filter { $0.open > 0 }) { tag in
-                Button { state.activeTag = state.activeTag == tag.tag ? nil : tag.tag } label: {
-                    OpticalText(title: "#" + tag.tag, size: 12, weight: state.activeTag == tag.tag ? .medium : .regular, language: model.language).frame(height: 24)
-                }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(state.activeTag == tag.tag ? DotistDesign.ink : DotistDesign.faint)
+        HStack {
+            Menu {
+                Button(model.text("全部")) { state.activeTag = nil }
+                ForEach(model.orderedTagCounts) { tag in
+                    Button {
+                        state.activeTag = tag.tag
+                    } label: {
+                        if state.activeTag == tag.tag { Label("#" + tag.tag, systemImage: "checkmark") }
+                        else { Text("#" + tag.tag) }
+                    }
+                }
+                Divider()
+                Button(model.text("管理…")) { headerPopover = nil; manageTags = true }
+            } label: {
+                Text(model.text("标签") + ": " + (state.activeTag.map { "#" + $0 } ?? model.text("全部")))
+                    .lineLimit(1).frame(height: 28)
+            }.menuStyle(.borderlessButton).modifier(DotistFocusRing()).fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("tag-filter")
+            Spacer(minLength: 0)
+            if state.activeTag != nil {
+                Button { state.activeTag = nil } label: {
+                    OpticalSymbol(name: "xmark", size: 11).frame(width: 24, height: 24).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityLabel(Text(model.text("全部")))
             }
-            Spacer()
-            Button { manageTags = true } label: { OpticalText(title: model.text("管理…"), size: 12, language: model.language).frame(height: 24) }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.faint)
-        }.font(font(12)).padding(.horizontal, 16).frame(height: 24)
+        }.font(font(12)).foregroundStyle(DotistDesign.muted).padding(.horizontal, 16).frame(height: 28)
     }
 
     private func icon(_ symbol: String, label: String, active: Bool? = nil, action: @escaping () -> Void) -> some View {
@@ -299,6 +354,84 @@ extension MainWindow {
         case "undated": return "无日期"
         case "done": return "已完成"
         default: return "全部"
+        }
+    }
+
+    var additionalFilterCount: Int {
+        (state.activeTag != nil ? 1 : 0) + (hideCompleted ? 1 : 0)
+    }
+
+    func clearAdditionalFilters() {
+        state.activeTag = nil
+        hideCompleted = false
+    }
+
+    private var groupSelector: some View {
+        let title = model.groups.first { $0.id == state.groupID }?.name ?? model.text("全部")
+        return HeaderMenuButton(title: title, symbol: "", identifier: "filter-group", accessibilityTitle: model.text("分组") + ": " + title) {
+            let menu = NSMenu()
+            let all = HeaderMenuAction(title: model.text("全部")) { state.groupID = nil }
+            all.state = state.groupID == nil ? .on : .off
+            menu.addItem(all)
+            for group in model.visibleGroups {
+                let entry = HeaderMenuAction(title: group.name) { state.groupID = group.id }
+                entry.state = state.groupID == group.id ? .on : .off
+                menu.addItem(entry)
+            }
+            return menu
+        }.frame(maxWidth: 136).frame(height: 24)
+            .background(RoundedRectangle(cornerRadius: 8).fill(DotistDesign.rule.opacity(0.06)))
+    }
+
+    private var unifiedFilterButton: some View {
+        Button { showFilters.toggle() } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "slider.horizontal.3")
+
+            }.frame(width: 24, height: 24).contentShape(Rectangle())
+        }.buttonStyle(HeaderToolStyle()).modifier(DotistFocusRing())
+            .background(RoundedRectangle(cornerRadius: 8).fill(DotistDesign.rule.opacity(0.06)))
+            .foregroundStyle(additionalFilterCount > 0 || showFilters ? DotistDesign.accent : DotistDesign.muted)
+            .accessibilityLabel(Text(model.text("筛选")))
+            .accessibilityValue(Text("\(additionalFilterCount)"))
+            .accessibilityIdentifier("unified-filter")
+            .popover(isPresented: Binding(get: { showFilters }, set: { showFilters = $0 })) { unifiedFilterPanel }
+    }
+
+    var unifiedFilterPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(model.text("筛选")).font(font(15, .semibold))
+                Spacer()
+                Button(model.text("清除附加条件"), action: clearAdditionalFilters)
+                    .buttonStyle(.plain).modifier(DotistFocusRing())
+                    .foregroundStyle(DotistDesign.accent).disabled(additionalFilterCount == 0)
+            }
+            tagBar.padding(.horizontal, -16)
+            Toggle(model.text("只看未完成"), isOn: Binding(get: { hideCompleted }, set: { hideCompleted = $0 }))
+                .accessibilityIdentifier("completion-filter")
+        }.font(font(12)).padding(16).frame(width: 300)
+
+    }
+
+    private func filterChip(_ title: String, clear: @escaping () -> Void) -> some View {
+        Button(action: clear) {
+            HStack(spacing: 5) { Text(title).lineLimit(1); Image(systemName: "xmark").font(.system(size: 9)) }
+                .padding(.horizontal, 8).frame(height: 25)
+                .background(Capsule().fill(DotistDesign.rule.opacity(0.06)))
+                .overlay(Capsule().strokeBorder(DotistDesign.rule.opacity(0.16), lineWidth: 0.5))
+        }.buttonStyle(.plain).modifier(DotistFocusRing())
+            .help((model.text("取消：")) + title)
+    }
+
+    @ViewBuilder var additionalFilterLine: some View {
+        if additionalFilterCount > 0 {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    if let tag = state.activeTag { filterChip("#" + tag) { state.activeTag = nil } }
+                    if hideCompleted { filterChip(model.text("只看未完成")) { hideCompleted = false } }
+                }.padding(.horizontal, 16)
+            }.frame(height: 33).font(font(11)).accessibilityIdentifier("active-filter-line")
         }
     }
 
@@ -350,4 +483,27 @@ extension MainWindow {
                             customRange: range ?? customDateRange, completed: completed)
     }
 
+}
+
+enum HeaderDateLabel {
+    static func full(start: String, end: String, language: String) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: language)
+        formatter.setLocalizedDateFormatFromTemplate("yyyyMMMd")
+        func label(_ day: String) -> String { Date.dotistDay(day).map(formatter.string(from:)) ?? day }
+        return start == end ? label(start) : label(start) + " – " + label(end)
+    }
+
+    static func compact(start: String?, end: String?) -> String {
+        guard let start else { return "" }
+        let end = end ?? start
+        let a = start.split(separator: "-").map(String.init)
+        let b = end.split(separator: "-").map(String.init)
+        guard a.count == 3, b.count == 3 else { return start == end ? start : start + "–" + end }
+        func md(_ p: [String]) -> String { String(Int(p[1]) ?? 0) + "/" + String(Int(p[2]) ?? 0) }
+        if start == end { return md(a) }
+        if a[0] != b[0] { return String(a[0].suffix(2)) + "/" + a[1] + "/" + a[2] + "–" + String(b[0].suffix(2)) + "/" + b[1] + "/" + b[2] }
+        if a[1] == b[1] { return md(a) + "–" + String(Int(b[2]) ?? 0) }
+        return md(a) + "–" + md(b)
+    }
 }

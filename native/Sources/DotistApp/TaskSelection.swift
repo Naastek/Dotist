@@ -21,6 +21,10 @@ struct TaskSelection: Equatable {
 
 @MainActor final class TaskRowSelection: ObservableObject {
     @Published var selected = false
+    @Published var rowFocused = false
+    @Published var actionFocused: TaskNativeAction.Button?
+    weak var responder: TaskRowKeyboard.Row?
+    var buttons: [WeakTaskAction] = []
     let focusRequest = PassthroughSubject<Void, Never>()
 }
 
@@ -44,12 +48,11 @@ struct TaskSelection: Equatable {
 
 struct TaskSelectableContent<Content: View>: View {
     @ObservedObject var selection: TaskRowSelection
-    @FocusState private var focused: Bool
-    let content: (Bool, Bool) -> Content
+    let content: (Bool, Bool, Bool) -> Content
     var body: some View {
-        content(selection.selected, focused)
-            .focusable().focused($focused).focusEffectDisabled()
-            .onReceive(selection.focusRequest) { _ in focused = true }
+        content(selection.selected, selection.rowFocused, selection.actionFocused != nil)
+            .onReceive(selection.focusRequest) { _ in
+                if let view = selection.responder { view.window?.makeFirstResponder(view) }
+            }
     }
 }
-

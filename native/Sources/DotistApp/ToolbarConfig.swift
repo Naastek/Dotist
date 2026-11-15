@@ -2,6 +2,8 @@ import Foundation
 
 enum ToolbarItem: String, CaseIterable, Codable {
     case filter, completion, calendar, views, pin, lock, color, collapse
+
+    var isStandalone: Bool { self != .completion && self != .calendar }
 }
 
 enum ToolbarVisibility: String, Codable, CaseIterable {
@@ -71,6 +73,10 @@ final class ToolbarConfig: ObservableObject {
             order = Self.defaultOrder
             visibility = Self.defaultVisibility
         }
+        let policies = [visibility[.filter], visibility[.calendar]]
+        let datePolicy: ToolbarVisibility = policies.contains(.always) ? .always : policies.contains(.hover) ? .hover : .hidden
+        visibility[.filter] = datePolicy
+        visibility[.calendar] = datePolicy
         visibility[.collapse] = .always
     }
 
@@ -85,6 +91,7 @@ final class ToolbarConfig: ObservableObject {
     func setVisibility(_ value: ToolbarVisibility, for item: ToolbarItem) {
         guard item != .collapse else { return }
         visibility[item] = value
+        if item == .filter || item == .calendar { visibility[.filter] = value; visibility[.calendar] = value }
         save()
     }
     /// Moves `item` to the slot currently held by `target` (⌘-drag reorder).

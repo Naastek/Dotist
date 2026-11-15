@@ -259,7 +259,7 @@ final class TaskEmptyStateTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(frame.width, 32)
             XCTAssertGreaterThanOrEqual(frame.height, 32)
             let hint = try XCTUnwrap(accessibilityElement(fixture.host, id: "empty-state-hint"))
-            XCTAssertEqual(hint.accessibilityFrame().minY - hintInset - frame.maxY, 12, accuracy: 0.5, "Plus follows the existing copy")
+            XCTAssertGreaterThanOrEqual(hint.accessibilityFrame().minY - hintInset - frame.maxY, 11.5, "清除附加条件与新增按钮应保留间距")
             print("EMPTY HANDOFF window backing=\(fixture.window.backingScaleFactor)x, screens=\(NSScreen.screens.count), button=\(frame)")
             XCTAssertTrue(button.accessibilityPerformPress())
             try await Task.sleep(for: .milliseconds(80))

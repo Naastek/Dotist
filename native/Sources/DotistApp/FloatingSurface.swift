@@ -136,7 +136,6 @@ struct FloatingPanelSurface: View {
                 // Preserve the optical rim while adjusting the glass interior and reading backing.
                 let radius = DotistDesign.windowCornerRadius - ExpandedReadingMaterial.opticalClearance
                 let opticalShape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-                let amount = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
                 let glassAlpha = ExpandedReadingMaterial.glassInteriorAlpha(opacity: opacity, frost: frost, dark: scheme == .dark)
                 let qa: QAEdge = qaMainPanel ? QAEdge.flags : []
                 let clippedGlass = Color.clear.dotistGlass(.regular.tint(DotistTheme.tint(color, scheme)), in: opticalShape)
@@ -160,7 +159,6 @@ struct FloatingPanelSurface: View {
                     }
                     if !qa.contains(.noPaper) {
                         ExpandedReadingMaterial(opacity: opacity, frost: frost, color: color, scheme: scheme, cornerRadius: radius)
-                            .applyingBackgroundOpacity(amount)
                             .opacity(idleContentOpacity)
                             .padding(ExpandedReadingMaterial.opticalClearance)
                     }

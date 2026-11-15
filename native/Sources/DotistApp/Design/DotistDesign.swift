@@ -199,10 +199,8 @@ struct DotistControlTint: ViewModifier {
 struct DotistFocusRing: ViewModifier {
     @FocusState private var focused: Bool
     func body(content: Content) -> some View {
-        Group {
-            if focused { content.foregroundStyle(DotistDesign.accent) }
-            else { content }
-        }.focused($focused).focusEffectDisabled()
+        content.foregroundStyle(focused ? AnyShapeStyle(DotistDesign.accent) : AnyShapeStyle(.foreground))
+            .focused($focused).focusEffectDisabled()
     }
 }
 

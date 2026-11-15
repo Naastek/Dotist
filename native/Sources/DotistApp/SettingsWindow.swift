@@ -83,7 +83,7 @@ struct SettingsWindow: View {
                 }
             }.padding(.horizontal, 12).frame(height: 34)
                 // Glass is only the backdrop: a native NSTextField inside the effect graph is composited twice.
-                .background { Color.clear.dotistGlass(.regular, in: Capsule()) }
+                .modifier(DotistInputBackground())
                 .padding(.horizontal, 14)
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 ScrollView {
@@ -310,7 +310,7 @@ struct SettingsWindow: View {
         }
     }
     private var orderedToolbarItems: [ToolbarItem] {
-        toolbar.order.filter { ToolbarItem.allCases.contains($0) } + ToolbarItem.allCases.filter { !toolbar.order.contains($0) }
+        (toolbar.order.filter { ToolbarItem.allCases.contains($0) } + ToolbarItem.allCases.filter { !toolbar.order.contains($0) }).filter(\.isStandalone)
     }
     private var toolbarSettings: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -530,7 +530,7 @@ struct SettingsWindow: View {
                 .accessibilityLabel(Text(model.text("作用域")))
                 .accessibilityValue(Text(scopeTitle))
                 .accessibilityIdentifier("shortcut-scope:\(key)")
-            ShortcutRecorder(value: value, label: model.text(label), empty: model.text("未设置"), recordingText: model.text("按下新的快捷键…"), language: model.language, begin: beginShortcutCapture, finish: { endShortcutCapture(id, $0) }).frame(width: 130, height: 28)
+            ShortcutRecorder(value: value, label: model.text(label), empty: model.text("未设置"), recordingText: model.text("按下新的快捷键…"), language: model.language, begin: beginShortcutCapture, finish: { endShortcutCapture(id, $0) }).frame(width: 130, height: 28).modifier(DotistInputBackground(horizontalOutset: 6))
             // The clear slot keeps its width whether or not a shortcut is set,
             // so the recorder column stays aligned across rows.
             Button { beginShortcutCapture(); endShortcutCapture(id, "") } label: {

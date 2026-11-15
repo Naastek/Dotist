@@ -393,6 +393,7 @@ final class PanelMotionLifecycleTests: XCTestCase {
     func testFrameTransitionWaitsForItsDriverBeforeRestoringGeometry() throws {
         let model = try model()
         let panel = panel()
+        panel.setFrame(NSRect(x: panel.frame.minX, y: panel.frame.minY, width: 408, height: panel.frame.height), display: false)
         let input = PanelMotionTestEnvironment()
         let motion = PanelMotion(model: model, panel: panel, size: panel.frame.size, title: { "" },
                                  environment: input.environment)

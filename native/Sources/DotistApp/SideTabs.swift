@@ -417,7 +417,7 @@ struct SideTabsSnapshot {
                        selectedIndex: Int? = 0, entrance: [CGFloat]? = nil,
                        color: @escaping (String?) -> DotistGroupColor = { _ in .teal }) -> SideTabsSnapshot? {
         let widths = names.map { SideTabGeometry.expandedWidth(name: $0, language: language) }
-        let panel = CGRect(x: widths.max() ?? 48, y: 0, width: 364, height: 620)
+        let panel = CGRect(x: widths.max() ?? 48, y: 0, width: PanelLayoutMetrics.primaryWidth, height: 620)
         let sample = SideTabGeometry.snapshot(panel: panel, fullWidths: widths, progress: expanded ? 1 : 0, inward: inward, selectedIndex: selectedIndex, entrance: entrance)
         let rows = names.enumerated().map { index, name in
             SideTabLayout(id: String(index), groupID: String(index), name: name,

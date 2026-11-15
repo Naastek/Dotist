@@ -230,7 +230,7 @@ final class MenuBarTests: XCTestCase {
                 await wait("Rotation advances", { controller.item?.button?.title != initial })
             }
         }
-        let work = try store.addGroup(name: "Work")
+        let work = try store.addGroup(name: "Empty menu group")
         patch = DotistSettingsPatch(); patch.trayGroup = work.id
         await publish(patch)
         XCTAssertEqual(model.settings.trayGroup, work.id)

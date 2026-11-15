@@ -179,7 +179,7 @@ final class BubbleGroupSelectionTests: XCTestCase {
         let view = view(model, state)
         XCTAssertEqual(view.bubbleContent.task?.id, life.id)
         XCTAssertEqual(view.bubbleContent.remaining, 1)
-        XCTAssertEqual(view.filter, [model.groupDisplayName("life"), model.dueLabel("2027-02-12"), "#focus"])
+        XCTAssertEqual(view.filter, [model.groupDisplayName("life"), model.dueLabel("2027-02-12") + " · #focus"])
         state.groupID = "work"
         XCTAssertEqual(view.bubbleContent.task?.id, work.id)
         XCTAssertEqual(view.bubbleContent.remaining, 2)
@@ -248,5 +248,26 @@ final class BubbleGroupSelectionTests: XCTestCase {
     private final class MemoryDefaults: UserDefaults {
         override func stringArray(forKey defaultName: String) -> [String]? { [] }
         override func set(_ value: Any?, forKey defaultName: String) {}
+    }
+}
+
+extension BubbleGroupSelectionTests {
+    func testIdleSelectedGroupKeepsSummaryAndAllViewKeepsTaskGroupMetadata() throws {
+        let (model, _, _) = try fixture()
+        let selected = state("work")
+        let panel = view(model, selected)
+        XCTAssertFalse(panel.filter.isEmpty)
+        XCTAssertGreaterThan(panel.motion.filterExtra, 0)
+        XCTAssertTrue(panel.hidesTaskGroup)
+        selected.groupID = nil
+        selected.scope = "next7"
+        XCTAssertFalse(panel.hidesTaskGroup, "A date condition must not hide the task group in All")
+        XCTAssertLessThanOrEqual(panel.filter.count, 2)
+        selected.groupID = "life"
+        selected.activeTag = "planning"
+        selected.hideCompleted = true
+        XCTAssertEqual(panel.filter.count, 2)
+        XCTAssertTrue(panel.filter.joined().contains("#planning"))
+        XCTAssertTrue(panel.hidesTaskGroup)
     }
 }
