@@ -142,3 +142,33 @@ extension PanelMotionTests {
         XCTAssertFalse(panel.isVisible)
     }
 }
+
+extension PanelMotionTests {
+    func testExpandedPanelsKeepIndependentWidthHeightAndResizeEligibility() throws {
+        let model = try model()
+        let area = NSRect(x: 0, y: 0, width: 1800, height: 1200)
+        for minimum: CGFloat in [408, 432] {
+            let panel = DotistPanel(contentRect: NSRect(x: 100, y: 100, width: minimum, height: 440),
+                styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.isReleasedWhenClosed = false
+            panel.minSize = NSSize(width: minimum, height: 440)
+            let motion = PanelMotion(model: model, panel: panel, size: panel.frame.size,
+                minimumWidth: minimum, title: { "Tasks" }, environment: PanelMotionTestEnvironment(area: area).environment)
+            defer { motion.stop(); panel.close() }
+            XCTAssertTrue(panel.styleMask.contains(.resizable))
+            XCTAssertGreaterThan(panel.maxSize.width, 700)
+            XCTAssertGreaterThan(panel.maxSize.height, 800)
+            for size in [NSSize(width: 700, height: 440), NSSize(width: minimum, height: 800)] {
+                panel.setFrame(NSRect(origin: panel.frame.origin, size: size), display: false)
+                XCTAssertEqual(panel.frame.size, size)
+                motion.toggleBubble(in: area, animated: false)
+                XCTAssertFalse(panel.styleMask.contains(.resizable))
+                motion.toggleBubble(in: area, animated: false)
+                XCTAssertTrue(panel.styleMask.contains(.resizable))
+                XCTAssertEqual(panel.minSize, NSSize(width: minimum, height: 440))
+                XCTAssertEqual(panel.frame.size, size)
+            }
+            XCTAssertFalse(panel.isVisible)
+        }
+    }
+}

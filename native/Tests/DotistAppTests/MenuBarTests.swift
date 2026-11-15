@@ -69,11 +69,30 @@ final class MenuBarTests: XCTestCase {
         }
     }
 
+    func testZeroCountShrinksToIconAndNonzeroRestoresWidth() throws {
+        for scale in [1, 2] {
+            let icon = try render(nil, scale: scale)
+            for count in [1, 0, 100, 0, 9] {
+                let rep = try render(count, scale: scale)
+                if count == 0 {
+                    XCTAssertEqual(rep.pixelsWide, 16 * scale)
+                    for y in 0..<rep.pixelsHigh {
+                        for x in 0..<rep.pixelsWide {
+                            XCTAssertEqual(alpha(rep, x, y), alpha(icon, x, y), accuracy: 0.01)
+                        }
+                    }
+                } else {
+                    XCTAssertGreaterThan(rep.pixelsWide, 19 * scale)
+                }
+            }
+        }
+    }
+
     func testTemplateImagesRenderAtBothScales() throws {
         for scale in [1, 2] {
             let empty = try render(nil, scale: scale)
             var masks = Set<[Int]>()
-            for count in [0, 1, 9, 10, 99, 100] {
+            for count in [1, 9, 10, 99, 100] {
                 let image = MenuBarImage.make(count: count, accessibilityDescription: "\(count)")
                 XCTAssertTrue(image.isTemplate)
                 XCTAssertEqual(image.accessibilityDescription, "\(count)")
@@ -96,7 +115,7 @@ final class MenuBarTests: XCTestCase {
                 masks.insert(digitPixels)
                 print("Template count=\(count) scale=\(scale) size=\(image.size)")
             }
-            XCTAssertEqual(masks.count, 6, "Each displayed value must have distinct digit ink")
+            XCTAssertEqual(masks.count, 5, "Each displayed value must have distinct digit ink")
         }
     }
 

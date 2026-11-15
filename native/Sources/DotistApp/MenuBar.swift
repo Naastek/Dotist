@@ -178,7 +178,7 @@ enum MenuBarImage {
     static func countLabel(_ count: Int) -> String { count > 99 ? "99+" : "\(count)" }
 
     static func size(count: Int?) -> NSSize {
-        guard let count else { return iconSize }
+        guard let count, count > 0 else { return iconSize }
         let width = (countLabel(count) as NSString).size(withAttributes: [.font: countFont]).width
         return NSSize(width: 19 + ceil(width) + 1, height: iconSize.height)
     }
@@ -197,7 +197,7 @@ enum MenuBarImage {
             mark.appendOval(in: NSRect(x: 6.75, y: 4.25, width: 5, height: 5))
             mark.windingRule = .evenOdd
             mark.fill()
-            if let count {
+            if let count, count > 0 {
                 let text = NSAttributedString(string: countLabel(count), attributes: [.font: countFont, .foregroundColor: NSColor.black])
                 text.draw(at: NSPoint(x: 19, y: (iconSize.height - text.size().height) / 2))
             }
