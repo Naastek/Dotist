@@ -26,6 +26,11 @@ final class NativeActionPaintTests: XCTestCase {
                     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
                     let transform = NSAffineTransform()
                     transform.scale(by: 2)
+                    // 模拟真实 AppKit 绘制上下文的翻转，不能只缩放后直接调用 draw。
+                    if button.isFlipped {
+                        transform.translateX(by: 0, yBy: button.bounds.height)
+                        transform.scaleX(by: 1, yBy: -1)
+                    }
                     transform.concat()
                     button.effectiveAppearance.performAsCurrentDrawingAppearance {
                         (dark ? NSColor.darkGray : NSColor.white).setFill()

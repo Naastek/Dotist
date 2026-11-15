@@ -135,6 +135,15 @@ struct TaskNativeAction: NSViewRepresentable {
         override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
         override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
         override func draw(_ dirtyRect: NSRect) {
+            // 矢量统一使用向上的 Y 轴，避免 NSButton 翻转坐标把日历倒置。
+            NSGraphicsContext.saveGraphicsState()
+            defer { NSGraphicsContext.restoreGraphicsState() }
+            if isFlipped {
+                let transform = NSAffineTransform()
+                transform.translateX(by: 0, yBy: bounds.minY + bounds.maxY)
+                transform.scaleX(by: 1, yBy: -1)
+                transform.concat()
+            }
             let focused = window?.firstResponder === self
             let active = eligible && (hovered || isHighlighted || focused)
             let color = NSColor(active ? (destructive ? DotistDesign.danger : DotistDesign.accent) : DotistDesign.muted)
@@ -168,17 +177,20 @@ struct TaskNativeAction: NSViewRepresentable {
                 let d: CGFloat = 3.68
                 line(-d, -d, d, d); line(-d, d, d, -d)
             case "calendar":
-                path.appendRoundedRect(NSRect(x: cx - 4.5, y: cy - 4.5, width: 9, height: 8), xRadius: 1, yRadius: 1)
-                line(-4.5, 1, 4.5, 1)
-                line(-2.5, 2.5, -2.5, 5); line(2.5, 2.5, 2.5, 5)
+                // 与加号共用 10pt 外包围；减少内部横线的密度，保留双挂耳语义。
+                path.appendRoundedRect(NSRect(x: cx - 5, y: cy - 5, width: 10, height: 8.5), xRadius: 1.5, yRadius: 1.5)
+                line(-5, 0.5, 5, 0.5)
+                line(-2.5, 3, -2.5, 5); line(2.5, 3, 2.5, 5)
             default: break
             }
             color.setStroke()
             path.stroke()
             if eligible && hovered && !focused {
                 color.setFill()
-                NSBezierPath(roundedRect: NSRect(x: cx - 3, y: 1, width: 6, height: isHighlighted ? 2 : 1),
-                             xRadius: 0.5, yRadius: 0.5).fill()
+                // 圆点完整留在 22pt 热区内。
+                let diameter: CGFloat = isHighlighted ? 3 : 2
+                let top = bounds.maxY - 0.5 - diameter
+                NSBezierPath(ovalIn: NSRect(x: cx - diameter / 2, y: top, width: diameter, height: diameter)).fill()
             }
             if focused {
                 NSColor(DotistDesign.accent).setFill()

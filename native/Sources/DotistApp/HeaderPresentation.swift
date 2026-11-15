@@ -139,10 +139,11 @@ struct HeaderToolStyle: ButtonStyle {
         var body: some View {
             configuration.label
                 .background(RoundedRectangle(cornerRadius: 8).fill(DotistDesign.rule.opacity(configuration.isPressed ? 0.26 : hovered ? 0.15 : 0)))
-                .overlay(alignment: .bottom) {
+                .overlay(alignment: .top) {
                     if hovered {
-                        Capsule().fill(DotistDesign.accent)
-                            .frame(width: 8, height: configuration.isPressed ? 2 : 1)
+                        Circle().fill(DotistDesign.accent)
+                            .frame(width: configuration.isPressed ? 3 : 2, height: configuration.isPressed ? 3 : 2)
+                            .padding(.top, 0.5)
                             .allowsHitTesting(false)
                     }
                 }
