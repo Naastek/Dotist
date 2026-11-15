@@ -62,6 +62,13 @@ final class ViewsGlassWindow: NSWindow {
 }
 
 final class DotistPanel: NSPanel {
+    override init(contentRect: NSRect, styleMask: NSWindow.StyleMask, backing: NSWindow.BackingStoreType, defer flag: Bool) {
+        super.init(contentRect: contentRect, styleMask: styleMask, backing: backing, defer: flag)
+        // Explicit opt-in keeps transparent optical margins and rounded corners
+        // in AppKit's window hit region, including the native resize border.
+        ignoresMouseEvents = false
+    }
+
     @objc(_hasActiveAppearance) func dotistHasActiveAppearance() -> Bool { FloatingGlassAppearance.active(self) }
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
