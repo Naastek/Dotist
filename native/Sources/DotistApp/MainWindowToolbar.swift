@@ -25,14 +25,13 @@ extension MainWindow {
     }
 
     var header: some View {
-        HeaderClusterLayout(reservedWindowWidth: CGFloat(windowToolbarItems.count + 1 + (!primary && close != nil ? 1 : 0)) * 25 + 1) {
+        HeaderClusterLayout(reservedWindowWidth: CGFloat(windowToolbarItems.count + (!primary && close != nil ? 1 : 0)) * 25 + 1) {
             Group { if !primary { groupSelector } else { Color.clear.frame(width: 0, height: 24) } }
             headerCluster {
-                ForEach(dateToolbarItems.filter { controlVisible($0) || toolbarDrag != nil }, id: \.self) { item in configuredHeaderControl(item) }
-                unifiedFilterButton
+                ForEach(dateToolbarItems, id: \.self) { item in configuredHeaderControl(item) }
             }
             headerCluster {
-                ForEach(windowToolbarItems.filter { controlVisible($0) || toolbarDrag != nil }, id: \.self) { item in configuredHeaderControl(item) }
+                ForEach(windowToolbarItems, id: \.self) { item in configuredHeaderControl(item) }
                 if !primary, let close { toolbarButton("xmark", label: model.text("关闭面板"), action: close) }
                 toolbarItem(.collapse)
             }
@@ -77,6 +76,7 @@ extension MainWindow {
         switch item {
         // Active inline dates remain visible when their configured policy is hover-only.
         case .filter: filterPresentation.isOpen || showCalendar || dateFilterActive
+        case .filters: showFilters
         case .completion: hideCompleted
         case .calendar: showCalendar || customStart != nil
         case .color: showColorPicker
@@ -87,6 +87,7 @@ extension MainWindow {
     @ViewBuilder private func headerControl(_ item: ToolbarItem) -> some View {
         switch item {
         case .filter: filterButton.background(frameReporter(item))
+        case .filters: unifiedFilterButton.background(frameReporter(item))
         case .completion: EmptyView()
         case .calendar: calendarButton.background(frameReporter(item))
         default: toolbarItem(item)
@@ -124,7 +125,7 @@ extension MainWindow {
 
     private func toolbarSymbol(_ item: ToolbarItem) -> String {
         switch item {
-        case .filter, .completion, .calendar: ""
+        case .filters, .filter, .completion, .calendar: ""
         case .views: "rectangle.split.2x1"
         case .pin: model.settings.alwaysOnTop ? "pin.fill" : "pin"
         case .lock: model.settings.locked ? "lock.fill" : "lock.open"
@@ -135,7 +136,7 @@ extension MainWindow {
 
     private func toolbarLabel(_ item: ToolbarItem) -> String {
         switch item {
-        case .filter, .completion, .calendar: ""
+        case .filters, .filter, .completion, .calendar: ""
         case .views: "任务视图"
         case .pin: "置顶窗口"
         case .lock: "固定窗口"
@@ -147,7 +148,7 @@ extension MainWindow {
     func performToolbarAction(_ item: ToolbarItem) {
             guard toolbarDrag == nil else { return }
             switch item {
-            case .filter, .completion, .calendar: break
+            case .filters, .filter, .completion, .calendar: break
             case .views: showViews()
             case .color: showColorPicker.toggle()
             case .collapse: collapse()
@@ -407,6 +408,7 @@ extension MainWindow {
                     .buttonStyle(.plain).modifier(DotistFocusRing())
                     .foregroundStyle(DotistDesign.accent).disabled(additionalFilterCount == 0)
             }
+            additionalFilterLine
             tagBar.padding(.horizontal, -16)
             Toggle(model.text("只看未完成"), isOn: Binding(get: { hideCompleted }, set: { hideCompleted = $0 }))
                 .accessibilityIdentifier("completion-filter")

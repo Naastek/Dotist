@@ -122,8 +122,9 @@ final class TaskTextView: NSTextView {
         // Capture this editor session's action. Reading self.blur on the next
         // run loop can execute a new row's callback after representable reuse.
         let action = blur
+        let composing = hasMarkedText()
         let result = super.resignFirstResponder()
-        if result { DispatchQueue.main.async(execute: action) }
+        if result && !composing { DispatchQueue.main.async(execute: action) }
         return result
     }
 }

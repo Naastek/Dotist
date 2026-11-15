@@ -1,7 +1,7 @@
 import Foundation
 
 enum ToolbarItem: String, CaseIterable, Codable {
-    case filter, completion, calendar, views, pin, lock, color, collapse
+    case filters, filter, completion, calendar, views, pin, lock, color, collapse
 
     var isStandalone: Bool { self != .completion && self != .calendar }
 }
@@ -57,9 +57,9 @@ final class ToolbarConfig: ObservableObject {
     @Published private(set) var order: [ToolbarItem]
     @Published private(set) var visibility: [ToolbarItem: ToolbarVisibility]
 
-    static let defaultOrder: [ToolbarItem] = [.filter, .completion, .calendar, .views, .pin, .lock, .color, .collapse]
+    static let defaultOrder: [ToolbarItem] = [.filters, .filter, .completion, .calendar, .views, .pin, .lock, .color, .collapse]
     static let defaultVisibility: [ToolbarItem: ToolbarVisibility] =
-        [.filter: .hover, .completion: .hover, .calendar: .hover, .views: .hover, .pin: .hover, .lock: .hover, .color: .hover, .collapse: .always]
+        [.filters: .hover, .filter: .hover, .completion: .hover, .calendar: .hover, .views: .hover, .pin: .hover, .lock: .hover, .color: .hover, .collapse: .always]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults

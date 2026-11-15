@@ -6,10 +6,11 @@ struct TaskListBlankDoubleClick: NSViewRepresentable {
     let enabled: Bool
     let origin: CGPoint
     let excluded: [CGRect]
+    var dismissEmptyDraft: () -> Void = {}
     let add: () -> Void
     func makeNSView(context: Context) -> Observer { Observer() }
     func updateNSView(_ view: Observer, context: Context) {
-        view.enabled = enabled; view.origin = origin; view.excluded = excluded; view.add = add
+        view.enabled = enabled; view.origin = origin; view.excluded = excluded; view.add = add; view.dismissEmptyDraft = dismissEmptyDraft
     }
     static func dismantleNSView(_ view: Observer, coordinator: ()) { view.stop() }
 
@@ -18,6 +19,7 @@ struct TaskListBlankDoubleClick: NSViewRepresentable {
         var origin = CGPoint.zero
         var excluded: [CGRect] = []
         var add: () -> Void = {}
+        var dismissEmptyDraft: () -> Void = {}
         private var monitor: Any?
         private var down: CGPoint?
         override var isFlipped: Bool { true }
@@ -32,18 +34,26 @@ struct TaskListBlankDoubleClick: NSViewRepresentable {
             }
         }
         func receive(_ event: NSEvent) {
-            guard event.window === window, window != nil else { return }
+            guard let window, event.window === window, let content = window.contentView else { return }
             let local = convert(event.locationInWindow, from: nil)
             let point = CGPoint(x: local.x + origin.x, y: local.y + origin.y)
-            let blank = enabled && bounds.contains(local) && !excluded.contains { $0.contains(point) }
+            var hit = content.hitTest(content.convert(event.locationInWindow, from: nil))
+            var interactive = false
+            while let view = hit {
+                if view is NSTextView || view is NSControl { interactive = true; break }
+                hit = view.superview
+            }
+            let blank = !interactive && bounds.contains(local) && !excluded.contains { $0.contains(point) }
             switch event.type {
             case .leftMouseDown: down = blank ? local : nil
             case .leftMouseDragged:
                 if let start = down, hypot(local.x - start.x, local.y - start.y) >= 6 { down = nil }
             case .leftMouseUp:
                 defer { down = nil }
-                if let start = down, blank, event.clickCount == 2,
-                   hypot(local.x - start.x, local.y - start.y) < 6 { add() }
+                if let start = down, blank, hypot(local.x - start.x, local.y - start.y) < 6 {
+                    if event.clickCount == 1 { dismissEmptyDraft() }
+                    else if enabled && event.clickCount == 2 { add() }
+                }
             default: break
             }
         }

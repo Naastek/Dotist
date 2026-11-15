@@ -45,7 +45,12 @@ extension MainWindow {
                     }
                 .background(TaskPickupFrameProbe(runtime: reorderRuntime, role: .viewport))
                 .background(TaskListBlankDoubleClick(enabled: state.groupID != nil && editing == nil && draftAfter == nil && addingToGroup == nil && drag == nil && model.dragId == nil,
-                    origin: listViewport.origin, excluded: rowFrames.map(\.frame) + groupFrames.map(\.frame) + Array(composerFrames.values)) {
+                    origin: listViewport.origin, excluded: rowFrames.map(\.frame) + groupFrames.map(\.frame) + Array(composerFrames.values), dismissEmptyDraft: {
+                        guard draftAfter != nil || addingToGroup != nil,
+                              let editor = NSApp.keyWindow?.firstResponder as? TaskTextView,
+                              !editor.hasMarkedText(), editor.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                        _ = editor.window?.makeFirstResponder(nil)
+                    }) {
                     if let id = state.groupID { activateGroupComposer(id) }
                 })
                 .background(GeometryReader { geometry in
@@ -295,8 +300,8 @@ extension MainWindow {
         return TaskEmptyStateLayout(viewportHeight: viewportHeight, minimumTop: emptyStateMinimumTop) {
             TaskEmptyStateContent(title: additionalFilterCount > 0 ? (model.text("没有符合条件的任务")) : model.text(context.title), hint: context.hint.map { model.text($0) }, language: model.language) {
                 if additionalFilterCount > 0 {
-                    Button(model.text("清除附加条件"), action: clearAdditionalFilters)
-                        .accessibilityIdentifier("empty-clear-filters")
+                    Button(model.text("筛选")) { showFilters = true }
+                        .accessibilityIdentifier("empty-open-filters")
                 }
                 if context.allowsAdding {
                     Button { focusEmptyStateComposer(context) } label: {

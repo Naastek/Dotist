@@ -174,7 +174,6 @@ struct MainWindow: View {
                 header
                 DateFilterPushdown(isOpen: filterPresentation.isOpen) { filterStrip }
                 VStack(spacing: 0) {
-                    additionalFilterLine
                     taskList
                 }.background(DateFilterContentClickObserver(enabled: filterPresentation.isOpen, dismiss: filterPresentation.contentClicked))
             }

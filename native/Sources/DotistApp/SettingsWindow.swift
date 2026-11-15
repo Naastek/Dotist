@@ -363,6 +363,7 @@ struct SettingsWindow: View {
     }
     private func toolbarTitle(_ item: ToolbarItem) -> String {
         switch item {
+        case .filters: return "筛选"
         case .filter: return "日期筛选"
         case .completion: return "只看未完成"
         case .calendar: return "日历"

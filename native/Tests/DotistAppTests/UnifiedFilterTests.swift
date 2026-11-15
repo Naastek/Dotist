@@ -49,7 +49,7 @@ final class UnifiedFilterTests: XCTestCase {
             guard root.responds(to: selector), let children = root.perform(selector)?.takeUnretainedValue() as? [NSObject] else { return nil }
             return children.lazy.compactMap { element($0, id) }.first
         }
-        let panel = NativeRenderingFixture(view.unifiedFilterPanel, size: CGSize(width: 300, height: 180))
+        let panel = NativeRenderingFixture(view.unifiedFilterPanel, size: CGSize(width: 300, height: 230))
         defer { panel.close() }
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertNotNil(element(panel.host, "tag-filter"))
@@ -58,13 +58,16 @@ final class UnifiedFilterTests: XCTestCase {
         if let path = ProcessInfo.processInfo.environment["DOTIST_FILTER_EVIDENCE_DIR"] {
             try panelImage.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path).appendingPathComponent("附加筛选面板.png"))
         }
+        let previous = ToolbarConfig.shared.visibility(of: .filters)
+        ToolbarConfig.shared.setVisibility(.always, for: .filters)
+        defer { ToolbarConfig.shared.setVisibility(previous, for: .filters) }
         for width in [320.0, 364.0] {
             let fixture = NativeRenderingFixture(view, size: CGSize(width: width, height: 620))
             defer { fixture.close() }
             try await Task.sleep(for: .milliseconds(100))
             XCTAssertFalse(fixture.window.isVisible)
-            for id in ["filter-group", "unified-filter", "empty-clear-filters"] {
-                let node = try XCTUnwrap(element(fixture.host, id))
+            for id in ["unified-filter", "empty-open-filters"] {
+                let node = try XCTUnwrap(element(fixture.host, id), id)
                 let frame = (node as? any NSAccessibilityElementProtocol)?.accessibilityFrame() ?? .zero
                 let bounds = fixture.window.convertToScreen(fixture.host.convert(fixture.host.bounds, to: nil))
                 XCTAssertGreaterThan(frame.width, 0)
