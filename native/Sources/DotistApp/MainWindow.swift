@@ -27,7 +27,7 @@ struct MainWindow: View {
     @State var composerFrames: [String: CGRect] = [:]
     @State var toolbarDrag: ToolbarDragSession?
     @GestureState var toolbarGestureActive = false
-    @State private var toolbarFrames: [ToolbarItem: CGRect] = [:]
+    @State var toolbarFrames: [ToolbarItem: CGRect] = [:]
     @StateObject var headerPresentation = HeaderPresentation()
     var headerPopover: HeaderPopover? {
         get { headerPresentation.active }

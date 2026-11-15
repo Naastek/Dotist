@@ -24,12 +24,24 @@ enum ToolbarDragLayout {
 struct ToolbarDragSession {
     let item: ToolbarItem
     let items: [ToolbarItem]
+    var frames: [ToolbarItem: CGRect] = [:]
     var translation: CGFloat = 0
     var source: Int { items.firstIndex(of: item) ?? 0 }
-    var target: Int { ToolbarDragLayout.targetIndex(from: source, translation: translation, count: items.count) }
+    var target: Int {
+        guard translation.isFinite else { return source }
+        guard let origin = frames[item] else { return ToolbarDragLayout.targetIndex(from: source, translation: translation, count: items.count) }
+        let center = origin.midX + translation
+        return items.indices.min { a, b in
+            abs((frames[items[a]]?.midX ?? origin.midX) - center) < abs((frames[items[b]]?.midX ?? origin.midX) - center)
+        } ?? source
+    }
     func offset(for item: ToolbarItem) -> CGFloat {
         guard let index = items.firstIndex(of: item) else { return 0 }
-        return ToolbarDragLayout.offset(index: index, source: source, target: target, translation: translation)
+        if index == source { return translation }
+        let width = (frames[self.item]?.width ?? 24) + 1
+        if source < target && index > source && index <= target { return -width }
+        if target < source && index >= target && index < source { return width }
+        return 0
     }
 }
 

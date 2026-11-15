@@ -4,6 +4,10 @@ import DotistCore
 import SwiftUI
 
 extension MainWindow {
+    var draftMotion: Animation? {
+        LayoutMotionInputs.shouldReduceMotion(reduceMotion) ? nil : .easeInOut(duration: 0.2)
+    }
+
     func beginGroupDraft(_ group: DotistGroup, after task: DotistTask?) {
         withAnimation(groupCollapseAnimation) { state.setGroupCollapsed(false, id: group.id) }
         if let task { startDraft(after: task) }
@@ -57,6 +61,7 @@ extension MainWindow {
                     .id("draft:\(task.id)").frame(height: draftHeight)
                 Color.clear.frame(width: 0, height: 0)
             }.background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(0.18)).padding(.horizontal, -6))
+                .transition(.opacity.combined(with: .move(edge: .top)))
         }
     }
 

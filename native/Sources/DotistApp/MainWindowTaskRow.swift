@@ -167,7 +167,7 @@ extension MainWindow {
     }
 
     private func nativeRowAction(_ task: DotistTask, symbol: String, label: String, visible: Bool, destructive: Bool = false, action: @escaping () -> Void) -> some View {
-        TaskNativeAction(symbol: symbol, label: model.text(label).replacingOccurrences(of: "{title}", with: task.title), identifier: "task-action:\(task.id):\(symbol)", selection: selection.row(task.id), visible: visible, destructive: destructive, action: action)
+        TaskNativeAction(symbol: symbol, label: model.text(label).replacingOccurrences(of: "{title}", with: task.title), identifier: "task-action:\(task.id):\(symbol)", selection: selection.row(task.id), visible: visible, destructive: destructive, tooltip: model.text(label).replacingOccurrences(of: "{title}", with: "").trimmingCharacters(in: .whitespaces), action: action)
             .frame(width: 22, height: 22)
     }
 

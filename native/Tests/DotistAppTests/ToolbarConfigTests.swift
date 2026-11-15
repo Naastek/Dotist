@@ -4,6 +4,24 @@ import XCTest
 
 @MainActor
 final class ToolbarConfigTests: XCTestCase {
+    func testDateOrderPersistsAndExpandedWidthDrivesDrag() {
+        let suite = "dotist-date-order-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let config = ToolbarConfig(defaults: defaults)
+        config.move(.filter, onto: .lock)
+        XCTAssertEqual(ToolbarConfig(defaults: defaults).order, config.order)
+        let frames: [ToolbarItem: CGRect] = [.filters: CGRect(x: 0, y: 0, width: 24, height: 24),
+            .filter: CGRect(x: 25, y: 0, width: 100, height: 24), .pin: CGRect(x: 126, y: 0, width: 24, height: 24)]
+        var session = ToolbarDragSession(item: .filter, items: [.filters, .filter, .pin], frames: frames)
+        session.translation = 63
+        XCTAssertEqual(session.target, 2)
+        XCTAssertEqual(session.offset(for: .pin), -101)
+        session.translation = -63
+        XCTAssertEqual(session.target, 0)
+        XCTAssertEqual(session.offset(for: .filters), 101)
+    }
+
     func testAdditionalFiltersHaveIndependentVisibility() {
         let suite = "dotist-filters-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

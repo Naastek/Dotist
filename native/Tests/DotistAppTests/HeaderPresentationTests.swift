@@ -94,18 +94,17 @@ final class HeaderPresentationTests: XCTestCase {
         }
     }
 
-    func testReorderIsLimitedToVisualSection() throws {
+    func testDateReordersAcrossAllToolbarControls() throws {
         let view = try mainWindow()
-        XCTAssertEqual(view.dateToolbarItems, [.filter])
-        for item in view.windowToolbarItems + view.dateToolbarItems {
+        XCTAssertTrue(view.windowToolbarItems.contains(.filter))
+        for item in view.windowToolbarItems {
             let items = view.reorderItems(for: item)
             var session = ToolbarDragSession(item: item, items: items)
             session.translation = -1000
             XCTAssertEqual(items[session.target], items.first)
             session.translation = 1000
             XCTAssertEqual(items[session.target], items.last)
-            let excluded = view.dateToolbarItems.contains(item) ? view.windowToolbarItems : view.dateToolbarItems
-            for other in excluded { XCTAssertEqual(session.offset(for: other), 0) }
+            XCTAssertEqual(items, view.windowToolbarItems)
         }
     }
 

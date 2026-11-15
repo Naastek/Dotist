@@ -79,6 +79,7 @@ struct TaskNativeAction: NSViewRepresentable {
     let selection: TaskRowSelection
     let visible: Bool
     var destructive = false
+    var tooltip: String? = nil
     let action: () -> Void
 
     final class Button: NSButton {
@@ -122,7 +123,14 @@ struct TaskNativeAction: NSViewRepresentable {
             for area in trackingAreas { removeTrackingArea(area) }
             addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
             super.updateTrackingAreas()
+            refreshHover()
         }
+        // 显现时指针可能已经位于按钮上，不能只等待下一次 entered。
+        func refreshHover() {
+            let inside = eligible && window.map { bounds.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil)) } == true
+            if hovered != inside { hovered = inside; needsDisplay = true }
+        }
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); refreshHover() }
         override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
         override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
         override func draw(_ dirtyRect: NSRect) {
@@ -173,7 +181,8 @@ struct TaskNativeAction: NSViewRepresentable {
         button.symbolConfiguration = .init(pointSize: 11, weight: .regular)
         button.setAccessibilityLabel(label)
         button.setAccessibilityIdentifier(identifier)
-        button.toolTip = label
+        button.toolTip = visible ? (tooltip ?? label) : nil
+        button.refreshHover()
         button.needsDisplay = true
     }
     static func dismantleNSView(_ button: Button, coordinator: ()) {

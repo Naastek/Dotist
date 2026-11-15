@@ -5,19 +5,15 @@ import SwiftUI
 
 extension MainWindow {
     private var sortableToolbarItems: [ToolbarItem] {
-        toolbarConfig.order.filter { $0 != .collapse && $0 != .completion && toolbarConfig.visibility(of: $0) != .hidden }
+        toolbarConfig.order.filter { $0 != .collapse && $0 != .completion && $0 != .calendar && toolbarConfig.visibility(of: $0) != .hidden }
     }
 
     var windowToolbarItems: [ToolbarItem] {
-        sortableToolbarItems.filter { $0 != .filter && $0 != .calendar }
-    }
-
-    var dateToolbarItems: [ToolbarItem] {
-        [.filter].filter { toolbarConfig.visibility(of: $0) != .hidden || toolbarConfig.visibility(of: .calendar) != .hidden }
+        sortableToolbarItems
     }
 
     func reorderItems(for item: ToolbarItem) -> [ToolbarItem] {
-        dateToolbarItems.contains(item) ? dateToolbarItems : windowToolbarItems
+        windowToolbarItems
     }
 
     private var toolbarAnimation: Animation? {
@@ -27,9 +23,7 @@ extension MainWindow {
     var header: some View {
         HeaderClusterLayout(reservedWindowWidth: CGFloat(windowToolbarItems.count + (!primary && close != nil ? 1 : 0)) * 25 + 1) {
             Group { if !primary { groupSelector } else { Color.clear.frame(width: 0, height: 24) } }
-            headerCluster {
-                ForEach(dateToolbarItems, id: \.self) { item in configuredHeaderControl(item) }
-            }
+            Color.clear.frame(width: 0, height: 24)
             headerCluster {
                 ForEach(windowToolbarItems, id: \.self) { item in configuredHeaderControl(item) }
                 if !primary, let close { toolbarButton("xmark", label: model.text("关闭面板"), action: close) }
@@ -107,7 +101,7 @@ extension MainWindow {
                 guard item != .collapse else { return }
                 if toolbarDrag == nil {
                     guard (NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags).contains(.command) else { return }
-                    toolbarDrag = ToolbarDragSession(item: item, items: items)
+                    toolbarDrag = ToolbarDragSession(item: item, items: items, frames: toolbarFrames)
                 }
                 guard toolbarDrag?.item == item else { return }
                 toolbarDrag?.translation = value.translation.width

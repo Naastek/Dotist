@@ -22,6 +22,10 @@ extension MainWindow {
                         VStack(alignment: .leading, spacing: 0) { listSections }
                             .animation(LayoutMotionInputs.shouldReduceMotion(reduceMotion) ? nil : .easeOut(duration: 0.16),
                                        value: TaskContentSelection(state: state))
+                            // 草稿和相邻任务在同一布局事务内腾位、回填；不监听输入文字。
+                            .animation(draftMotion, value: draftAfter)
+                            .animation(draftMotion, value: addingToGroup)
+                            .animation(draftMotion, value: model.tasks.map(\.id))
                             // The viewport owns surplus height. Never propose that
                             // height to sections or their minimum-height row labels.
                             .fixedSize(horizontal: false, vertical: true)
@@ -219,7 +223,7 @@ extension MainWindow {
                     }
                 }
                 if state.showsGroupContents(group.id, hasHeader: visible), addingToGroup == group.id {
-                    extra("group-draft:" + group.id, groupDraft(group))
+                    extra("group-draft:" + group.id, groupDraft(group).transition(.opacity.combined(with: .move(edge: .top))))
                 }
             }
         } else if state.scope == "today" && customStart == nil {
