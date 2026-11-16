@@ -38,6 +38,11 @@ enum DotistDesign {
             ? NSColor.white.withAlphaComponent(0.10) : NSColor.white.withAlphaComponent(0.68)
     })
 
+    // 两套控件共用柔边反馈；不是新增玻璃层，静止时完全透明。
+    static func hoverInk(dark: Bool, highContrast: Bool) -> NSColor {
+        (dark ? NSColor.white : NSColor.black).withAlphaComponent(highContrast ? 0.24 : (dark ? 0.14 : 0.10))
+    }
+
     static func materialOpacity(_ opacity: UInt8, dark: Bool, highContrast: Bool) -> Double {
         let requested = Double(opacity) / 100
         return highContrast ? max(requested, 0.96) : requested

@@ -138,18 +138,36 @@ struct HeaderToolStyle: ButtonStyle {
         @State private var hovered = false
         var body: some View {
             configuration.label
-                .background(RoundedRectangle(cornerRadius: 8).fill(DotistDesign.rule.opacity(configuration.isPressed ? 0.26 : hovered ? 0.15 : 0)))
-                .overlay(alignment: .top) {
-                    if hovered {
-                        Circle().fill(DotistDesign.accent)
-                            .frame(width: configuration.isPressed ? 3 : 2, height: configuration.isPressed ? 3 : 2)
-                            .padding(.top, 0.5)
-                            .allowsHitTesting(false)
-                    }
+                .background {
+                    HeaderHoverFeedback(hovered: hovered, pressed: configuration.isPressed)
                 }
                 .onHover { hovered = $0 }
                 .onDisappear { hovered = false }
         }
+    }
+}
+
+/// 与真实按钮共用的状态背景，便于离屏核验，不改变按钮身份。
+struct HeaderHoverFeedback: View {
+    let hovered: Bool
+    let pressed: Bool
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        GeometryReader { geometry in
+            let diameter = max(1, min(geometry.size.width, geometry.size.height))
+            let ink = DotistDesign.hoverInk(dark: scheme == .dark, highContrast: contrast == .increased)
+            let peak = ink.withAlphaComponent(ink.alphaComponent * (pressed ? 1.6 : 1))
+            RadialGradient(colors: [Color(peak), Color(ink.withAlphaComponent(0))],
+                           center: .center, startRadius: 0, endRadius: diameter / 2)
+                .frame(width: diameter, height: diameter)
+                .scaleEffect(x: geometry.size.width / diameter, y: geometry.size.height / diameter)
+                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                .opacity(enabled && (hovered || pressed) ? 1 : 0)
+        }
+        .allowsHitTesting(false)
     }
 }
 

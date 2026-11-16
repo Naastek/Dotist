@@ -155,13 +155,17 @@ struct TaskNativeAction: NSViewRepresentable {
                 transform.concat()
             }
             let focused = window?.firstResponder === self
-            let active = eligible && (hovered || isHighlighted || focused)
+            let active = eligible && isEnabled && (hovered || isHighlighted || focused)
             let color = NSColor(active ? (destructive ? DotistDesign.danger : DotistDesign.accent) : DotistDesign.muted)
-            if active {
+            if eligible && isEnabled && (hovered || isHighlighted) {
                 let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                // 无边界的局部光照，边缘归零，不再绘制独立按钮底板。
-                let peak: CGFloat = isHighlighted ? 0.24 : (dark ? 0.16 : 0.28)
-                let glow = NSGradient(starting: NSColor.white.withAlphaComponent(peak), ending: NSColor.white.withAlphaComponent(0))!
+                // 柔边状态染色直接叠在共享玻璃上，不生成独立底板。
+                let high = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ||
+                    effectiveAppearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua]) == .accessibilityHighContrastAqua ||
+                    effectiveAppearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua]) == .accessibilityHighContrastDarkAqua
+                let ink = DotistDesign.hoverInk(dark: dark, highContrast: high)
+                let peak = ink.withAlphaComponent(ink.alphaComponent * (isHighlighted ? 1.6 : 1))
+                let glow = NSGradient(starting: peak, ending: ink.withAlphaComponent(0))!
                 NSGraphicsContext.saveGraphicsState()
                 NSBezierPath(rect: bounds).addClip()
                 glow.draw(fromCenter: NSPoint(x: bounds.midX, y: bounds.midY), radius: 0,
@@ -202,13 +206,6 @@ struct TaskNativeAction: NSViewRepresentable {
             }
             color.setStroke()
             path.stroke()
-            if eligible && hovered && !focused {
-                color.setFill()
-                // 圆点完整留在 22pt 热区内。
-                let diameter: CGFloat = isHighlighted ? 3 : 2
-                let top = bounds.maxY - 0.5 - diameter
-                NSBezierPath(ovalIn: NSRect(x: cx - diameter / 2, y: top, width: diameter, height: diameter)).fill()
-            }
             if focused {
                 NSColor(DotistDesign.accent).setFill()
                 NSBezierPath(roundedRect: NSRect(x: bounds.midX - 5, y: 1, width: 10, height: 2), xRadius: 1, yRadius: 1).fill()
