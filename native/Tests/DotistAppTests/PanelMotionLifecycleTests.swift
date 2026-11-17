@@ -73,11 +73,17 @@ final class PanelMotionLifecycleTests: XCTestCase {
         defer { panel.close() }
         let start = panel.frame, target = NSRect(x: 150, y: 180, width: 48, height: 48)
         var completions = 0
-        let animation = PanelFrameAnimation(window: panel, target: target, duration: 0.34) { completions += 1 }
+        let completed = expectation(description: "The hidden frame driver delivers its final frame")
+        let animation = PanelFrameAnimation(window: panel, target: target, duration: 0.34) {
+            completions += 1
+            completed.fulfill()
+        }
         animation.startMotion()
         XCTAssertTrue(animation.isAnimating)
         XCTAssertNil(animation.displayLink, "Hidden clock tests use only the bounded fallback")
-        try await Task.sleep(for: .milliseconds(450))
+        // Sleeping does not establish ordering with the driver's main-actor task:
+        // a busy runner can resume this test before its overdue final tick.
+        await fulfillment(of: [completed], timeout: 5)
         XCTAssertEqual(panel.frame, target)
         XCTAssertEqual(completions, 1)
         XCTAssertFalse(animation.isAnimating)
