@@ -52,7 +52,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
     private func save(_ image: NSBitmapImageRep, _ name: String, directory: URL? = nil) throws {
         try XCTUnwrap(image.representation(using: .png, properties: [:])).write(to: (directory ?? evidence).appendingPathComponent(name + ".png"))
     }
-    private func ink(_ image: NSBitmapImageRep, rect: CGRect, threshold: CGFloat = 0.2) throws -> CGRect {
+    private func ink(_ image: NSBitmapImageRep, rect: CGRect, threshold: CGFloat = 0.2, backdropX: CGFloat? = nil) throws -> CGRect {
         let scale = CGFloat(image.pixelsWide) / image.size.width
         var x0 = image.pixelsWide, x1 = -1, y0 = image.pixelsHigh, y1 = -1
         let xMin = max(0, min(image.pixelsWide, Int(ceil(rect.minX * scale))))
@@ -63,9 +63,13 @@ final class FeedbackFourRegressionTests: XCTestCase {
             throw NSError(domain: "DotistRenderingFixture", code: 1, userInfo: [NSLocalizedDescriptionKey: "Ink rectangle \(rect) lies outside bitmap \(image.pixelsWide)x\(image.pixelsHigh) at scale \(scale)"])
         }
         for y in yMin..<yMax {
+            // Sample the empty part of the same field on each scanline so the
+            // horizontal glass rim and shadow do not count as text.
+            let background = backdropX.flatMap { image.colorAt(x: Int($0 * scale), y: y)?.usingColorSpace(.deviceRGB) }
+            let backgroundInk = background.map { $0.alphaComponent * (1 - max($0.redComponent, $0.greenComponent, $0.blueComponent)) } ?? 0
             for x in xMin..<xMax {
                 guard let c = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
-                      c.alphaComponent * (1 - max(c.redComponent, c.greenComponent, c.blueComponent)) > threshold else { continue }
+                      c.alphaComponent * (1 - max(c.redComponent, c.greenComponent, c.blueComponent)) - backgroundInk > threshold else { continue }
                 x0 = min(x0, x); x1 = max(x1, x); y0 = min(y0, y); y1 = max(y1, y)
             }
         }
@@ -92,7 +96,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
                             let bitmap = try await fixture.capture(scale: scale)
                             let f = fixture.host.convert(field.bounds, from: field)
                             let group = try ink(bitmap, rect: CGRect(x: 16, y: 580, width: f.minX - 24, height: 32))
-                            let input = try ink(bitmap, rect: CGRect(x: f.minX, y: 580, width: f.width, height: 32))
+                            let input = try ink(bitmap, rect: CGRect(x: f.minX + 4, y: 580, width: f.width - 20, height: 32), backdropX: f.maxX - 12)
                             let context = "\(language), system=\(system), value=\(value), focus=\(focused), bitmap=\(scale)x, reportedBacking=\(fixture.window.backingScaleFactor)x (\(backingSource); screens=\(NSScreen.screens.count))"
                             print("FEEDBACK COMPOSER \(context): control=\(f), groupInk=\(group), inputInk=\(input), axis=594, margins=\(input.minY - 568)/\(620 - input.maxY)")
                             XCTAssertEqual(group.midY, 594, accuracy: 3.0, context)
