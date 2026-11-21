@@ -96,7 +96,12 @@ final class FeedbackFourRegressionTests: XCTestCase {
                             let bitmap = try await fixture.capture(scale: scale)
                             let f = fixture.host.convert(field.bounds, from: field)
                             let group = try ink(bitmap, rect: CGRect(x: 16, y: 580, width: f.minX - 24, height: 32))
-                            let input = try ink(bitmap, rect: CGRect(x: f.minX + 4, y: 580, width: f.width - 20, height: 32), backdropX: f.maxX - 12)
+                            // Sample glyphs inside the flat glass interior. At 2x bitmap
+                            // scale on a 1x display the rounded corner has its own
+                            // antialiasing, which a straight-edge reference cannot cancel.
+                            let inputRegion = CGRect(x: f.minX + 20, y: f.midY - 15,
+                                                     width: f.width - 40, height: 30)
+                            let input = try ink(bitmap, rect: inputRegion, backdropX: f.maxX - 20)
                             let context = "\(language), system=\(system), value=\(value), focus=\(focused), bitmap=\(scale)x, reportedBacking=\(fixture.window.backingScaleFactor)x (\(backingSource); screens=\(NSScreen.screens.count))"
                             print("FEEDBACK COMPOSER \(context): control=\(f), groupInk=\(group), inputInk=\(input), axis=594, margins=\(input.minY - 568)/\(620 - input.maxY)")
                             XCTAssertEqual(group.midY, 594, accuracy: 3.0, context)
