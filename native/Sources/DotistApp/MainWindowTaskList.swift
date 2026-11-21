@@ -9,7 +9,6 @@ extension MainWindow {
     #endif
 
     var taskList: some View {
-        if QAPerf.enabled { QAPerf.count(.taskListBody) }
         #if DEBUG
         Self.taskListRenders += 1
         #endif
@@ -22,10 +21,6 @@ extension MainWindow {
                         VStack(alignment: .leading, spacing: 0) { listSections }
                             .animation(LayoutMotionInputs.shouldReduceMotion(reduceMotion) ? nil : .easeOut(duration: 0.16),
                                        value: TaskContentSelection(state: state))
-                            // 草稿和相邻任务在同一布局事务内腾位、回填；不监听输入文字。
-                            .animation(draftMotion, value: draftAfter)
-                            .animation(draftMotion, value: addingToGroup)
-                            .animation(draftMotion, value: model.tasks.map(\.id))
                             // The viewport owns surplus height. Never propose that
                             // height to sections or their minimum-height row labels.
                             .fixedSize(horizontal: false, vertical: true)
@@ -48,15 +43,6 @@ extension MainWindow {
                             .background(TaskReorderScrollBridge(runtime: reorderRuntime))
                     }
                 .background(TaskPickupFrameProbe(runtime: reorderRuntime, role: .viewport))
-                .background(TaskListBlankDoubleClick(enabled: state.groupID != nil && editing == nil && draftAfter == nil && addingToGroup == nil && drag == nil && model.dragId == nil,
-                    origin: listViewport.origin, excluded: rowFrames.map(\.frame) + groupFrames.map(\.frame) + Array(composerFrames.values), dismissEmptyDraft: {
-                        guard draftAfter != nil || addingToGroup != nil,
-                              let editor = NSApp.keyWindow?.firstResponder as? TaskTextView,
-                              !editor.hasMarkedText(), editor.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                        _ = editor.window?.makeFirstResponder(nil)
-                    }) {
-                    if let id = state.groupID { activateGroupComposer(id) }
-                })
                 .background(GeometryReader { geometry in
                     Color.clear.onAppear { listViewport = geometry.frame(in: .named(Self.listSpace)) }
                         .onChange(of: geometry.frame(in: .named(Self.listSpace))) { listViewport = $0 }
@@ -71,10 +57,10 @@ extension MainWindow {
                 .onReceive(selection.navigation) { id in proxy.scrollTo(id, anchor: .center) }
                 .onChange(of: model.focusNavigation) { _ in
                     guard primary, let id = model.focusId else { return }
-                    proxy.scrollTo("row:" + (model.tasks.first(where: { $0.id == id })?.category ?? "") + ":" + id, anchor: .center)
+                    proxy.scrollTo(id, anchor: .center)
                 }
                 .onAppear {
-                    if let id = model.focusId, let task = model.tasks.first(where: { $0.id == id }) { proxy.scrollTo("row:" + task.category + ":" + id, anchor: .center) }
+                    if let id = model.focusId { proxy.scrollTo(id, anchor: .center) }
                     else if let id = model.gotoGroup { proxy.scrollTo(id, anchor: .top) }
                     model.gotoGroup = nil
                 }
@@ -135,7 +121,6 @@ extension MainWindow {
     }
 
     var listEntries: [TaskListEntry] {
-        if QAPerf.enabled { QAPerf.count(.taskListEntries) }
         var entries: [TaskListEntry] = []
         func extra(_ id: String, _ view: some View) {
             entries.append(.init(id: id, content: AnyView(view)))
@@ -223,11 +208,10 @@ extension MainWindow {
                     }
                 }
                 if state.showsGroupContents(group.id, hasHeader: visible), addingToGroup == group.id {
-                    extra("group-draft:" + group.id, groupDraft(group).transition(.opacity.combined(with: .move(edge: .top))))
+                    extra("group-draft:" + group.id, groupDraft(group))
                 }
             }
-        } else if state.scope == "today" && customStart == nil {
-            let values = model.todayTaskSections(groupID: state.groupID, tag: state.activeTag)
+        } else if let values = state.todayAgenda(in: model) {
             var hasSection = false
             if !values.overdue.matches.isEmpty { section("已逾期", result: values.overdue, key: "overdue"); hasSection = true }
             if !values.today.matches.isEmpty {
@@ -235,21 +219,23 @@ extension MainWindow {
                 flat(values.today, section: "today", date: Date().dotistDay); hasSection = true
             }
             if !values.upcoming.matches.isEmpty { disclosure("接下来 {n} 天".replacingOccurrences(of: "{n}", with: "7"), result: values.upcoming, upcoming: true, gap: hasSection ? 20 : 0); hasSection = true }
-            if !hideCompleted && !values.completed.matches.isEmpty { disclosure("已完成", result: values.completed, upcoming: false, gap: hasSection ? 20 : 0) }
+            if !values.completed.matches.isEmpty { disclosure("已完成", result: values.completed, upcoming: false, gap: hasSection ? 20 : 0) }
+        } else if let plan = state.planScope {
+            flat(dateFilterResult(), section: plan.rawValue)
         } else {
             let result = dateFilterResult()
             if customDateRange == nil && state.scope == "overdue" {
                 if !result.matches.isEmpty { section("已逾期", result: result, key: "overdue") }
             } else if customDateRange == nil && state.scope == "undated" { flat(result, section: "undated") }
             else if customDateRange == nil && state.scope == "done" {
-                if !hideCompleted && !result.matches.isEmpty { section("已完成", result: result, key: "done") }
+                if !result.matches.isEmpty { section("已完成", result: result, key: "done") }
             } else {
                 let dates = Array(Set(result.matches.compactMap(\.dueDate))).sorted()
                 for (index, date) in dates.enumerated() {
                     section(model.dueLabel(date), result: dateFilterResult(range: TaskDateRange(date, date)), key: date, date: date, gap: index > 0 ? 20 : 0)
                 }
                 let done = dateFilterResult(completed: true)
-                if !hideCompleted && !done.matches.isEmpty { disclosure("已完成", result: done, upcoming: false, gap: dates.isEmpty ? 0 : 20) }
+                if !done.matches.isEmpty { disclosure("已完成", result: done, upcoming: false, gap: dates.isEmpty ? 0 : 20) }
             }
         }
         return entries
@@ -270,18 +256,16 @@ extension MainWindow {
         TaskEmptyState(scope: state.scope, groupID: state.groupID, customRange: customDateRange)
     }
 
-    var showsEmptyState: Bool {
-        if customDateRange == nil && state.scope == "all" { return panelTasks.filter { !hideCompleted || !$0.completed }.isEmpty }
-        if customDateRange == nil && state.scope == "today" {
-            let sections = model.todayTaskSections(groupID: state.groupID, tag: state.activeTag)
-            return sections.today.matches.isEmpty && sections.overdue.matches.isEmpty
+    private var showsEmptyState: Bool {
+        if customDateRange == nil && state.scope == "all" { return panelTasks.isEmpty }
+        if let sections = state.todayAgenda(in: model) {
+            return sections.openCount == 0
                 && !(upcomingOpen && !sections.upcoming.matches.isEmpty)
-                && !(!hideCompleted && todayDoneOpen && !sections.completed.matches.isEmpty)
+                && !(todayDoneOpen && !sections.completed.matches.isEmpty)
         }
-        if hideCompleted && state.scope == "done" && customDateRange == nil { return true }
         let result = dateFilterResult()
         guard result.matches.isEmpty else { return false }
-        let showsCompletedRows = !hideCompleted && todayDoneOpen && !dateFilterResult(completed: true).matches.isEmpty
+        let showsCompletedRows = todayDoneOpen && !dateFilterResult(completed: true).matches.isEmpty
             && (customDateRange != nil || !["all", "overdue", "undated", "done"].contains(state.scope))
         return !showsCompletedRows
     }
@@ -289,99 +273,61 @@ extension MainWindow {
     // Folded auxiliary sections retain their original position. The empty-state
     // block stays below their hit boxes, even in a short resized window.
     private var emptyStateMinimumTop: CGFloat {
-        if customDateRange == nil && state.scope == "today" {
-            let sections = model.todayTaskSections(groupID: state.groupID, tag: state.activeTag)
-            let count = (sections.upcoming.matches.isEmpty ? 0 : 1) + (hideCompleted || sections.completed.matches.isEmpty ? 0 : 1)
+        if let sections = state.todayAgenda(in: model) {
+            let count = (sections.upcoming.matches.isEmpty ? 0 : 1) + (sections.completed.matches.isEmpty ? 0 : 1)
             return count == 0 ? 0 : CGFloat(count * 28 + (count - 1) * 20 + 16)
         }
         if (customDateRange != nil || !["all", "overdue", "undated", "done"].contains(state.scope)),
-           !hideCompleted, !dateFilterResult(completed: true).matches.isEmpty { return 44 }
+           !dateFilterResult(completed: true).matches.isEmpty { return 44 }
         return 0
     }
 
     private func emptyState(viewportHeight: CGFloat) -> some View {
         let context = emptyStateContext
         return TaskEmptyStateLayout(viewportHeight: viewportHeight, minimumTop: emptyStateMinimumTop) {
-            TaskEmptyStateContent(title: additionalFilterCount > 0 ? (model.text("没有符合条件的任务")) : model.text(context.title), hint: context.hint.map { model.text($0) }, language: model.language) {
-                if additionalFilterCount > 0 {
-                    Button(model.text("筛选")) { showFilters = true }
-                        .accessibilityIdentifier("empty-open-filters")
-                }
+            TaskEmptyStateContent(title: model.text(context.title), hint: context.hint.map { model.text($0) }, language: model.language) {
                 if context.allowsAdding {
                     Button { focusEmptyStateComposer(context) } label: {
                         TaskEmptyAddLabel()
-                            .opacity(composerFocused || composerFlight ? 0 : 1)
-                            .animation(LayoutMotionInputs.shouldReduceMotion(reduceMotion) ? nil : .easeOut(duration: composerFocused ? 0.12 : 0.15), value: composerFocused || composerFlight)
-                            .background(GeometryReader { geometry in
-                                Color.clear.preference(key: ComposerFrameKey.self, value: ["plus": geometry.frame(in: .named(Self.listSpace))])
-                            })
-                            .background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(emptyAddHovered && !composerFocused && !composerFlight ? 0.10 : 0)))
+                            .background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(emptyAddHovered ? 0.10 : 0)))
                     }.buttonStyle(.plain).modifier(DotistFocusRing())
-                        .allowsHitTesting(!composerFocused && !composerFlight)
-                        .accessibilityHidden(composerFocused || composerFlight)
                         .onHover { emptyAddHovered = $0 }
                         .accessibilityLabel(Text(model.text(TaskEmptyState.addAccessibilityLabel)))
                         .accessibilityIdentifier("empty-state-add")
                 }
             }
         }.accessibilityElement(children: .contain)
-            .onDisappear { dismissComposerCue() }
     }
 
     private func focusEmptyStateComposer(_ context: TaskEmptyState) {
         clearInputs()
         selection.update { $0.clear() }
         category = context.groupID
-        dueDate = context.dueDate.flatMap { Date.dotistDay($0) }
-        let canTravel = !LayoutMotionInputs.shouldReduceMotion(reduceMotion) && composerFrames["plus"] != nil && composerFrames["input"] != nil && !composerFlight && !composerFocused
-        if canTravel {
-            composerFlightGeneration = UUID()
-            let generation = composerFlightGeneration
-            composerFlight = true
-            composerFlightAtField = false
-            composerFocused = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) {
-                guard composerFlightGeneration == generation else { return }
-                withAnimation(.easeOut(duration: composerTravelDuration)) { composerFlightAtField = true }
-                DispatchQueue.main.asyncAfter(deadline: .now() + composerTravelDuration) {
-                    guard composerFlightGeneration == generation else { return }
-                    var transaction = Transaction(); transaction.disablesAnimations = true
-                    withTransaction(transaction) { composerFlight = false }
-                }
-            }
-        } else { composerFocused = true }
-    }
-
-    func activateGroupComposer(_ groupID: String) {
-        guard model.groups.contains(where: { $0.id == groupID }) else { return }
-        leaveInputs()
-        dismissComposerCue()
-        category = groupID
-        dueDate = TaskEmptyState(scope: state.scope, groupID: groupID, customRange: customDateRange).dueDate.flatMap { Date.dotistDay($0) }
+        composerDate.contextDay = context.dueDate
         composerFocused = true
-    }
-
-    func activateEmptyStateComposer() {
-        if showsEmptyState && emptyStateContext.allowsAdding { focusEmptyStateComposer(emptyStateContext) }
-        else { composerFocused = true }
-    }
-
-    var composerTravelDuration: Double {
-        guard Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa",
-              let value = ProcessInfo.processInfo.environment["DOTIST_QA_SLOW"],
-              let factor = Double(value), factor.isFinite, factor > 0 else { return 0.32 }
-        return 0.32 * factor
+        let generation = UUID()
+        composerCueGeneration = generation
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { composerCueVisible = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            guard composerCueGeneration == generation else { return }
+            if reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                composerCueVisible = false
+            } else {
+                withAnimation(.easeOut(duration: 0.2)) { composerCueVisible = false }
+            }
+        }
     }
 
     func dismissComposerCue() {
-        composerFlightGeneration = UUID()
-        var transaction = Transaction(); transaction.disablesAnimations = true
-        withTransaction(transaction) { composerFlight = false }
+        composerCueGeneration = UUID()
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { composerCueVisible = false }
     }
 
     @ViewBuilder private var listMenu: some View {
-        Button(model.text("添加任务")) { activateGroupComposer(state.groupID ?? category) }
-        Divider()
         Button(model.text("新建分组…")) { manageGroups = true }
         Button(model.text("管理分组…")) { manageGroups = true }
         Button(model.text("管理标签…")) { manageTags = true }
@@ -396,7 +342,7 @@ extension MainWindow {
             }.overlay(alignment: .top) {
                 if let notice {
                     Text(model.text(notice)).font(font(13)).foregroundStyle(DotistDesign.muted)
-                        .padding(.horizontal, 16).frame(height: 36).dotistGlass(.regular.tint(DotistTheme.tint(model.themeColor(forGroup: state.groupID), scheme)), in: Capsule()).dotistInlineShadow().fixedSize().offset(y: -48)
+                        .padding(.horizontal, 16).frame(height: 36).glassEffect(.regular, in: .capsule).fixedSize().offset(y: -48)
                         .onHover { noticeLifetime.setHovered($0, at: ProcessInfo.processInfo.systemUptime) }
                         .onDisappear { noticeLifetime.setHovered(false, at: ProcessInfo.processInfo.systemUptime) }
                 } else { undoToast }
@@ -413,7 +359,7 @@ extension MainWindow {
                     .accessibilityLabel(Text(model.text("关闭")))
             }.buttonStyle(.plain).font(font(13)).foregroundColor(DotistDesign.muted)
                 .padding(.leading, 16).padding(.trailing, 6).frame(height: 36)
-                .dotistGlass(.regular.tint(DotistTheme.tint(model.themeColor(forGroup: state.groupID), scheme)), in: Capsule()).dotistInlineShadow().fixedSize().offset(y: -48)
+                .glassEffect(.regular, in: .capsule).fixedSize().offset(y: -48)
                 .onHover { undoToastLifetime.setHovered($0, at: ProcessInfo.processInfo.systemUptime) }
                 .onDisappear { undoToastLifetime.setHovered(false, at: ProcessInfo.processInfo.systemUptime) }
                 .accessibilityIdentifier("undo-toast")

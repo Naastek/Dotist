@@ -8,9 +8,23 @@ import ServiceManagement
 @MainActor
 final class AppModel: ObservableObject {
     struct UndoEntry { let id: String; let title: String; let group: Bool }
-    @Published private(set) var tasks: [DotistTask] { didSet { filterCache.removeAll(keepingCapacity: true) } }
+    @Published private(set) var tasks: [DotistTask] { didSet { invalidateDateFilters() } }
     /// Rendering asks for the same per-group filters on every frame of a drag.
-    private var filterCache: [String: TaskFilterResult] = [:]
+    private struct FilterKey: Hashable {
+        let scope: String
+        let agenda: TodayKey
+        let range: TaskDateRange?
+        let completed: Bool
+        let firstWeekday: Int
+    }
+    private var filterCache: [FilterKey: TaskFilterResult] = [:]
+    private struct TodayKey: Hashable {
+        let groupID: String?
+        let tag: String?
+        let dayStart: Date
+        let timeZone: TimeZone
+    }
+    private var todayCache: [TodayKey: TaskTodaySections] = [:]
     @Published private(set) var groups: [DotistGroup]
     @Published private(set) var settings: DotistSettings {
         didSet { DotistDesign.fontPreferences = settings.fontPreferences }
@@ -55,7 +69,7 @@ final class AppModel: ObservableObject {
     private var dateFilterObservers = Set<AnyCancellable>()
 
     init(store: TaskStore? = nil) throws {
-        core = try store ?? TaskStore(includeExamples: true)
+        core = try store ?? TaskStore()
         mcp = MCPService(store: core)
         let snapshot = try core.snapshot()
         tasks = snapshot.tasks
@@ -78,11 +92,12 @@ final class AppModel: ObservableObject {
         rebuildIndexes()
         // A stationary panel must recompute relative filters at midnight and
         // when the system changes its time zone or calendar preferences.
-        for name in [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
-            NotificationCenter.default.publisher(for: name).sink { [weak self] _ in
-                Task { @MainActor [weak self] in self?.objectWillChange.send() }
-            }.store(in: &dateFilterObservers)
-        }
+        Self.civilDateChanges().sink { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.invalidateDateFilters()
+                self?.objectWillChange.send()
+            }
+        }.store(in: &dateFilterObservers)
         observation = core.observe(onError: { [weak self] error in
             Task { @MainActor in self?.error = error.localizedDescription }
         }, onChange: { [weak self] snapshot in
@@ -104,6 +119,17 @@ final class AppModel: ObservableObject {
     }
 
     func text(_ source: String) -> String { dictionary[language]?[source] ?? source }
+    func todayCountLabel(_ count: Int) -> String {
+        text("今天还有 {n} 件未完成任务（含逾期）").replacingOccurrences(of: "{n}", with: "\(count)")
+    }
+
+    static func civilDateChanges() -> Publishers.MergeMany<NotificationCenter.Publisher> {
+        let dateChanges = [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange,
+                           .NSSystemClockDidChange, NSLocale.currentLocaleDidChangeNotification]
+            .map { NotificationCenter.default.publisher(for: $0) }
+        let wake = NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
+        return Publishers.MergeMany(dateChanges + [wake])
+    }
     func dueLabel(_ value: String) -> String {
         guard let date = Date.dotistDay(value) else { return value }
         let calendar = Calendar.current
@@ -170,8 +196,8 @@ final class AppModel: ObservableObject {
     func filteredTasks(scope: String, groupID: String? = nil, tag: String? = nil,
                        customRange: TaskDateRange? = nil, completed: Bool = false,
                        now: Date = Date(), calendar: Calendar = .current) -> TaskFilterResult {
-        // Only the default clock and calendar are cacheable; the key carries the day.
-        let key = "\(scope)|\(groupID ?? "-")|\(tag ?? "-")|\(customRange.map { "\($0.start)-\($0.end)" } ?? "-")|\(completed)|\(Int(now.timeIntervalSinceReferenceDate / 60))|\(calendar.identifier)|\(calendar.firstWeekday)"
+        let day = TodayKey(groupID: groupID, tag: tag, dayStart: calendar.startOfDay(for: now), timeZone: calendar.timeZone)
+        let key = FilterKey(scope: scope, agenda: day, range: customRange, completed: completed, firstWeekday: calendar.firstWeekday)
         if let hit = filterCache[key] { return hit }
         let result = TaskFiltering(tasks, now: now, calendar: calendar).filter(scope: scope, groupID: groupID, tag: tag,
                                                                customRange: customRange, completed: completed)
@@ -182,7 +208,17 @@ final class AppModel: ObservableObject {
 
     func todayTaskSections(groupID: String? = nil, tag: String? = nil,
                            now: Date = Date(), calendar: Calendar = .current) -> TaskTodaySections {
-        TaskFiltering(tasks, now: now, calendar: calendar).todaySections(groupID: groupID, tag: tag)
+        let key = TodayKey(groupID: groupID, tag: tag, dayStart: calendar.startOfDay(for: now), timeZone: calendar.timeZone)
+        if let hit = todayCache[key] { return hit }
+        let result = TaskFiltering(tasks, now: now, calendar: calendar).todaySections(groupID: groupID, tag: tag)
+        if todayCache.count >= 32 { todayCache.removeAll(keepingCapacity: true) }
+        todayCache[key] = result
+        return result
+    }
+
+    private func invalidateDateFilters() {
+        filterCache.removeAll(keepingCapacity: true)
+        todayCache.removeAll(keepingCapacity: true)
     }
 
     func dateFilterRange(scope: String, now: Date = Date(), calendar: Calendar = .current) -> TaskDateRange {

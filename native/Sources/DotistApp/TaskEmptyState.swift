@@ -24,6 +24,8 @@ struct TaskEmptyState: Equatable {
         else {
             switch scope {
             case "today": title = "今天没有安排"
+            case TaskPlanScope.today.rawValue: title = "没有今日计划"
+            case TaskPlanScope.week.rawValue: title = "没有本周计划"
             case "tomorrow": title = "明天没有任务"
             case "week": title = "本周没有任务"
             case "nextweek": title = "下周没有任务"

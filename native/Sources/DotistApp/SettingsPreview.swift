@@ -81,7 +81,7 @@ struct SettingsSideTabSample: View {
     var body: some View {
         let panel = CGRect(x: 24, y: 0, width: 84, height: 164)
         let sample = SideTabGeometry.snapshot(panel: panel, fullWidths: [84, 84, 84], progress: 0,
-            inward: false, selectedIndex: 0, entrance: values)
+            inward: false, selectedIndex: 0, entrance: values, bridgesOpticalClearance: false)
         let rows = SettingsPreviewPlayback.ids.enumerated().map { index, id in
             SideTabLayout(id: id, groupID: id, name: "", rect: sample.tabs[index], fullWidth: 84,
                           dragged: false, opacity: sample.opacities[index], interactive: false)
@@ -91,7 +91,7 @@ struct SettingsSideTabSample: View {
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(DotistDesign.rule, lineWidth: 0.5))
                 .frame(width: panel.width, height: panel.height).offset(x: panel.minX)
             SideTabsCanvas(rows: rows, size: CGSize(width: 108, height: 164), language: language,
-                selectedGroupID: SettingsPreviewPlayback.ids[0], hovered: nil, inward: false,
+                selectedGroupID: SettingsPreviewPlayback.ids[0], hovered: nil, inwardProgress: 0,
                 textOpacity: 0, opacity: 85, color: { _ in .none })
         }.frame(width: 108, height: 164).accessibilityHidden(true)
     }

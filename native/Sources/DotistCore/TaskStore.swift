@@ -29,9 +29,7 @@ public final class TaskStore: @unchecked Sendable {
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.dotist.app")
     }
 
-    /// The app opts into examples; tools and test stores can create an empty task library.
-    /// Existing libraries are never reseeded, regardless of this flag.
-    public init(databasePath: String? = nil, includeExamples: Bool = false) throws {
+    public init(databasePath: String? = nil) throws {
         path = databasePath ?? Self.dataDirectory.appendingPathComponent("tasks.sqlite").path
         let directory = URL(fileURLWithPath: path).deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -39,7 +37,7 @@ public final class TaskStore: @unchecked Sendable {
         configuration.busyMode = .timeout(3)
         database = try DatabaseQueue(path: path, configuration: configuration)
         let version = try database.read { try Int.fetchOne($0, sql: "PRAGMA user_version") ?? 0 }
-        // v5 is the existing native data baseline. No old-client migration ladder or schema rewrite.
+        // v5 is the existing native data baseline. Keep additive columns compatible with v5 clients.
         guard version == 0 || version == 5 else {
             throw TaskStoreError("数据库不属于当前原生版本支持的数据格式，请使用备份或升级 Dotist")
         }
@@ -68,33 +66,19 @@ public final class TaskStore: @unchecked Sendable {
                     );
                     PRAGMA user_version=5;
                     """)
-                for (position, pair) in [("work", "Work"), ("life", "Life"), ("study", "Study")].enumerated() {
+                for (position, pair) in [("work", "工作"), ("life", "生活"), ("study", "学习")].enumerated() {
                     try db.execute(sql: "INSERT INTO task_groups VALUES (?,?,?,?,?,?,NULL)",
                                    arguments: [pair.0, pair.1, pair.0, position, Self.timestamp(), Self.timestamp()])
                 }
-                // Seed only during schema creation, in the same transaction.
-                // Reopening an existing (even empty) library never adds examples.
-                if includeExamples {
-                    let examples = [
-                        ("work", "Plan the week #planning"),
-                        ("work", "Share a project update #work"),
-                        ("life", "Make a grocery list #home"),
-                        ("life", "Go for a walk #wellbeing"),
-                        ("study", "Read a chapter #reading"),
-                        ("study", "Practice a new skill #learning")
-                    ]
-                    for (position, example) in examples.enumerated() {
-                        let now = Self.timestamp()
-                        try db.execute(sql: """
-                            INSERT INTO tasks (id,title,category,completed,position,created_at,updated_at,revision,status)
-                            VALUES (?,?,?,0,?,?,?,1,'todo')
-                            """, arguments: [UUID().uuidString.lowercased(), example.1, example.0, position, now, now])
-                    }
-                }
             }
         }
-        // Add the system Inbox by identity; existing groups and task history stay intact.
+        // Add nullable plan columns in place. Existing due/start dates carry no plan intent.
         try database.write { db in
+            let columns = try db.columns(in: "tasks").map(\.name)
+            for column in ["planned_day", "planned_week_start"] where !columns.contains(column) {
+                try db.execute(sql: "ALTER TABLE tasks ADD COLUMN \(column) TEXT")
+            }
+            // Add the system Inbox by identity; existing groups and task history stay intact.
             let now = Self.timestamp()
             try db.execute(sql: """
                 INSERT OR IGNORE INTO task_groups (id,name,color,position,created_at,updated_at)
@@ -128,19 +112,27 @@ public final class TaskStore: @unchecked Sendable {
         public let category: String
         public let parentId: String?
         public let dueDate: String?
-        public init(title: String, category: String = DotistGroup.inboxID, parentId: String? = nil, dueDate: String? = nil) {
-            self.title = title; self.category = category; self.parentId = parentId; self.dueDate = dueDate
+        public let plan: TaskPlanScope?
+        public init(title: String, category: String = DotistGroup.inboxID, parentId: String? = nil,
+                    dueDate: String? = nil, plan: TaskPlanScope? = nil) {
+            self.title = title
+            self.category = category
+            self.parentId = parentId
+            self.dueDate = dueDate
+            self.plan = plan
         }
     }
 
-    @discardableResult public func addTask(title: String, category: String = DotistGroup.inboxID, parentId: String? = nil, dueDate: String? = nil) throws -> DotistTask {
-        try addTasks([NewTask(title: title, category: category, parentId: parentId, dueDate: dueDate)])[0]
+    @discardableResult public func addTask(title: String, category: String = DotistGroup.inboxID, parentId: String? = nil,
+                                           dueDate: String? = nil, plan: TaskPlanScope? = nil) throws -> DotistTask {
+        try addTasks([NewTask(title: title, category: category, parentId: parentId, dueDate: dueDate, plan: plan)])[0]
     }
 
     /// A batch is one transaction: an invalid title, parent or date leaves no partial tasks.
     public func addTasks(_ values: [NewTask]) throws -> [DotistTask] {
         try write { db in
-            try values.map { value in
+            let planningCalendar = values.contains { $0.plan != nil } ? TaskFiltering([]) : nil
+            return try values.map { value in
                 let title = try Self.validated(value.title, limit: 500, empty: "任务内容不能为空", long: "任务内容不能超过 500 个字")
                 try Self.validateDate(value.dueDate)
                 let group = try Self.resolveGroup(db, value.category)
@@ -153,10 +145,12 @@ public final class TaskStore: @unchecked Sendable {
                                                  arguments: [category, value.parentId]) ?? 0
                 let id = UUID().uuidString.lowercased()
                 let now = Self.timestamp()
+                let planDates = planningCalendar?.planDates(for: value.plan)
                 try db.execute(sql: """
-                    INSERT INTO tasks (id,title,category,completed,position,created_at,updated_at,revision,parent_id,due_date,status)
-                    VALUES (?,?,?,0,?,?,?,1,?,?,'todo')
-                    """, arguments: [id, title, category, position, now, now, value.parentId, value.dueDate])
+                    INSERT INTO tasks (id,title,category,completed,position,created_at,updated_at,revision,parent_id,due_date,status,planned_day,planned_week_start)
+                    VALUES (?,?,?,0,?,?,?,1,?,?,'todo',?,?)
+                    """, arguments: [id, title, category, position, now, now, value.parentId, value.dueDate,
+                                     planDates?.day, planDates?.weekStart])
                 let task = try Self.task(db, id)
                 try Self.record(db, task, kind: "create", base: nil)
                 return task
@@ -195,6 +189,21 @@ public final class TaskStore: @unchecked Sendable {
 
     @discardableResult public func setDueDate(_ id: String, date: String?) throws -> DotistTask {
         try write { db in let task = try Self.task(db, id); return try Self.dates(db, task, start: task.startDate, due: date) }
+    }
+
+    @discardableResult public func setPlan(_ id: String, scope: TaskPlanScope?,
+                                          now: Date = Date(), calendar: Calendar = .current) throws -> DotistTask {
+        try write { db in
+            let old = try Self.task(db, id)
+            guard scope == nil || !old.completed else { throw TaskStoreError("请先恢复任务再安排计划") }
+            let dates = TaskFiltering([], now: now, calendar: calendar).planDates(for: scope)
+            guard dates.day != old.plannedDay || dates.weekStart != old.plannedWeekStart else { return old }
+            try db.execute(sql: "UPDATE tasks SET planned_day=?,planned_week_start=?,revision=revision+1 WHERE id=?",
+                           arguments: [dates.day, dates.weekStart, id])
+            let updated = try Self.task(db, id)
+            try Self.record(db, updated, kind: "update", base: old.revision)
+            return updated
+        }
     }
     @discardableResult public func setStartDate(_ id: String, date: String?) throws -> DotistTask {
         try write { db in let task = try Self.task(db, id); return try Self.dates(db, task, start: date, due: task.dueDate) }
@@ -464,6 +473,7 @@ public final class TaskStore: @unchecked Sendable {
         }
     }
     public func move(_ id: String, direction: Int) throws { try move(id, direction: direction, statusColumn: false) }
+    public func moveStatus(_ id: String, direction: Int) throws { try move(id, direction: direction, statusColumn: true) }
     private func move(_ id: String, direction: Int, statusColumn: Bool) throws {
         guard [-1, 1].contains(direction) else { throw TaskStoreError("排序方向无效") }
         try write { db in
@@ -582,7 +592,8 @@ extension DotistTask: FetchableRecord {
         guard let status = TaskStatus(rawValue: row["status"]) else { throw TaskStoreError("无效的任务状态") }
         self.init(id: row["id"], title: row["title"], category: row["category"], completed: row["completed"], status: status,
                   position: row["position"], createdAt: row["created_at"], updatedAt: row["updated_at"], deletedAt: row["deleted_at"],
-                  revision: row["revision"], parentId: row["parent_id"], dueDate: row["due_date"], startDate: row["start_date"])
+                  revision: row["revision"], parentId: row["parent_id"], dueDate: row["due_date"], startDate: row["start_date"],
+                  plannedDay: row["planned_day"], plannedWeekStart: row["planned_week_start"])
     }
 }
 extension DotistGroup: FetchableRecord {

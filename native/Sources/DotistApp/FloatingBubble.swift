@@ -9,14 +9,12 @@ import SwiftUI
 private struct BubbleText: NSViewRepresentable {
     let lines: [NSAttributedString]
     var centered = false
-    var gap: CGFloat = 6
     @Environment(\.colorScheme) private var scheme
 
     func makeNSView(context: Context) -> BubbleTextView { BubbleTextView() }
     func updateNSView(_ view: BubbleTextView, context: Context) {
         view.lines = lines
         view.centered = centered
-        view.gap = gap
         view.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
         view.needsDisplay = true
     }
@@ -25,7 +23,6 @@ private struct BubbleText: NSViewRepresentable {
 private final class BubbleTextView: NSView {
     var lines: [NSAttributedString] = []
     var centered = false
-    var gap: CGFloat = 6
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -45,6 +42,7 @@ private final class BubbleTextView: NSView {
         }
         // Space actual ink, rather than font ascender/descender boxes. This also
         // keeps mixed serif group / sans date metadata on a common visual axis.
+        let gap: CGFloat = 6
         let height = runs.reduce(CGFloat(0)) { $0 + $1.1.height } + CGFloat(max(0, runs.count - 1)) * gap
         var top = bounds.midY + height / 2
         for (line, ink) in runs {
@@ -66,7 +64,6 @@ struct FloatingBubble: View {
     let reveal: CGFloat
     var extra: CGFloat = 0
     var filter: [String] = []
-    var hidesTaskGroup = false
 
     private func label(_ text: String, size: CGFloat, weight: NSFont.Weight = .regular, serif: Bool = false, color: Color) -> NSAttributedString {
         NSAttributedString(string: text, attributes: [
@@ -79,19 +76,19 @@ struct FloatingBubble: View {
         let title = label(details.title, size: 13, weight: .medium, color: DotistDesign.ink)
         guard !details.subtitle.isEmpty else { return [title] }
         let metadata = NSMutableAttributedString(string: "")
-        if !hidesTaskGroup, let group = details.group { metadata.append(label(group, size: 12, weight: .semibold, serif: true, color: DotistDesign.muted)) }
-        if !hidesTaskGroup && details.group != nil && details.due != nil { metadata.append(label(" · ", size: 12, color: DotistDesign.muted)) }
+        if let group = details.group { metadata.append(label(group, size: 12, weight: .semibold, serif: true, color: DotistDesign.muted)) }
+        if details.group != nil && details.due != nil { metadata.append(label(" · ", size: 12, color: DotistDesign.muted)) }
         if let due = details.due { metadata.append(label(due, size: 12, color: DotistDesign.muted)) }
-        return metadata.length == 0 ? [title] : [title, metadata]
+        return [title, metadata]
     }
 
     var body: some View {
         Button(action: motion.toggleBubble) {
             ZStack(alignment: motion.bubbleOnRight ? .trailing : .leading) {
                 BubbleText(lines: textLines)
-                    .frame(width: max(0, width - BubbleLayout.widthBudget - extra), height: 48, alignment: .leading)
-                    .padding(motion.bubbleOnRight ? .leading : .trailing, BubbleLayout.outerMargin)
-                    .padding(motion.bubbleOnRight ? .trailing : .leading, BubbleLayout.textGap + extra)
+                    .frame(width: max(0, width - 78 - extra), height: 48, alignment: .leading)
+                    .padding(motion.bubbleOnRight ? .leading : .trailing, 12)
+                    .padding(motion.bubbleOnRight ? .trailing : .leading, 18 + extra)
                     .offset(x: (1 - reveal) * max(0, width - 48) * (motion.bubbleOnRight ? 1 : -1))
                     .frame(width: max(0, width - 48), height: 48)
                     .clipped()
@@ -99,10 +96,10 @@ struct FloatingBubble: View {
                     .frame(width: width, height: 48, alignment: motion.bubbleOnRight ? .leading : .trailing)
                     .accessibilityHidden(true)
                 if !filter.isEmpty, extra > 0 {
-                    // Compact conditions into two lines before measuring and drawing.
-                    BubbleText(lines: BubbleFilterSummary.lines(filter).map { label($0, size: 11, color: DotistDesign.muted) }, gap: 4)
-                        .frame(width: max(0, extra - BubbleLayout.filterBudget), height: 48, alignment: .leading)
-                        .padding(motion.bubbleOnRight ? .trailing : .leading, BubbleLayout.circle + BubbleLayout.filterGap)
+                    // One line per condition, the block centered on the ball's axis.
+                    BubbleText(lines: filter.map { label($0, size: 12, color: DotistDesign.muted) })
+                        .frame(width: max(0, extra - 16), height: 48, alignment: .leading)
+                        .padding(motion.bubbleOnRight ? .trailing : .leading, 52)
                         .transition(.opacity)
                         .accessibilityHidden(true)
                 }
@@ -132,14 +129,6 @@ struct FloatingBubble: View {
             }
         }
         .accessibilityLabel(Text(groupName.map { model.text("展开分组 {name}").replacingOccurrences(of: "{name}", with: $0) } ?? (details.remaining > 0 ? model.text("还有 {n} 件，点击展开").replacingOccurrences(of: "{n}", with: "\(details.remaining)") : model.text("全部完成，点击展开"))))
-    }
-}
-
-/// Keep all conditions available while bounding the vertical text budget.
-enum BubbleFilterSummary {
-    static func lines(_ parts: [String]) -> [String] {
-        guard parts.count > 2 else { return parts }
-        let split = parts.count > 3 ? 2 : 1
-        return [parts.prefix(split).joined(separator: " · "), parts.dropFirst(split).joined(separator: " · ")]
+        .accessibilityValue(Text(motion.filterState?.isTodayAgenda == true ? model.todayCountLabel(details.remaining) : ""))
     }
 }

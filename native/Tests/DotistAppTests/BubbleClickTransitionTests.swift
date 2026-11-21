@@ -51,7 +51,7 @@ final class BubbleClickTransitionTests: XCTestCase {
         XCTAssertTrue(motion.animationInProgress)
         XCTAssertEqual(input.pendingFrameAnimationCount, 1)
         try input.completeFrameAnimation(for: panel)
-        XCTAssertEqual(panel.frame.size, NSSize(width: PanelLayoutMetrics.primaryWidth, height: 620))
+        XCTAssertEqual(panel.frame.size, NSSize(width: 364, height: 620))
         XCTAssertFalse(motion.animationInProgress)
     }
 
@@ -100,7 +100,7 @@ final class BubbleClickTransitionTests: XCTestCase {
                 }
                 try input.completeFrameAnimation(for: panel)
                 XCTAssertFalse(motion.bubble)
-                XCTAssertEqual(panel.frame.size, NSSize(width: PanelLayoutMetrics.primaryWidth, height: 620))
+                XCTAssertEqual(panel.frame.size, NSSize(width: 364, height: 620))
             }
         }
     }

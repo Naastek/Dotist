@@ -176,13 +176,13 @@ final class DotistUITests: XCTestCase {
         composer.typeText("QA-Inbox 默认收集\n")
         expectation(for: NSPredicate { _, _ in self.sql("SELECT category FROM tasks WHERE title='QA-Inbox 默认收集'") == "inbox" }, evaluatedWith: nil)
         waitForExpectations(timeout: 5)
-        selectGroup("work", name: "Work", in: main, app: app)
-        main.staticTexts["Work"].rightClick()
+        selectGroup("work", name: "工作", in: main, app: app)
+        main.staticTexts["工作"].rightClick()
         app.menuItems["添加任务"].click()
-        let groupInput = main.textFields["新任务（Work）"]
+        let groupInput = main.textFields["新任务（工作）"]
         XCTAssertTrue(groupInput.waitForExistence(timeout: 5))
-        groupInput.typeText("QA-Work组内添加\n")
-        expectation(for: NSPredicate { _, _ in self.sql("SELECT category FROM tasks WHERE title='QA-Work组内添加'") == "work" }, evaluatedWith: nil)
+        groupInput.typeText("QA-工作组内添加\n")
+        expectation(for: NSPredicate { _, _ in self.sql("SELECT category FROM tasks WHERE title='QA-工作组内添加'") == "work" }, evaluatedWith: nil)
         waitForExpectations(timeout: 5)
         XCTAssertFalse(main.buttons["完成 QA-Inbox 默认收集"].exists)
         XCTAssertFalse(main.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "还有 ")).firstMatch.exists)
@@ -192,12 +192,12 @@ final class DotistUITests: XCTestCase {
     func testGroupPanelsSwitchIndependentlyAndKeepDraftsThroughBubbles() {
         continueAfterFailure = false
         let app = launch()
-        let work = openGroupPanel("work", name: "Work", app: app)
+        let work = openGroupPanel("work", name: "工作", app: app)
         let workSize = work.frame.size
         let draft = work.textFields["新任务"]
         draft.click()
         draft.typeText("QA-保留未提交草稿")
-        let life = openGroupPanel("life", name: "Life", app: app)
+        let life = openGroupPanel("life", name: "生活", app: app)
         let lifeSize = life.frame.size
         work.buttons["收起为悬浮球"].click()
         life.buttons["收起为悬浮球"].click()
@@ -209,7 +209,7 @@ final class DotistUITests: XCTestCase {
         XCTAssertEqual(work.frame.width, 48, accuracy: 1)
         XCTAssertEqual(life.frame.width, 48, accuracy: 1)
         capture(app, name: "independent-group-bubbles")
-        work.buttons["展开分组 Work"].click()
+        work.buttons["展开分组 工作"].click()
         XCTAssertTrue(draft.waitForExistence(timeout: 5))
         expectation(for: NSPredicate { _, _ in
             abs(work.frame.width - workSize.width) < 1 && abs(work.frame.height - workSize.height) < 1
@@ -217,13 +217,13 @@ final class DotistUITests: XCTestCase {
         waitForExpectations(timeout: 5)
         XCTAssertEqual(draft.value as? String, "QA-保留未提交草稿")
         XCTAssertEqual(life.frame.width, 48, accuracy: 1)
-        selectGroup("study", name: "Study", in: work, app: app)
-        let study = app.dialogs["Dotist · Study"]
+        selectGroup("study", name: "学习", in: work, app: app)
+        let study = app.dialogs["Dotist · 学习"]
         XCTAssertTrue(study.waitForExistence(timeout: 5))
-        XCTAssertEqual(study.buttons["分组"].value as? String, "Study")
+        XCTAssertEqual(study.buttons["分组"].value as? String, "学习")
         XCTAssertEqual(app.dialogs["Dotist"].buttons["分组"].value as? String, "Inbox")
         study.buttons["关闭面板"].click()
-        life.buttons["展开分组 Life"].click()
+        life.buttons["展开分组 生活"].click()
         expectation(for: NSPredicate { _, _ in
             abs(life.frame.width - lifeSize.width) < 1 && abs(life.frame.height - lifeSize.height) < 1
                 && life.textFields["新任务"].exists
@@ -241,8 +241,8 @@ final class DotistUITests: XCTestCase {
         try JSONSerialization.data(withJSONObject: settings).write(to: path)
         addTeardownBlock { try original.write(to: path) }
         let app = launch()
-        let work = openGroupPanel("work", name: "Work", app: app)
-        let life = openGroupPanel("life", name: "Life", app: app)
+        let work = openGroupPanel("work", name: "工作", app: app)
+        let life = openGroupPanel("life", name: "生活", app: app)
         let workSize = work.frame.size
         let lifeSize = life.frame.size
         work.buttons["收起为悬浮球"].click()
@@ -253,8 +253,8 @@ final class DotistUITests: XCTestCase {
         }, evaluatedWith: nil)
         waitForExpectations(timeout: 5)
 
-        let workBubble = work.buttons["展开分组 Work"]
-        let lifeBubble = life.buttons["展开分组 Life"]
+        let workBubble = work.buttons["展开分组 工作"]
+        let lifeBubble = life.buttons["展开分组 生活"]
         XCTAssertTrue(workBubble.waitForExistence(timeout: 5))
         XCTAssertTrue(lifeBubble.waitForExistence(timeout: 5))
         for (name, panel, other, bubble) in [("work", work, life, workBubble), ("life", life, work, lifeBubble)] {
@@ -309,13 +309,13 @@ final class DotistUITests: XCTestCase {
         let field = app.textFields["搜索任务、分组或视图"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.click()
-        field.typeText("Work")
+        field.typeText("工作")
         activate(app, showing: field)
         let before = search.frame
         let handle = search.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 250, dy: 18))
         handle.press(forDuration: 0.12, thenDragTo: handle.withOffset(CGVector(dx: -80, dy: 48)))
         XCTAssertGreaterThan(hypot(search.frame.minX - before.minX, search.frame.minY - before.minY), 30)
-        XCTAssertEqual(field.value as? String, "Work")
+        XCTAssertEqual(field.value as? String, "工作")
         capture(search, name: "draggable-search-window")
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertFalse(field.exists)
@@ -337,7 +337,7 @@ final class DotistUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         composer.click()
         // ASCII synthesis avoids testmanagerd trying to authorize a Chinese input method.
-        // English group titles and localized palette labels remain asserted below.
+        // Chinese group titles and palette labels remain visible and asserted below.
         composer.typeText("QA-palette-one\n")
         composer.click()
         composer.typeText("QA-palette-two\n")
@@ -349,10 +349,9 @@ final class DotistUITests: XCTestCase {
         let palette = app.windows["搜索"]
         XCTAssertTrue(palette.staticTexts["任务"].waitForExistence(timeout: 3))
         XCTAssertTrue(palette.staticTexts["分组"].exists)
-        XCTAssertTrue(palette.staticTexts["Work"].exists)
+        XCTAssertTrue(palette.staticTexts["工作"].exists)
         XCTAssertLessThanOrEqual(palette.frame.height, 520)
-        // Six first-run tasks make the results scroll; reveal the last section.
-        palette.scrollViews.firstMatch.swipeUp()
+        // The last section must fit above the footer instead of being clipped.
         XCTAssertTrue(palette.staticTexts["任务视图"].isHittable)
         let wideHeight = palette.frame.height
         capture(palette, name: "command-palette-empty")
@@ -565,7 +564,7 @@ final class DotistUITests: XCTestCase {
         editor.click()
         editor.typeKey("a", modifierFlags: .command)
         editor.typeText("QA-cancel-edited")
-        selectGroup("life", name: "Life", in: main, app: app)
+        selectGroup("life", name: "生活", in: main, app: app)
         expectation(for: NSPredicate { _, _ in self.sql("SELECT COUNT(*) FROM tasks WHERE title='QA-cancel-edited'") == "1" }, evaluatedWith: nil)
         waitForExpectations(timeout: 5)
         selectGroup("inbox", name: "Inbox", in: main, app: app)
@@ -638,7 +637,7 @@ final class DotistUITests: XCTestCase {
         editor.click()
         editor.typeKey("a", modifierFlags: .command)
         editor.typeText("QA-edit-saved-on-switch")
-        selectGroup("life", name: "Life", in: main, app: app)
+        selectGroup("life", name: "生活", in: main, app: app)
         expectation(for: NSPredicate { _, _ in self.sql("SELECT COUNT(*) FROM tasks WHERE title='QA-edit-saved-on-switch'") == "1" }, evaluatedWith: nil)
         waitForExpectations(timeout: 5)
         selectGroup("inbox", name: "Inbox", in: main, app: app)
@@ -718,7 +717,7 @@ final class DotistUITests: XCTestCase {
         search.click()
         let field = app.textFields["搜索任务、分组或视图"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
-        field.typeText("Work")
+        field.typeText("工作")
         app.typeKey(.downArrow, modifierFlags: [])
         app.typeKey(.upArrow, modifierFlags: [])
         capture(app, name: "command-palette-keyboard")
@@ -742,9 +741,9 @@ final class DotistUITests: XCTestCase {
         let search = app.textFields["搜索任务、分组或视图"]
         activate(app, showing: search)
         search.click()
-        search.typeText("Work")
+        search.typeText("工作")
         activate(app, showing: search)
-        let result = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Work")).firstMatch
+        let result = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "工作")).firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 5))
         result.click()
         activate(app, showing: main)
@@ -752,7 +751,7 @@ final class DotistUITests: XCTestCase {
         let composer = main.textFields["新任务"]
         XCTAssertTrue(composer.waitForExistence(timeout: 5), "Selecting a group must display the main task list")
         XCTAssertGreaterThan(main.frame.width, 300)
-        XCTAssertEqual(main.buttons["分组"].value as? String, "Work")
+        XCTAssertEqual(main.buttons["分组"].value as? String, "工作")
         XCTAssertFalse(search.exists)
         capture(main, name: "search-group-from-bubble")
     }
@@ -1013,6 +1012,49 @@ final class DotistUITests: XCTestCase {
         let expected = formatter.string(from: Date())
         expectation(for: NSPredicate { _, _ in self.sql("SELECT due_date FROM tasks WHERE title='QA-日历等宽日期'") == expected }, evaluatedWith: nil)
         waitForExpectations(timeout: 5)
+    }
+
+    func testComposerCalendarOverridesAndClearsRecognizedDueDate() {
+        continueAfterFailure = false
+        let app = launch()
+        let main = app.dialogs["Dotist"]
+        let input = main.textFields["新任务"]
+        let date = main.buttons["composer-due"]
+        for (action, label, suffix) in [("明天", "明天", "override"), ("清除", "无日期", "clear")] {
+            let title = "2096-02-29 composer-\(suffix) #qa"
+            input.click()
+            input.typeText(title)
+            assertDatePreview(date, equals: "2096年2月29日")
+            date.click()
+            let option = app.popovers.firstMatch.buttons[action]
+            XCTAssertTrue(option.waitForExistence(timeout: 5))
+            option.click()
+            assertDatePreview(date, equals: label)
+            input.click()
+            input.typeKey(.return, modifierFlags: [])
+            assertSavedEntry(title, due: action == "明天" ? tomorrowISODate() : "-")
+        }
+    }
+
+    private func assertDatePreview(_ date: XCUIElement, equals label: String, file: StaticString = #filePath, line: UInt = #line) {
+        let updated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in date.value as? String == label }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 5), .completed,
+                       "Expected \(label), got \(String(describing: date.value))", file: file, line: line)
+    }
+
+    private func tomorrowISODate() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: formatter.calendar.date(byAdding: .day, value: 1, to: Date())!)
+    }
+
+    private func assertSavedEntry(_ title: String, due: String) {
+        let persisted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.sql("SELECT COALESCE(due_date, '-') FROM tasks WHERE title='\(title)'") == due
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [persisted], timeout: 5), .completed)
     }
 
     func testHoverCapsuleRevealAndRetractionRecording() throws {

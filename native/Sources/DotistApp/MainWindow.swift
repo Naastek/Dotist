@@ -5,9 +5,6 @@ import SwiftUI
 
 struct MainWindow: View {
     @Environment(\.accessibilityReduceMotion) var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) var reduceTransparency
-    @Environment(\.colorSchemeContrast) var contrast
-    @Environment(\.colorScheme) var scheme
     @ObservedObject var model: AppModel
     @ObservedObject var state: TaskPanelState
     let showViews: () -> Void
@@ -21,24 +18,19 @@ struct MainWindow: View {
     @State var panelHovered = false
     @State var composerHovered = false
     @State var composerFocused = false
-    @State var composerFlight = false
-    @State var composerFlightAtField = false
-    @State var composerFlightGeneration = UUID()
-    @State var composerFrames: [String: CGRect] = [:]
+    @State var composerCueVisible = false
+    @State var composerCueGeneration = UUID()
     @State var toolbarDrag: ToolbarDragSession?
     @GestureState var toolbarGestureActive = false
-    @State var toolbarFrames: [ToolbarItem: CGRect] = [:]
-    @StateObject var headerPresentation = HeaderPresentation()
-    var headerPopover: HeaderPopover? {
-        get { headerPresentation.active }
-        nonmutating set { headerPresentation.active = newValue }
-    }
+    @State private var toolbarFrames: [ToolbarItem: CGRect] = [:]
+    @State var showColorPicker = false
     @State var shelfTarget: String?
     @State var composer = ""
+    @State var composerComposing = false
     @State var composerSubmitting = false
     @State var selectedSuggestion = -1
     @State var category = DotistGroup.inboxID
-    @State var dueDate: Date?
+    @State var composerDate = TaskEntryDate()
     @State var addingToGroup: String?
     @State var groupTitles: [String: String] = [:]
     @State var groupSubmitting = false
@@ -46,6 +38,7 @@ struct MainWindow: View {
     @State var draftAfter: String?
     @State var draftTitle = ""
     @State var draftParent: String?
+    @State var draftPlan: TaskPlanScope?
     @State var draftHeight: CGFloat = 20
     @State var draftSaving = false
     @State var emptyAddHovered = false
@@ -54,37 +47,11 @@ struct MainWindow: View {
     @State var editSaving = false
     @State var editHeight: CGFloat = 20
     @State var pendingEdit: DotistTask?
-    var manageGroups: Bool {
-        get { headerPresentation.manageGroups }
-        nonmutating set { headerPresentation.manageGroups = newValue }
-    }
-    var manageTags: Bool {
-        get { headerPresentation.manageTags }
-        nonmutating set { headerPresentation.manageTags = newValue }
-    }
-    var showCalendar: Bool {
-        get { headerPopover == .calendar }
-        nonmutating set { setHeaderPopover(.calendar, presented: newValue) }
-    }
-    var showFilters: Bool {
-        get { headerPopover == .filters }
-        nonmutating set { setHeaderPopover(.filters, presented: newValue) }
-    }
-    var showColorPicker: Bool {
-        get { headerPopover == .color }
-        nonmutating set { setHeaderPopover(.color, presented: newValue) }
-    }
-    func setHeaderPopover(_ target: HeaderPopover, presented: Bool) {
-        headerPresentation.set(target, presented: presented)
-    }
-    func popoverBinding(_ target: HeaderPopover) -> Binding<Bool> {
-        Binding(get: { headerPopover == target }, set: { setHeaderPopover(target, presented: $0) })
-    }
+    @State var manageGroups = false
+    @State var manageTags = false
+    @State var showCalendar = false
     @StateObject var filterPresentation = DateFilterPresentation()
-    var hideCompleted: Bool {
-        get { state.hideCompleted }
-        nonmutating set { state.hideCompleted = newValue }
-    }
+    @State var hideCompleted = false
     @State var showDuePicker = false
     @State var pickingTask: String?
     @State var hoveredTask: String?
@@ -131,36 +98,6 @@ struct MainWindow: View {
         (serif ? DotistDesign.nameFont(size, weight: weight, language: model.language) : DotistDesign.textFont(size, weight: weight, language: model.language))
     }
 
-    /// Typed here so the body's modifier chain does not have to infer them.
-    private func ticks(every interval: TimeInterval, active: Bool) -> AnyPublisher<Date, Never> {
-        guard active else { return Empty<Date, Never>().eraseToAnyPublisher() }
-        return Timer.publish(every: interval, on: .main, in: .common).autoconnect().eraseToAnyPublisher()
-    }
-    private func autoScrollTick() {
-        if QAPerf.enabled { QAPerf.count(.timer30Hz) }
-        autoScrollReorder()
-    }
-    private func undoChanged(_ entry: AppModel.UndoEntry?) {
-        undoToastVisible = entry != nil
-        undoToastLifetime.restart(at: ProcessInfo.processInfo.systemUptime)
-    }
-    private func expireToasts() {
-        if QAPerf.enabled { QAPerf.count(.timer10Hz) }
-        let now = ProcessInfo.processInfo.systemUptime
-        if undoToastVisible && !undoToastLifetime.isVisible(at: now) { undoToastVisible = false }
-        if notice != nil && !noticeLifetime.isVisible(at: now) { notice = nil }
-    }
-    private var autoScrollTicks: AnyPublisher<Date, Never> { ticks(every: 1.0 / 30, active: drag != nil) }
-    private var toastTicks: AnyPublisher<Date, Never> { ticks(every: 0.1, active: undoToastVisible || notice != nil) }
-
-    private func disappear() {
-        headerPresentation.dismiss()
-        filterPresentation.dismiss()
-        traceReorder("lifecycle.disappear")
-        cancelReorder(); reorderRuntime.handleInput = nil
-        leaveInputs(); selection.update { $0.clear() }
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             if let error = model.error {
@@ -174,6 +111,8 @@ struct MainWindow: View {
                 header
                 DateFilterPushdown(isOpen: filterPresentation.isOpen) { filterStrip }
                 VStack(spacing: 0) {
+                    activeFilterLine
+                    if model.tagCounts.contains(where: { $0.open > 0 }) { tagBar }
                     taskList
                 }.background(DateFilterContentClickObserver(enabled: filterPresentation.isOpen, dismiss: filterPresentation.contentClicked))
             }
@@ -182,12 +121,7 @@ struct MainWindow: View {
                     .background(DateFilterContentClickObserver(enabled: filterPresentation.isOpen, dismiss: filterPresentation.contentClicked))
             }
         }
-        .background(alignment: .topLeading) { composerGlass }
         .coordinateSpace(name: Self.listSpace)
-        .onPreferenceChange(ComposerFrameKey.self) { composerFrames = $0 }
-        .onReceive(NotificationCenter.default.publisher(for: .init("DotistQAComposer"))) { _ in
-            if primary { activateEmptyStateComposer() }
-        }
         .overlay(alignment: .topLeading) {
             ghostConnector
             if let drag {
@@ -227,18 +161,23 @@ struct MainWindow: View {
                 }
             }
         }
-        .onReceive(autoScrollTicks) { (_: Date) in autoScrollTick() }
-        .onReceive(model.$undo) { (entry: AppModel.UndoEntry?) in undoChanged(entry) }
-        .onReceive(toastTicks) { (_: Date) in expireToasts() }
-        .onDisappear(perform: disappear)
+        .onReceive(Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect()) { _ in autoScrollReorder() }
+        .onReceive(model.$undo) { entry in
+            undoToastVisible = entry != nil
+            undoToastLifetime.restart(at: ProcessInfo.processInfo.systemUptime)
+        }
+        .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
+            let now = ProcessInfo.processInfo.systemUptime
+            if undoToastVisible && !undoToastLifetime.isVisible(at: now) { undoToastVisible = false }
+            if notice != nil && !noticeLifetime.isVisible(at: now) { notice = nil }
+        }
+        .onDisappear { filterPresentation.dismiss(); traceReorder("lifecycle.disappear"); cancelReorder(); reorderRuntime.handleInput = nil; leaveInputs(); selection.update { $0.clear() } }
         .onHover { panelHovered = $0 }
         .foregroundColor(textColor)
         .onAppear { category = state.groupID ?? DotistGroup.inboxID; reorderRuntime.handleInput = handleReorderInput }
-        .onChange(of: manageTags || manageGroups) { _, open in if open { headerPresentation.dismiss() } }
         .onChange(of: showCalendar) { _, open in filterPresentation.dateControlsChanged(open) }
         .onChange(of: state.groupID) { id in
             cancelReorder()
-            dismissComposerCue()
             category = id ?? DotistGroup.inboxID
             leaveInputs()
             selection.update { $0.clear() }
@@ -247,14 +186,19 @@ struct MainWindow: View {
             if let id = state.groupID, !groups.contains(where: { $0.id == id }) { state.groupID = nil }
             if !groups.contains(where: { $0.id == category }) { category = state.groupID ?? DotistGroup.inboxID }
         }
-        .onChange(of: state.activeTag) { _ in dismissComposerCue() }
-        .onChange(of: customStart) { _ in dismissComposerCue() }
-        .onChange(of: customEnd) { _ in dismissComposerCue() }
         .onChange(of: model.tagDescription) { _ in
-            if let tag = state.activeTag, !model.tagCounts.contains(where: { $0.tag == tag }) { state.activeTag = nil }
+            if let tag = state.activeTag, !model.tagCounts.contains(where: { $0.tag == tag && $0.open > 0 }) { state.activeTag = nil }
         }
         .onChange(of: model.scope) { scope in if primary { state.scope = scope } }
-        .onChange(of: state.scope) { scope in dismissComposerCue(); cancelReorder(); leaveInputs(); selection.update { $0.clear() }; if primary { model.scope = scope } }
+        .onChange(of: state.scope) { scope in
+            if composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                composerDate.contextDay = nil
+            }
+            cancelReorder()
+            leaveInputs()
+            selection.update { $0.clear() }
+            if primary { model.scope = scope }
+        }
         .onChange(of: model.scopeNavigation) { _ in
             guard primary else { return }
             state.activeTag = nil

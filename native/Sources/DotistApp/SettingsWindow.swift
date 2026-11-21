@@ -83,7 +83,7 @@ struct SettingsWindow: View {
                 }
             }.padding(.horizontal, 12).frame(height: 34)
                 // Glass is only the backdrop: a native NSTextField inside the effect graph is composited twice.
-                .modifier(DotistInputBackground())
+                .background { Color.clear.glassEffect(.regular, in: .capsule) }
                 .padding(.horizontal, 14)
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 ScrollView {
@@ -221,7 +221,7 @@ struct SettingsWindow: View {
                 boolRow("失焦淡出", value: model.settings.idleFade) { $0.idleFade = $1 }
                 numberRow("淡出前等待", value: Double(model.settings.idleDelaySecs), range: 1...60) { $0.idleDelaySecs = UInt8($1.rounded()) }
                 numberRow("淡出用时", value: Double(model.settings.idleFadeSecs), range: 1...10) { $0.idleFadeSecs = UInt8($1.rounded()) }
-                numberRow("失焦后内容透明度", value: DotistTransparency.value(opacity: model.settings.idleOpacity), range: 0...80, unit: "%") { $0.idleOpacity = DotistTransparency.opacity(value: $1) }
+                numberRow("失焦后整窗透明度", value: DotistTransparency.value(opacity: model.settings.idleOpacity), range: 0...80, unit: "%") { $0.idleOpacity = DotistTransparency.opacity(value: $1) }
             }
         }
     }
@@ -310,7 +310,7 @@ struct SettingsWindow: View {
         }
     }
     private var orderedToolbarItems: [ToolbarItem] {
-        (toolbar.order.filter { ToolbarItem.allCases.contains($0) } + ToolbarItem.allCases.filter { !toolbar.order.contains($0) }).filter(\.isStandalone)
+        toolbar.order.filter { ToolbarItem.allCases.contains($0) } + ToolbarItem.allCases.filter { !toolbar.order.contains($0) }
     }
     private var toolbarSettings: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -363,7 +363,6 @@ struct SettingsWindow: View {
     }
     private func toolbarTitle(_ item: ToolbarItem) -> String {
         switch item {
-        case .filters: return "筛选"
         case .filter: return "日期筛选"
         case .completion: return "只看未完成"
         case .calendar: return "日历"
@@ -531,7 +530,7 @@ struct SettingsWindow: View {
                 .accessibilityLabel(Text(model.text("作用域")))
                 .accessibilityValue(Text(scopeTitle))
                 .accessibilityIdentifier("shortcut-scope:\(key)")
-            ShortcutRecorder(value: value, label: model.text(label), empty: model.text("未设置"), recordingText: model.text("按下新的快捷键…"), language: model.language, begin: beginShortcutCapture, finish: { endShortcutCapture(id, $0) }).frame(width: 130, height: 28).modifier(DotistInputBackground(horizontalOutset: 6))
+            ShortcutRecorder(value: value, label: model.text(label), empty: model.text("未设置"), recordingText: model.text("按下新的快捷键…"), language: model.language, begin: beginShortcutCapture, finish: { endShortcutCapture(id, $0) }).frame(width: 130, height: 28)
             // The clear slot keeps its width whether or not a shortcut is set,
             // so the recorder column stays aligned across rows.
             Button { beginShortcutCapture(); endShortcutCapture(id, "") } label: {

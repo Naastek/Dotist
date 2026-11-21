@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import DotistCore
 import Foundation
@@ -10,13 +11,29 @@ final class DateFilterModelTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-date-clock-\(UUID().uuidString)")
         let model = try AppModel(store: TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path))
         defer { try? FileManager.default.removeItem(at: directory) }
-        for name in [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange] {
+        let dateChanges: [(NotificationCenter, Notification.Name)] = [
+            (.default, .NSCalendarDayChanged), (.default, .NSSystemTimeZoneDidChange),
+            (NSWorkspace.shared.notificationCenter, NSWorkspace.didWakeNotification)
+        ]
+        for (center, name) in dateChanges {
             let changed = expectation(description: "Refresh date filters for \(name.rawValue)")
             let subscription = model.objectWillChange.sink { changed.fulfill() }
-            NotificationCenter.default.post(name: name, object: nil)
+            center.post(name: name, object: nil)
             await fulfillment(of: [changed], timeout: 0.5)
             subscription.cancel()
         }
+    }
+
+    func testPlanCacheDistinguishesDashTagFromNoTag() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-plan-tag-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
+        let tagged = try store.addTask(title: "Tagged #-", plan: .today)
+        _ = try store.addTask(title: "Not tagged", plan: .today)
+        let model = try AppModel(store: store)
+        let scope = TaskPlanScope.today.rawValue
+        XCTAssertEqual(model.filteredTasks(scope: scope).matches.count, 2)
+        XCTAssertEqual(model.filteredTasks(scope: scope, tag: "-").matches.map(\.id), [tagged.id])
     }
 
     func testPanelQueryKeepsDeepUngroupedMatchUnderCompletedAncestorAndIsolatesPanelTags() throws {

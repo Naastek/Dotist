@@ -3,11 +3,6 @@ import CoreText
 import DotistCore
 import SwiftUI
 
-@MainActor
-final class PanelSurfaceInsets: ObservableObject {
-    @Published var value = EdgeInsets()
-}
-
 /// All task panels share one motion implementation, with independent window state.
 @MainActor
 final class PanelMotion: ObservableObject {
@@ -16,7 +11,6 @@ final class PanelMotion: ObservableObject {
     /// user's desktop while a transition is awaiting completion.
     struct Environment {
         typealias FrameAnimation = @MainActor (DotistPanel, NSRect, TimeInterval, @escaping @MainActor () -> Void) -> Void
-        var now: @MainActor () -> Date = { Date() }
         var mouseLocation: @MainActor () -> NSPoint = { NSEvent.mouseLocation }
         var pressedMouseButtons: @MainActor () -> Int = { Int(NSEvent.pressedMouseButtons) }
         var visibleFrame: @MainActor (DotistPanel) -> NSRect? = { ($0.screen ?? NSScreen.main)?.visibleFrame }
@@ -34,11 +28,8 @@ final class PanelMotion: ObservableObject {
     }
 
     var environment: Environment
-    @Published private(set) var idleContentOpacity: Double = 1
     @Published private(set) var bubble = false
-    var tabsTransitionDidChange: (() -> Void)?
-    let surface = PanelSurfaceInsets()
-    var surfaceInsets: EdgeInsets { surface.value }
+    @Published private(set) var surfaceInsets = EdgeInsets()
     @Published private(set) var hovering = false
     @Published var bubbleOnRight = true
     /// Active-filter wording shown beside the collapsed ball (nil for "All").
@@ -46,13 +37,12 @@ final class PanelMotion: ObservableObject {
     weak var filterState: TaskPanelState?
     var filterExtra: CGFloat {
         guard !filterLines.isEmpty else { return 0 }
-        let font = DotistDesign.nativeFont(11, language: model.language)
-        let widest = BubbleFilterSummary.lines(filterLines).map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
-        return BubbleLayout.filterBudget + min(150, ceil(widest))
+        let font = DotistDesign.nativeFont(12, language: model.language)
+        let widest = filterLines.map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        return 16 + min(150, ceil(widest))
     }
     var baseWidth: CGFloat { 48 + filterExtra }
     @Published private(set) var animationInProgress = false
-    let minimumWidth: CGFloat
     var expandedSize: NSSize
     private(set) var transitionSize: NSSize
     private(set) var hoverAnimating = false
@@ -61,7 +51,7 @@ final class PanelMotion: ObservableObject {
     private let title: () -> String
     private let bubbleContent: (() -> BubbleContent)?
     private let rememberFrame: (NSRect) -> Void
-    private var lastActive: Date
+    private var lastActive = Date()
     private var hoverClose: DispatchWorkItem?
     private var pendingHover: Bool?
     private var pendingBubbleToggle = false
@@ -70,16 +60,13 @@ final class PanelMotion: ObservableObject {
     private var stopped = false
     private var closeObservation: NSObjectProtocol?
     private var frameAnimation: PanelFrameAnimation?
-    private(set) var shadowController: PanelShadowController?
     private var insetTransition: PanelSurfaceTransition?
     private var insetObservations: [NSObjectProtocol] = []
 
-    init(model: AppModel, panel: DotistPanel, size: NSSize, minimumWidth: CGFloat = PanelLayoutMetrics.primaryWidth, title: @escaping () -> String, bubbleContent: (() -> BubbleContent)? = nil, environment: Environment = Environment(), rememberFrame: @escaping (NSRect) -> Void = { _ in }) {
-        self.minimumWidth = minimumWidth
+    init(model: AppModel, panel: DotistPanel, size: NSSize, title: @escaping () -> String, bubbleContent: (() -> BubbleContent)? = nil, environment: Environment = Environment(), rememberFrame: @escaping (NSRect) -> Void = { _ in }) {
         self.model = model
         self.panel = panel
         self.environment = environment
-        lastActive = environment.now()
         expandedSize = size
         transitionSize = size
         self.title = title
@@ -88,7 +75,6 @@ final class PanelMotion: ObservableObject {
         // Match the bubble throughout the task panel lifecycle; native glass
         // keeps its own optical edge without an extra AppKit window shadow.
         panel.hasShadow = false
-        shadowController = PanelShadowController(parent: panel, motion: self)
         closeObservation = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stop() }
         }
@@ -98,14 +84,12 @@ final class PanelMotion: ObservableObject {
                     guard let self, !self.stopped, let transition = self.insetTransition else { return }
                     // Publish even when size is unchanged: an anchor-only move
                     // must invalidate FloatingPanelView's observed motion.
-                    if QAPerf.enabled { QAPerf.count(.surfaceInsets) }; self.surface.value = transition.insets(at: self.panel.frame)
-                    self.shadowController?.synchronize()
+                    self.surfaceInsets = transition.insets(at: self.panel.frame)
                 }
             })
         }
     }
     isolated deinit {
-        shadowController?.stop()
         frameAnimation?.cancel()
         hoverClose?.cancel()
         if let closeObservation { NotificationCenter.default.removeObserver(closeObservation) }
@@ -114,7 +98,6 @@ final class PanelMotion: ObservableObject {
     func stop() {
         guard !stopped else { return }
         stopped = true
-        shadowController?.stop(); shadowController = nil
         frameAnimation?.cancel(); frameAnimation = nil
         insetTransition = nil
         insetObservations.forEach { NotificationCenter.default.removeObserver($0) }
@@ -130,7 +113,6 @@ final class PanelMotion: ObservableObject {
 
     func refreshShadow() {
         guard !stopped else { return }
-        shadowController?.synchronize()
         panel.invalidateShadow()
         // SwiftUI may not have committed its glass/tint change until the next turn.
         DispatchQueue.main.async { [weak self] in
@@ -153,8 +135,8 @@ final class PanelMotion: ObservableObject {
             pendingHover = nil; pendingBubbleToggle = true
             return
         }
-        if QAPerf.enabled { QAPerf.begin(bubble ? "expand" : "collapse", period: 1.0 / Double(max(1, panel.screen?.maximumFramesPerSecond ?? 60))) }
         hoverClose?.cancel(); hoverClose = nil
+        panel.makeFirstResponder(nil)
         animationInProgress = true
         let old = panel.frame
         let target: NSRect
@@ -172,7 +154,7 @@ final class PanelMotion: ObservableObject {
             panel.styleMask.remove(.resizable)
             bubble = true
         } else {
-            let width = min(max(minimumWidth, expandedSize.width), area.width)
+            let width = min(expandedSize.width, area.width)
             let height = min(expandedSize.height, area.height)
             let center = bubbleOnRight ? old.maxX - 24 : old.minX + 24
             let right = min(max(center + 22, area.minX + width), area.maxX)
@@ -183,15 +165,11 @@ final class PanelMotion: ObservableObject {
             hovering = false
             bubble = false
         }
-        if QAPerf.enabled { QAPerf.mark("geometry_and_state") }
-        tabsTransitionDidChange?()
         refreshShadow()
-        if QAPerf.enabled { QAPerf.mark("tabs_and_shadow") }
         // Hidden windows have no visible movement to animate, and AppKit can
         // withhold their frame updates/completions even inside NSApplication.run.
         // A controlled test driver explicitly bypasses visibility/display checks.
         if !animated || (environment.animateFrame == nil && (!panel.isVisible || NSScreen.main == nil)) {
-            panel.makeFirstResponder(nil)
             panel.setFrame(target, display: true)
             finishBubbleTransition()
             return
@@ -203,7 +181,6 @@ final class PanelMotion: ObservableObject {
             self.finishBubbleTransition()
         }
         if let animate = environment.animateFrame {
-            panel.makeFirstResponder(nil)
             animate(panel, target, duration, complete)
             return
         }
@@ -212,24 +189,20 @@ final class PanelMotion: ObservableObject {
             complete()
         }
         frameAnimation = animation
-        if duration <= 0 { panel.makeFirstResponder(nil) }
         animation.startMotion()
-        if duration > 0 { panel.makeFirstResponder(nil) }
     }
 
     private func prepareSurfaceTransition(from frame: NSRect, to target: NSRect, compact: Bool) {
         let end = FloatingSurface.opticalInsets(compact: compact, reduceTransparency: false, increasedContrast: false)
         let transition = PanelSurfaceTransition(start: frame, target: target, from: surfaceInsets, to: end, onRight: bubbleOnRight)
         insetTransition = transition
-        if QAPerf.enabled { QAPerf.count(.surfaceInsets) }; surface.value = transition.insets(at: frame)
+        surfaceInsets = transition.insets(at: frame)
     }
 
     private func finishBubbleTransition() {
-        defer { if QAPerf.enabled { QAPerf.end() } }
         insetTransition = nil
-        if QAPerf.enabled { QAPerf.count(.surfaceInsets) }; surface.value = FloatingSurface.opticalInsets(compact: bubble, reduceTransparency: false, increasedContrast: false)
+        surfaceInsets = FloatingSurface.opticalInsets(compact: bubble, reduceTransparency: false, increasedContrast: false)
         animationInProgress = false
-        tabsTransitionDidChange?()
         refreshShadow()
         if bubble {
             // A collapse click often leaves the pointer inside the new circle.
@@ -237,7 +210,7 @@ final class PanelMotion: ObservableObject {
             hoverRequiresExit = panel.frame.contains(environment.mouseLocation())
             return
         }
-        panel.minSize = NSSize(width: minimumWidth, height: 440)
+        panel.minSize = NSSize(width: 320, height: 440)
         panel.styleMask.insert(.resizable)
         rememberFrame(panel.frame)
     }
@@ -275,7 +248,7 @@ final class PanelMotion: ObservableObject {
         hoverAnimating = true
         let frame = panel.frame
         let details = bubbleContent?() ?? BubbleContent(model: model, groupID: filterState?.groupID, fallbackTitle: title(), state: filterState)
-        let width: CGFloat = active ? min(ceil(BubbleLayout.widthBudget + details.textWidth(language: model.language)) + filterExtra, max(baseWidth, min(440, area.width / 2))) : baseWidth
+        let width: CGFloat = active ? min(ceil(78 + details.textWidth(language: model.language)) + filterExtra, max(baseWidth, min(440, area.width / 2))) : baseWidth
         let coreX = bubbleOnRight ? frame.maxX - 24 : frame.minX + 24
         let target = NSRect(x: bubbleOnRight ? coreX + 24 - width : coreX - 24, y: frame.minY, width: width, height: 48)
         // Resize the coordinate space without animation; only the glass surface morphs.
@@ -343,7 +316,7 @@ final class PanelMotion: ObservableObject {
         let y = min(max(frame.minY, area.minY), max(area.minY, area.maxY - frame.height))
         if x != frame.minX || y != frame.minY { panel.setFrameOrigin(NSPoint(x: x, y: y)) }
         if !hovering && !hoverAnimating && frame.width <= baseWidth + 1 { bubbleOnRight = x + frame.width / 2 > area.midX }
-        let width = min(max(minimumWidth, expandedSize.width), area.width)
+        let width = min(expandedSize.width, area.width)
         let height = min(expandedSize.height, area.height)
         let center = bubbleOnRight ? x + frame.width - 24 : x + 24
         let right = min(max(center + 22, area.minX + width), area.maxX)
@@ -369,29 +342,21 @@ final class PanelMotion: ObservableObject {
     func updateIdleState() {
         guard !stopped else { return }
         let prefs = model.settings
-        let qaIdle = Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa"
-            && panel.identifier?.rawValue == "dotist.main"
-            && ProcessInfo.processInfo.environment["DOTIST_QA_IDLE"] == "1"
-        if qaIdle && !bubble && !animationInProgress {
-            idleContentOpacity = Double(prefs.idleOpacity) / 100
-            return
-        }
         if bubble && hoverRequiresExit && !panel.frame.contains(environment.mouseLocation()) { hoverRequiresExit = false }
         if bubble && hovering && !panel.frame.contains(environment.mouseLocation()) && environment.pressedMouseButtons() & 1 == 0 { setHover(false) }
         let active = bubble || animationInProgress || panel.isKeyWindow || panel.frame.contains(environment.mouseLocation()) || environment.pressedMouseButtons() & 1 != 0
-        let now = environment.now()
-        if active || prefs.locked { lastActive = now }
-        let idle = now.timeIntervalSince(lastActive)
+        if active || prefs.locked { lastActive = Date() }
+        let idle = Date().timeIntervalSince(lastActive)
         if !active && !prefs.locked && prefs.autoCollapse && idle >= Double(prefs.autoCollapseSecs) {
             toggleBubble()
             return
         }
         let faded = !active && !prefs.locked && prefs.idleFade && idle >= Double(prefs.idleDelaySecs)
-        let target = faded ? Double(prefs.idleOpacity) / 100 : 1
-        guard idleContentOpacity != target else { return }
-        let duration = faded ? Double(prefs.idleFadeSecs) : 0.12
-        withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration: duration)) {
-            idleContentOpacity = target
+        let target = faded ? CGFloat(prefs.idleOpacity) / 100 : 1
+        guard abs(panel.alphaValue - target) > 0.01 else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : (faded ? Double(prefs.idleFadeSecs) : 0.12)
+            panel.animator().alphaValue = target
         }
     }
 

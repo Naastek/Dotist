@@ -1,21 +1,11 @@
 import AppKit
+import QuartzCore
 import DotistCore
 import SwiftUI
 import XCTest
 @testable import DotistApp
 
 final class SideTabGeometryTests: XCTestCase {
-    func testChildPlacementTranslationAndResize() {
-        let parent = CGRect(x: 200, y: 300, width: 400, height: 500)
-        let child = CGRect(x: 150, y: 250, width: 500, height: 600)
-        let original = ChildFramePlacement(child: child, parent: parent)
-        let movedParent = parent.offsetBy(dx: 30, dy: -20)
-        XCTAssertEqual(original, ChildFramePlacement(child: child.offsetBy(dx: 30, dy: -20), parent: movedParent))
-        var resizedParent = movedParent
-        resizedParent.size.width += 1
-        XCTAssertNotEqual(original, ChildFramePlacement(child: child.offsetBy(dx: 30, dy: -20), parent: resizedParent))
-    }
-
     func testNeighboringTabsHaveSixPointGap() {
         let panel = CGRect(x: 500, y: 100, width: 364, height: 620)
         for inward in [false, true] {
@@ -24,24 +14,24 @@ final class SideTabGeometryTests: XCTestCase {
             XCTAssertEqual(first.minY - second.maxY, 6)
         }
     }
-    func testPaintedOutwardFrameOverlapsWithoutChangingHitRegion() {
-        let panel = CGRect(x: 500, y: 100, width: 364, height: 620)
-        XCTAssertEqual(SideTabGeometry.attachmentOverlap, (GlassSilhouette.expandedInset + 1).rounded(.up))
-        for width: CGFloat in [2, 10, 15, 48, 120] {
-            let hit = SideTabGeometry.frame(panel: panel, index: 1, width: width, inward: false, offsetY: 12)
-            let painted = SideTabGeometry.paintedFrame(hit, inward: false)
-            XCTAssertEqual(hit.maxX, panel.minX)
-            XCTAssertEqual(painted.maxX, panel.minX + SideTabGeometry.attachmentOverlap)
-            XCTAssertEqual(panel.minX - painted.minX, width)
-            XCTAssertEqual(SideTabGeometry.paintedFrame(hit, inward: true), hit)
-        }
-    }
     func testWidthsFollowTextAndExpansion() {
         XCTAssertEqual(SideTabGeometry.expandedWidth(textWidth: 10), 48)
         XCTAssertEqual(SideTabGeometry.expandedWidth(textWidth: 82.2), 111)
         XCTAssertEqual(SideTabGeometry.width(expanded: false, fullWidth: 111), 10)
         XCTAssertEqual(SideTabGeometry.width(expanded: true, fullWidth: 111), 111)
     }
+    func testRestingEarsKeepTheirVisibleWidthsAndBridgeTheGlassEdge() {
+        let panel = CGRect(x: 24, y: 100, width: 364, height: 620)
+        let glassEdge = panel.minX + ExpandedReadingMaterial.opticalClearance
+        for inward in [false, true] {
+            let sample = SideTabGeometry.snapshot(panel: panel, fullWidths: [54, 70],
+                progress: 0, inward: inward, visibleMinX: 0, selectedIndex: 0)
+            XCTAssertEqual(glassEdge - sample.tabs[0].minX, 15)
+            XCTAssertEqual(glassEdge - sample.tabs[1].minX, 10)
+            XCTAssertTrue(sample.tabs.allSatisfy { $0.maxX > glassEdge })
+        }
+    }
+
     func testOneExpansionSampleKeepsWindowContentAndTextSynchronized() {
         let panel = CGRect(x: 500, y: 100, width: 364, height: 620)
         for inward in [false, true] {
@@ -49,11 +39,13 @@ final class SideTabGeometryTests: XCTestCase {
                 let progress = CGFloat(step) / 120
                 let sample = SideTabGeometry.snapshot(panel: panel, fullWidths: [48, 111, 180], progress: progress, inward: inward)
                 XCTAssertEqual(sample.textOpacity, Double(progress), accuracy: 0.000001)
-                XCTAssertEqual(sample.window.width, 10 + 170 * progress + 2 * SideTabGeometry.shadowInset, accuracy: 0.000001)
+                XCTAssertEqual(sample.window.width, 11 + 169 * progress + 2 * SideTabGeometry.shadowInset, accuracy: 0.000001)
                 for (index, tab) in sample.tabs.enumerated() {
                     let fullWidth: CGFloat = [48, 111, 180][index]
-                    XCTAssertEqual(tab.width, 10 + (fullWidth - 10) * progress, accuracy: 0.000001)
-                    XCTAssertEqual(inward ? tab.minX : tab.maxX, panel.minX, accuracy: 0.000001)
+                    XCTAssertEqual(tab.width, 11 + (fullWidth - 11) * progress, accuracy: 0.000001)
+                    let attachment = inward ? panel.minX - 8 * (1 - progress)
+                        : panel.minX + SideTabGeometry.connectionOverlap
+                    XCTAssertEqual(inward ? tab.minX : tab.maxX, attachment, accuracy: 0.000001)
                     XCTAssertTrue(sample.window.contains(tab))
                     // The first tab and its shadow start below the panel's corner.
                     XCTAssertLessThanOrEqual(tab.maxY, panel.maxY - 40)
@@ -135,7 +127,7 @@ final class SideTabGeometryTests: XCTestCase {
             for progress: CGFloat in [0, 0.25, 0.5, 1] {
                 let sample = SideTabGeometry.snapshot(panel: panel, fullWidths: [80, 120], progress: progress,
                     inward: true, visibleMinX: -1000)
-                XCTAssertEqual(sample.window.minX, max(-1000, panel.minX - 10))
+                XCTAssertEqual(sample.window.minX, max(-1000, panel.minX - 8) * (1 - progress) + max(-1000, panel.minX - 10) * progress, accuracy: 0.000001)
                 XCTAssertGreaterThanOrEqual(sample.window.minX, -1000)
                 XCTAssertLessThanOrEqual(sample.window.maxX, panel.maxX)
                 XCTAssertEqual(sample.window.maxY, panel.maxY - 40)
@@ -244,8 +236,8 @@ final class SideTabLabelRenderingTests: XCTestCase {
                 let sample = try XCTUnwrap(SideTabsSnapshot.render(names: ["Work"], language: "en",
                     scheme: .light, inward: inward, expanded: expanded, showLabels: false, opacity: 100))
                 let bitmap = NSBitmapImageRep(cgImage: sample.image)
-                let connectionX = inward ? 0 : bitmap.pixelsWide - 1
-                let outerX = inward ? bitmap.pixelsWide - 1 : 0
+                let connectionX = inward && expanded ? 0 : bitmap.pixelsWide - 1
+                let outerX = inward && expanded ? bitmap.pixelsWide - 1 : 0
                 for y in 0..<bitmap.pixelsHigh {
                     XCTAssertEqual(bitmap.colorAt(x: connectionX, y: y)?.alphaComponent ?? 0, 1,
                                    accuracy: 0.005, "Connection edge is flush through both corners: inward=\(inward), expanded=\(expanded), y=\(y)")
@@ -372,49 +364,6 @@ final class SideTabLabelRenderingTests: XCTestCase {
 
 @MainActor
 final class SideTabWindowSynchronizationTests: XCTestCase {
-    func testTranslationPlacementAndPointerInterest() throws {
-        _ = NSApplication.shared
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-interest-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let model = try AppModel(store: TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path))
-        let parent = DotistPanel(contentRect: CGRect(x: 500, y: 100, width: 364, height: 440), styleMask: [.borderless], backing: .buffered, defer: false)
-        parent.isReleasedWhenClosed = false
-        defer { parent.close() }
-        let motion = PanelMotion(model: model, panel: parent, size: parent.frame.size, title: { "test" })
-        defer { motion.stop() }
-        var synchronizations = 0, frameChanges = 0
-        var environment = SideTabsController.Environment()
-        environment.desktopEvents = false
-        environment.visible = { _ in true }
-        environment.visibleMinX = { _ in 0 }
-        environment.reduceMotion = { true }
-        environment.mouse = { CGPoint(x: -10000, y: -10000) }
-        environment.didSynchronize = { synchronizations += 1 }
-        environment.didSetFrame = { frameChanges += 1 }
-        let controller = SideTabsController(parent: parent, model: model, state: TaskPanelState(), motion: motion, environment: environment)
-        defer { controller.stop() }
-        let child = try XCTUnwrap(parent.childWindows?.first { $0.identifier?.rawValue == "dotist.side-tabs" })
-        frameChanges = 0
-        parent.setFrameOrigin(CGPoint(x: 520, y: 100))
-        controller.synchronize()
-        XCTAssertEqual(frameChanges, 0, "Unchanged relative placement follows the parent without setFrame")
-        parent.setFrameOrigin(CGPoint(x: 4, y: 100))
-        controller.synchronize()
-        XCTAssertEqual(child.frame.minX, 0, accuracy: 0.001)
-        XCTAssertGreaterThan(frameChanges, 0)
-        let outside = CGPoint(x: -10000, y: -10000)
-        synchronizations = 0
-        controller.handlePointerEvent(at: outside)
-        controller.handlePointerEvent(at: outside)
-        XCTAssertEqual(synchronizations, 0)
-        let tab = SideTabGeometry.frame(panel: parent.frame, index: 0, width: 10, inward: true, visibleMinX: 0)
-        controller.handlePointerEvent(at: CGPoint(x: tab.midX, y: tab.midY))
-        XCTAssertEqual(synchronizations, 1)
-        XCTAssertFalse(child.ignoresMouseEvents)
-        controller.handlePointerEvent(at: outside)
-        XCTAssertEqual(synchronizations, 2)
-        XCTAssertTrue(child.ignoresMouseEvents)
-    }
     private func assertOrderedAbove(_ front: NSWindow, _ back: NSWindow, _ message: String = "",
                                     file: StaticString = #filePath, line: UInt = #line) throws {
         // orderedIndex belongs to the scripting window list, which excludes
@@ -509,9 +458,9 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
             text.size(withAttributes: [.font: DotistDesign.nativeFont(13, serif: true, language: model.language)]).width,
             text.size(withAttributes: [.font: DotistDesign.nativeFont(13, weight: .semibold, serif: true, language: model.language)]).width))
         XCTAssertEqual(actual.width, fullWidth, accuracy: 0.001)
-        XCTAssertEqual(inward ? actual.minX : actual.maxX, parent.frame.minX, accuracy: 0.001)
+        XCTAssertEqual(actual.maxX, parent.frame.minX + SideTabGeometry.connectionOverlap, accuracy: 0.001)
         // Leaving keeps the expanded width through the debounce, then shrinks both
-        // the actual child window and its native capture region back to 10pt.
+        // the actual child window and its native capture region to the resting width.
         let outside = CGPoint(x: parent.frame.midX, y: parent.frame.midY)
         controller.synchronize(mouse: outside)
         XCTAssertGreaterThan(child.frame.width, collapsed.width)
@@ -522,7 +471,7 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         content.layoutSubtreeIfNeeded()
         XCTAssertEqual(child.frame, collapsed)
         let narrow = try XCTUnwrap(hitTarget(in: content, atWindowPoint: child.convertPoint(fromScreen: mouse)))
-        XCTAssertEqual(narrow.bounds.width, SideTabGeometry.selectedWidth, accuracy: 0.001)
+        XCTAssertEqual(narrow.bounds.width, SideTabGeometry.selectedWidth + 1, accuracy: 0.001)
     }
 
     func testNativeTabMouseCaptureReordersWithoutSelectingOrMovingPanel() async throws {
@@ -625,7 +574,7 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         XCTAssertEqual(parent.frame, panelFrame)
     }
 
-    func testInwardWindowPromotesAbovePanelAndRestoresBelowWithVisibleHitTestableEar() async throws {
+    func testClampedInwardEarUsesTheSameChildWindowForRestAndExpansion() async throws {
         _ = NSApplication.shared
         guard let area = NSScreen.main?.visibleFrame else {
             throw XCTSkip("Native window ordering requires a WindowServer display")
@@ -643,6 +592,7 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         var testMouse = CGPoint(x: -10_000, y: -10_000)
         var environment = SideTabsController.Environment()
         environment.mouse = { testMouse }
+        environment.mouseButtons = { 0 }
         environment.inputMonitors = false
         let controller = SideTabsController(parent: parent, model: model, state: TaskPanelState(), motion: motion, environment: environment)
         func moveMouse(_ point: CGPoint) {
@@ -653,22 +603,26 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         parent.orderFront(nil)
         let child = try XCTUnwrap(parent.childWindows?.first { $0.identifier?.rawValue == "dotist.side-tabs" })
         let content = try XCTUnwrap(child.contentView)
-        let container = try XCTUnwrap(parent.contentView)
-        let resting = try XCTUnwrap(container.subviews.first { $0.identifier?.rawValue == "dotist.side-tabs-rest" })
         let outside = CGPoint(x: parent.frame.maxX - 20, y: parent.frame.minY + 20)
         moveMouse(outside)
         try await Task.sleep(for: .milliseconds(500))
         moveMouse(outside)
         XCTAssertTrue(parent.frame.contains(child.frame))
-        XCTAssertEqual(child.frame.width, 15)
-        try assertOrderedAbove(parent, child, "Resting child must be below its parent")
-        XCTAssertFalse(resting.isHidden, "The in-panel ear must remain visible when its window is below")
+        XCTAssertEqual(child.frame.width, 16)
+        try assertOrderedAbove(child, parent, "A clamped ear must be visible in the child window alone")
         let ear = SideTabGeometry.frame(panel: parent.frame, index: 0, width: 10, inward: true, visibleMinX: area.minX)
         let mouse = CGPoint(x: ear.midX, y: ear.midY)
-        let restingCapture = try XCTUnwrap(hitTarget(in: resting, atWindowPoint: parent.convertPoint(fromScreen: mouse)))
+        let restingCapture = try XCTUnwrap(hitTarget(in: content, atWindowPoint: child.convertPoint(fromScreen: mouse)))
         XCTAssertEqual(String(describing: type(of: restingCapture)), "PointerView")
         let gap = CGPoint(x: mouse.x, y: ear.minY - 3)
-        XCTAssertNil(hitTarget(in: resting, atWindowPoint: parent.convertPoint(fromScreen: gap)), "Six-point gaps must pass through to panel content")
+        let rim = try XCTUnwrap(parent.contentView?.layer?.mask as? CAShapeLayer)
+        let cutout = try XCTUnwrap(rim.path)
+        let tabY = parent.convertPoint(fromScreen: mouse).y
+        let gapY = parent.convertPoint(fromScreen: gap).y
+        XCTAssertFalse(cutout.contains(CGPoint(x: 1, y: tabY), using: .evenOdd))
+        XCTAssertTrue(cutout.contains(CGPoint(x: 1, y: gapY), using: .evenOdd))
+        XCTAssertTrue(cutout.contains(CGPoint(x: 3, y: tabY), using: .evenOdd))
+        XCTAssertNil(hitTarget(in: content, atWindowPoint: child.convertPoint(fromScreen: gap)), "Six-point gaps must pass through to panel content")
         moveMouse(mouse)
         for _ in 0..<24 {
             try await Task.sleep(for: .milliseconds(10))
@@ -679,7 +633,7 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         }
         XCTAssertGreaterThan(child.frame.width, 10)
         XCTAssertTrue(parent.frame.contains(child.frame))
-        XCTAssertTrue(resting.isHidden)
+        XCTAssertNil(parent.contentView?.layer?.mask)
         content.layoutSubtreeIfNeeded()
         let capture = try XCTUnwrap(hitTarget(in: content, atWindowPoint: child.convertPoint(fromScreen: mouse)))
         let actual = child.convertToScreen(capture.convert(capture.bounds, to: nil))
@@ -691,20 +645,25 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         for _ in 0..<42 {
             try await Task.sleep(for: .milliseconds(10))
             moveMouse(outside)
-            if child.frame.width > SideTabGeometry.selectedWidth + 0.001 { try assertOrderedAbove(child, parent) }
+            if child.frame.width > SideTabGeometry.selectedWidth + 1.001 { try assertOrderedAbove(child, parent) }
         }
-        XCTAssertEqual(child.frame.width, SideTabGeometry.selectedWidth, accuracy: 0.001)
-        try assertOrderedAbove(parent, child)
-        XCTAssertFalse(resting.isHidden)
+        XCTAssertEqual(child.frame.width, SideTabGeometry.selectedWidth + 1, accuracy: 0.001)
+        try assertOrderedAbove(child, parent)
         for room: CGFloat in [4, 10, 40] {
             parent.setFrameOrigin(CGPoint(x: area.minX + room, y: parent.frame.minY))
             moveMouse(outside)
-            XCTAssertEqual(child.frame.minX, max(area.minX, parent.frame.minX - 10), accuracy: 0.001)
-            XCTAssertGreaterThan(child.frame.maxX, parent.frame.minX, "The 15pt selected tab still overlaps the panel")
-            XCTAssertFalse(resting.isHidden, "The overlapping selected ear stays visible below the parent")
+            XCTAssertEqual(child.frame.minX, max(area.minX, parent.frame.minX + ExpandedReadingMaterial.opticalClearance - SideTabGeometry.selectedWidth), accuracy: 0.001)
+            if room + ExpandedReadingMaterial.opticalClearance < SideTabGeometry.selectedWidth {
+                try assertOrderedAbove(child, parent)
+                XCTAssertNotNil(parent.contentView?.layer?.mask)
+            } else {
+                try assertOrderedAbove(parent, child)
+                XCTAssertNil(parent.contentView?.layer?.mask)
+            }
         }
         controller.stop()
-        XCTAssertNil(resting.superview, "Stopping tabs must also remove the in-panel ear")
+        XCTAssertNil(child.parent)
+        XCTAssertNil(parent.contentView?.layer?.mask)
     }
 
     func testDraggingPanelAcrossThresholdChangesAnchorImmediatelyAtFullWidthWithoutJitter() async throws {
@@ -732,7 +691,7 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
             controller.synchronize(mouse: mouse)
         }
-        XCTAssertEqual(child.frame.width, width + SideTabGeometry.attachmentOverlap, accuracy: 0.001)
+        XCTAssertEqual(child.frame.width, width, accuracy: 0.001)
         // Every move triggers AppKit didMove. Keep the pointer on the new tab so
         // ordinary mouse-leave collapse cannot mask a forced direction collapse.
         for step in 0..<40 {
@@ -751,8 +710,8 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         }
         parent.setFrameOrigin(CGPoint(x: area.minX + width + 81, y: parent.frame.minY))
         controller.synchronize(mouse: CGPoint(x: parent.frame.minX - 5, y: parent.frame.maxY - 50))
-        XCTAssertEqual(child.frame.maxX, parent.frame.minX + SideTabGeometry.attachmentOverlap, accuracy: 0.001)
-        XCTAssertEqual(child.frame.width, width + SideTabGeometry.attachmentOverlap, accuracy: 0.001)
+        XCTAssertEqual(child.frame.maxX, parent.frame.minX + SideTabGeometry.connectionOverlap, accuracy: 0.001)
+        XCTAssertEqual(child.frame.width, width, accuracy: 0.001)
         try assertOrderedAbove(parent, child)
     }
 
@@ -778,7 +737,6 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(child.contentView?.layer).masksToBounds)
 
         var placement = SideTabPlacement()
-        var previous: (parent: CGRect, child: CGRect)?
         func assertAttached(file: StaticString = #filePath, line: UInt = #line) {
             let frame = parent.frame
             let visibleMinX = (parent.screen ?? NSScreen.main)?.visibleFrame.minX ?? frame.minX
@@ -786,19 +744,10 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
                 .map { SideTabGeometry.expandedWidth(name: $0, language: model.language) }.max() ?? 10
             placement.update(availableSpace: frame.minX - visibleMinX, expandedWidth: maxWidth)
             let inward = placement.inward
-            let sample = SideTabGeometry.snapshot(panel: frame,
+            XCTAssertEqual(child.frame, SideTabGeometry.snapshot(panel: frame,
                 fullWidths: Array(repeating: SideTabGeometry.collapsedWidth, count: model.visibleGroups.count + 1),
                 progress: 0, inward: inward, visibleMinX: visibleMinX, selectedIndex: 0,
-                entrance: Array(repeating: 0, count: model.visibleGroups.count + 1))
-            let expected = SideTabGeometry.paintedFrame(sample.window, inward: inward)
-            if child.frame != expected, let previous {
-                // Offscreen AppKit may not move attached windows; check the translation decision.
-                XCTAssertEqual(ChildFramePlacement(child: expected, parent: frame),
-                               ChildFramePlacement(child: previous.child, parent: previous.parent), file: file, line: line)
-            } else {
-                XCTAssertEqual(child.frame, expected, file: file, line: line)
-            }
-            previous = (frame, expected)
+                entrance: Array(repeating: 0, count: model.visibleGroups.count + 1)).window, file: file, line: line)
         }
         assertAttached()
         for frame in [CGRect(x: 700, y: 170, width: 364, height: 620),

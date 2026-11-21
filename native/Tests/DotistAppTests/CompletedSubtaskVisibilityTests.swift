@@ -48,7 +48,13 @@ final class CompletedSubtaskVisibilityTests: XCTestCase {
         defer { fixture.close() }
         for (index, hidden) in [false, true, false].enumerated() {
             if index > 0 {
-                state.hideCompleted = hidden
+                let toggle = try XCTUnwrap(elements(fixture.host).first {
+                    ($0 as? any NSAccessibilityElementProtocol)?.accessibilityIdentifier?() == "completion-filter"
+                })
+                let selector = #selector(NSAccessibilityProtocol.accessibilityPerformPress)
+                let method = try XCTUnwrap(toggle.method(for: selector))
+                typealias Press = @convention(c) (AnyObject, Selector) -> Bool
+                XCTAssertTrue(unsafeBitCast(method, to: Press.self)(toggle, selector))
             }
             try await Task.sleep(for: .milliseconds(250))
             _ = try await fixture.capture(scale: 2)

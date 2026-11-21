@@ -3,11 +3,43 @@ import Combine
 import DotistCore
 import SwiftUI
 
-extension MainWindow {
-    var draftMotion: Animation? {
-        LayoutMotionInputs.shouldReduceMotion(reduceMotion) ? nil : .easeInOut(duration: 0.2)
-    }
+private struct ComposerInputBounds: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
 
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
+
+private struct ComposerGlass: View {
+    let focused: Bool
+    let color: DotistGroupColor
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 12)
+        Group {
+            if reduceTransparency || contrast == .increased {
+                shape.fill(DotistDesign.surface)
+                    .overlay { shape.strokeBorder(DotistDesign.accent.opacity(0.5), lineWidth: 1) }
+            } else {
+                // Keep the field glass independent of the nearby tag suggestions.
+                GlassEffectContainer(spacing: 0) {
+                    Color.clear.glassEffect(.regular.tint(DotistTheme.tint(color, scheme)), in: shape)
+                }
+            }
+        }
+        .opacity(focused ? 1 : 0)
+        .animation(LayoutMotionInputs.shouldReduceMotion(reduceMotion) ? nil : .easeOut(duration: focused ? 0.2 : 0.15),
+                   value: focused)
+        .accessibilityHidden(true)
+    }
+}
+
+extension MainWindow {
     func beginGroupDraft(_ group: DotistGroup, after task: DotistTask?) {
         withAnimation(groupCollapseAnimation) { state.setGroupCollapsed(false, id: group.id) }
         if let task { startDraft(after: task) }
@@ -38,7 +70,7 @@ extension MainWindow {
     }
 
     func clearEditing() { editing = nil; editedTitle = ""; editHeight = 20; pendingEdit = nil }
-    private func clearDraft() { draftAfter = nil; draftTitle = ""; draftParent = nil; draftHeight = 20 }
+    private func clearDraft() { draftAfter = nil; draftTitle = ""; draftParent = nil; draftHeight = 20; draftPlan = nil }
     func clearInputs() {
         clearDraft(); clearEditing(); addingToGroup = nil; groupTitles.removeAll()
     }
@@ -46,6 +78,7 @@ extension MainWindow {
     func startDraft(after task: DotistTask, asChild: Bool = false) {
         clearInputs()
         draftAfter = task.id; draftParent = asChild && model.depth(of: task) < 4 ? task.id : task.parentId
+        draftPlan = state.planScope
     }
 
     @ViewBuilder func draftRow(after task: DotistTask, sub: Bool) -> some View {
@@ -61,7 +94,6 @@ extension MainWindow {
                     .id("draft:\(task.id)").frame(height: draftHeight)
                 Color.clear.frame(width: 0, height: 0)
             }.background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(0.18)).padding(.horizontal, -6))
-                .transition(.opacity.combined(with: .move(edge: .top)))
         }
     }
 
@@ -70,6 +102,7 @@ extension MainWindow {
         guard let title = TaskDraftFlow.titleToSave(draftTitle) else { clearDraft(); return }
         draftSaving = true
         let parent = draftParent
+        let plan = draftPlan
         var created: DotistTask?
         model.change(completed: {
             draftSaving = false
@@ -77,7 +110,8 @@ extension MainWindow {
             clearDraft()
             if continueEditing, let created { startDraft(after: created) }
         }, failed: { draftSaving = false; showNotice(model.error ?? model.text("无法保存任务")); model.error = nil }) { store in
-            let newTask = try store.addTask(title: title, category: task.category, parentId: parent, dueDate: task.dueDate)
+            let newTask = try store.addTask(title: title, category: task.category, parentId: parent,
+                                            dueDate: plan == nil ? task.dueDate : nil, plan: plan)
             let hierarchy = TaskHierarchy(try store.listTasks())
             let anchor = ([task] + hierarchy.ancestors(of: task.id)).first { $0.parentId == parent }
             if let anchor { try store.reorder(newTask.id, relativeTo: anchor.id, after: true, allTasks: false) }
@@ -112,37 +146,15 @@ extension MainWindow {
         }, failed: { editSaving = false; pendingEdit = nil }) { _ = try $0.patchTask(id: task.id, title: title) }
     }
 
-    var composerGlass: some View {
-        GeometryReader { geometry in
-            if let input = composerFrames["input"] {
-                let field = CGRect(x: input.minX - 12, y: input.midY - 18,
-                                   width: max(0, geometry.size.width - 8 - input.minX + 12), height: 36)
-                let source = composerFrames["plus"] ?? field
-                let rect = composerFlight && !composerFlightAtField ? source : field
-                // 12 = panel corner radius 20 minus the 8pt edge margin, so the field's
-                // trailing corner is concentric with the panel's.
-                let radius: CGFloat = composerFlight && !composerFlightAtField ? 6 : 12
-                Group {
-                    if reduceTransparency || contrast == .increased {
-                        RoundedRectangle(cornerRadius: radius).fill(DotistDesign.surface)
-                            .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(DotistDesign.accent.opacity(0.5), lineWidth: 1))
-                    } else {
-                        Color.clear.dotistGlass(.regular.tint(DotistTheme.tint(model.themeColor(forGroup: state.groupID), scheme)), in: RoundedRectangle(cornerRadius: radius))
-                    }
-                }
-                .frame(width: rect.width, height: rect.height)
-                .position(x: rect.midX, y: rect.midY)
-                .opacity(composerFocused || composerFlight ? 1 : 0)
-                .animation(composerFlight || LayoutMotionInputs.shouldReduceMotion(reduceMotion) ? nil : .easeOut(duration: composerFocused ? 0.2 : 0.15), value: composerFocused)
-                .allowsHitTesting(false).accessibilityHidden(true)
-            }
-        }
-    }
-
     var composerBar: some View {
         let selectedID = dropGroupIDs.contains(category) ? category : DotistGroup.inboxID
         let selectedName = model.composerGroupDisplayName(selectedID)
-        let shownDue = dueDate?.dotistDay
+        let entry = resolvedComposer
+        let shownDue = composer.isEmpty && composerDate.selection == .automatic ? composerDate.contextDay : entry.day
+        let dateLabel = shownDue.map(model.dueLabel) ?? (composerDate.selection == .cleared ? model.text("无日期") : nil)
+        let dateHelp = shownDue.map {
+            model.text("到期日：{date}").replacingOccurrences(of: "{date}", with: $0)
+        } ?? model.text("设置到期日")
         return ComposerLayout {
             Menu {
                 Picker(model.text("分组"), selection: $category) {
@@ -156,17 +168,16 @@ extension MainWindow {
                 HStack(spacing: 4) {
                     ComposerGroupLabel(title: selectedName, language: model.language, sample: composer.isEmpty ? model.text("写下一件小事") : composer.components(separatedBy: .newlines).first ?? "")
                 }.foregroundColor(DotistDesign.muted).frame(height: ComposerMetrics.rowHeight)
-            }.menuStyle(.borderlessButton).menuIndicator(.hidden).focusEffectDisabled().frame(maxWidth: .infinity, alignment: .leading).frame(height: ComposerMetrics.rowHeight).clipped().help(model.text("分组")).accessibilityLabel(Text(model.text("分组"))).accessibilityValue(Text(selectedName)).accessibilityIdentifier("composer-group")
+            }.menuStyle(.borderlessButton).menuIndicator(.hidden).focusEffectDisabled().fixedSize().frame(height: ComposerMetrics.rowHeight).help(model.text("分组")).accessibilityLabel(Text(model.text("分组"))).accessibilityValue(Text(selectedName)).accessibilityIdentifier("composer-group")
             ZStack(alignment: .leading) {
                 ComposerInput(text: $composer, focused: $composerFocused, placeholder: model.text("写下一件小事"), label: model.text("新任务"), font: DotistDesign.nativeFont(ComposerMetrics.fontSize, language: model.language), commit: addTask, navigate: { direction in
                     let values = tagSuggestions
                     guard !values.isEmpty else { return false }
                     selectedSuggestion = (selectedSuggestion + direction + values.count) % values.count
                     return true
-                }, complete: { force in chooseSuggestion(force: force) }).tint(DotistDesign.accent).frame(height: ComposerMetrics.rowHeight)
-                    .background(GeometryReader { geometry in
-                        Color.clear.preference(key: ComposerFrameKey.self, value: ["input": geometry.frame(in: .named(Self.listSpace))])
-                    })
+                }, complete: { force in chooseSuggestion(force: force) }, composing: $composerComposing)
+                    .tint(DotistDesign.accent).frame(height: ComposerMetrics.rowHeight)
+                    .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(DotistDesign.accent.opacity(composerCueVisible ? 0.5 : 0), lineWidth: 1).allowsHitTesting(false) }
                     .accessibilityIdentifier("composer-input")
                 if !tagSuggestions.isEmpty {
                     VStack(alignment: .leading, spacing: 0) {
@@ -174,25 +185,46 @@ extension MainWindow {
                             Button("#" + tag) { selectedSuggestion = index; _ = chooseSuggestion(force: true) }
                                 .buttonStyle(.plain).modifier(DotistFocusRing()).font(font(12, index == selectedSuggestion ? .medium : .regular)).foregroundColor(index == selectedSuggestion ? DotistDesign.ink : DotistDesign.muted).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 8).frame(height: 28)
                         }
-                    }.dotistGlass(.regular.tint(DotistTheme.tint(model.themeColor(forGroup: state.groupID), scheme)), in: RoundedRectangle(cornerRadius: 12)).dotistInlineShadow().offset(y: -CGFloat(tagSuggestions.count * 28 + 6)).zIndex(1)
+                    }.glassEffect(.regular, in: .rect(cornerRadius: 12)).offset(y: -CGFloat(tagSuggestions.count * 28 + 6)).zIndex(1)
                 }
             }.frame(maxWidth: .infinity).frame(height: ComposerMetrics.rowHeight)
+                .anchorPreference(key: ComposerInputBounds.self, value: .bounds) { $0 }
                 .onChange(of: composer) { _ in selectedSuggestion = -1; dismissComposerCue() }
                 .onChange(of: composerFocused) { focused in if !focused { dismissComposerCue() } }
             Button { showDuePicker.toggle() } label: {
                 IconTextRow(spacing: 4) {
-                    if let shownDue { OpticalText(title: model.dueLabel(shownDue), size: 12, language: model.language).lineLimit(1) }
-                    ComposerCalendarIcon(language: model.language).opacity(composerHovered || composerFocused ? 1 : 0)
+                    if let dateLabel { OpticalText(title: dateLabel, size: 12, language: model.language).lineLimit(1) }
+                    ComposerCalendarIcon(language: model.language).opacity(dateLabel != nil || composerHovered || composerFocused ? 1 : 0)
                 }.foregroundColor(shownDue == nil ? DotistDesign.muted : DotistDesign.accent)
             }
                 .buttonStyle(.plain).frame(height: ComposerMetrics.rowHeight).modifier(DotistFocusRing()).accessibilityLabel(Text(model.text("设置到期日")))
-                .help(model.text("设置到期日"))
+                .accessibilityValue(Text(dateLabel ?? ""))
+                .help(dateHelp)
+                .disabled(composerComposing)
                 .accessibilityIdentifier("composer-due")
                 .popover(isPresented: $showDuePicker) {
-                    RangeCalendar(model: model, start: shownDue ?? "", end: shownDue ?? "", choose: { date, _ in dueDate = Date.dotistDay(date); showDuePicker = false }, close: { showDuePicker = false }, single: true, clear: { dueDate = nil; showDuePicker = false })
+                    RangeCalendar(model: model, start: entry.day ?? "", end: entry.day ?? "", choose: { date, _ in
+                        setComposerDate(.selected(date))
+                    }, close: { showDuePicker = false }, single: true, clear: { setComposerDate(.cleared) })
                 }
 
-        }.padding(.leading, 16).padding(.trailing, 8).frame(height: ComposerMetrics.barHeight).onHover { composerHovered = $0 }.overlay(alignment: .top) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5) }
+        }.padding(.leading, 16).padding(.trailing, 11).frame(height: ComposerMetrics.barHeight)
+            .backgroundPreferenceValue(ComposerInputBounds.self) { anchor in
+                GeometryReader { geometry in
+                    if let anchor {
+                        let input = geometry[anchor]
+                        let leading = input.minX - ComposerMetrics.glassLeadingInset
+                        // Match the original field surround, including the date control.
+                        let width = max(0, geometry.size.width - 8 - leading)
+                        ComposerGlass(focused: composerFocused, color: model.themeColor(forGroup: state.groupID))
+                            .frame(width: width, height: 36)
+                            .position(x: leading + width / 2, y: input.midY)
+                    }
+                }
+                .allowsHitTesting(false)
+            }
+            .onHover { composerHovered = $0 }
+            .overlay(alignment: .top) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5) }
             #if DEBUG
             .background(ComposerBarLayoutAnchor().allowsHitTesting(false).accessibilityHidden(true))
             #endif
@@ -214,7 +246,7 @@ extension MainWindow {
     }
 
     private var tagSuggestions: [String] {
-        guard let range = composer.range(of: "(^|\\s)#([^\\s#]*)$", options: .regularExpression),
+        guard !composerComposing, let range = composer.range(of: "(^|\\s)#([^\\s#]*)$", options: .regularExpression),
               let hash = composer[range].lastIndex(of: "#") else { return [] }
         let prefix = String(composer[composer.index(after: hash)...])
         return Array(model.tagCounts.filter { $0.open > 0 && $0.tag.lowercased().hasPrefix(prefix.lowercased()) && $0.tag != prefix }.prefix(6).map(\.tag))
@@ -228,19 +260,32 @@ extension MainWindow {
         return true
     }
 
+    private var resolvedComposer: TaskEntryDate.Submission {
+        let fallback = ["today", "tomorrow", "week", "nextweek", "next7"].contains(state.scope) ? rangeBounds.0 : nil
+        return composerDate.resolve(composer, fallback: fallback, composing: composerComposing)
+    }
+
+    private func setComposerDate(_ selection: TaskEntryDate.Selection) {
+        composerDate.selection = selection
+        showDuePicker = false
+        composerFocused = true
+    }
+
     private func addTask() {
-        let title = composer.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty, !composerSubmitting else { return }
-        let date = dueDate?.dotistDay ?? (["today", "tomorrow", "week", "nextweek", "next7"].contains(state.scope) ? rangeBounds.0 : nil)
-        let selectedDue = dueDate
+        guard !composerComposing, !composerSubmitting else { return }
+        let entry = resolvedComposer
+        guard !entry.title.isEmpty else { return }
+        let submittedText = composer
+        let submittedDate = composerDate
+        let plan = state.planScope
         let selectedCategory = dropGroupIDs.contains(category) ? category : DotistGroup.inboxID
         composerSubmitting = true
         model.change(completed: {
             composerSubmitting = false
-            if composer.trimmingCharacters(in: .whitespacesAndNewlines) == title { composer = "" }
-            if dueDate == selectedDue { dueDate = nil }
+            if composer == submittedText { composer = "" }
+            if composerDate == submittedDate { composerDate = TaskEntryDate() }
         }, failed: { composerSubmitting = false }) {
-            _ = try $0.addTask(title: title, category: selectedCategory, dueDate: date)
+            _ = try $0.addTask(title: entry.title, category: selectedCategory, dueDate: entry.day, plan: plan)
         }
     }
 }

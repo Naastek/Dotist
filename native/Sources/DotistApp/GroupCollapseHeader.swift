@@ -38,3 +38,26 @@ struct GroupCollapseHeader: View {
 private struct GroupHeaderButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View { configuration.label }
 }
+
+private struct HeaderMenuEscape: NSViewRepresentable {
+    @Binding var isPresented: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        // Hovering does not give a SwiftUI control keyboard focus.
+        context.coordinator.monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak view] event in
+            guard event.keyCode == 53, let window = view?.window, event.window === window else { return event }
+            isPresented = false
+            return nil
+        }
+        return view
+    }
+    func updateNSView(_ view: NSView, context: Context) {}
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+        if let monitor = coordinator.monitor { NSEvent.removeMonitor(monitor) }
+    }
+    final class Coordinator {
+        var monitor: Any?
+    }
+}

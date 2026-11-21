@@ -2,7 +2,6 @@ import AppKit
 import DotistCore
 import GRDB
 import XCTest
-import SwiftUI
 @testable import DotistApp
 
 @MainActor
@@ -14,18 +13,28 @@ final class BubbleContentTests: XCTestCase {
         return try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
     }
 
-    func testCacheIgnoresSurfaceInsets() throws {
-        let model = try AppModel(store: store())
-        let state = TaskPanelState()
-        let cache = BubbleContentCache()
-        let surface = PanelSurfaceInsets()
-        _ = cache.content(model: model, state: state, title: "Panel")
-        surface.value = EdgeInsets(top: 2, leading: 1, bottom: 2, trailing: 1)
-        _ = cache.content(model: model, state: state, title: "Panel")
-        XCTAssertEqual(cache.buildCount, 1)
-        state.groupID = "other"
-        _ = cache.content(model: model, state: state, title: "Panel")
-        XCTAssertEqual(cache.buildCount, 2)
+    func testOneOverdueTaskCountsAsOneOnPanelMenuBarAndHoverStrip() throws {
+        let store = try store()
+        let task = try store.addTask(title: "Overdue task", dueDate: "2026-11-19")
+        let model = try AppModel(store: store)
+        let state = TaskPanelState(scope: "today")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 11, day: 20, hour: 12))!
+        let panel = try XCTUnwrap(state.todayAgenda(in: model, now: now, calendar: calendar))
+        let menu = MenuBarImage.todayCount(tasks: model.tasks, groupID: nil, now: now, calendar: calendar)
+        let strip = BubbleContent(model: model, state: state, now: now, calendar: calendar)
+
+        XCTAssertEqual(panel.overdue.matches.map(\.id), [task.id])
+        XCTAssertTrue(panel.today.matches.isEmpty)
+        XCTAssertEqual(panel.openCount, 1)
+        XCTAssertEqual(MenuBarImage.countLabel(menu), "1")
+        XCTAssertEqual(strip.remaining, 1)
+        XCTAssertEqual(strip.title, task.title)
+
+        state.customStart = "2026-11-20"
+        XCTAssertNil(state.todayAgenda(in: model, now: now, calendar: calendar))
+        XCTAssertEqual(BubbleContent(model: model, state: state, now: now, calendar: calendar).remaining, 0)
     }
 
     func testMainBubbleSelectsAndCountsOnlyOpenRoots() throws {
@@ -71,6 +80,75 @@ final class BubbleContentTests: XCTestCase {
         XCTAssertEqual(strip.task?.id, inbox.id)
         XCTAssertEqual(strip.title, model.bubbleTitle)
         XCTAssertEqual(strip.remaining, 2)
+    }
+
+    func testSelectedPreviewPersistsAndRespectsGroupTagAndDateFilters() async throws {
+        let store = try store()
+        let first = try store.addTask(title: "First #other", dueDate: "2027-02-13")
+        let selected = try store.addTask(title: "Selected #focus", category: "work", dueDate: "2027-02-12")
+        let settingsFile = URL(fileURLWithPath: try store.databasePath()).deletingLastPathComponent()
+            .appendingPathComponent("settings.json")
+        try Data(#"{"hover_expand":true,"opacity":60}"#.utf8).write(to: settingsFile)
+        let legacyStore = try TaskStore(databasePath: store.databasePath())
+        let model = try AppModel(store: legacyStore)
+        XCTAssertNil(model.settings.hoverPreviewTaskId)
+        XCTAssertEqual(BubbleContent(model: model).task?.id, first.id)
+
+        var patch = DotistSettingsPatch()
+        patch.hoverPreviewTaskId = selected.id
+        let saved = await withCheckedContinuation { continuation in
+            model.updateSettings(patch) { continuation.resume(returning: $0) }
+        }
+        XCTAssertTrue(saved)
+        let strip = BubbleContent(model: model)
+        XCTAssertEqual(strip.task?.id, selected.id)
+        XCTAssertEqual(strip.remaining, 2)
+        XCTAssertEqual(model.nextTask?.id, first.id)
+        XCTAssertEqual(try store.snapshot().tasks.first(where: { $0.id == selected.id }), selected)
+
+        let reopened = try TaskStore(databasePath: store.databasePath())
+        let reopenedModel = try AppModel(store: reopened)
+        XCTAssertEqual(reopenedModel.settings.opacity, 60)
+        XCTAssertEqual(BubbleContent(model: reopenedModel).task?.id, selected.id)
+        XCTAssertEqual(BubbleContent(model: reopenedModel, groupID: "work").task?.id, selected.id)
+        XCTAssertEqual(BubbleContent(model: reopenedModel, groupID: DotistGroup.inboxID).task?.id, first.id)
+        let state = TaskPanelState()
+        state.activeTag = "other"
+        XCTAssertEqual(BubbleContent(model: reopenedModel, state: state).task?.id, first.id)
+        state.activeTag = nil
+        state.customStart = "2027-02-13"
+        XCTAssertEqual(BubbleContent(model: reopenedModel, state: state).task?.id, first.id)
+        state.customStart = "2027-02-12"
+        XCTAssertEqual(BubbleContent(model: reopenedModel, state: state).task?.id, selected.id)
+
+        patch.hoverPreviewTaskId = first.id
+        XCTAssertEqual(try reopened.updateSettings(patch).hoverPreviewTaskId, first.id)
+        patch.hoverPreviewTaskId = ""
+        XCTAssertNil(try reopened.updateSettings(patch).hoverPreviewTaskId)
+        XCTAssertNil(try TaskStore(databasePath: reopened.databasePath()).settings().hoverPreviewTaskId)
+    }
+
+    func testPreviewUsesCurrentTitleAndFallsBackWhenTaskBecomesIneligible() throws {
+        let store = try store()
+        let first = try store.addTask(title: "First", dueDate: "2027-02-12")
+        let selected = try store.addTask(title: "Selected", dueDate: "2027-02-12")
+        var patch = DotistSettingsPatch()
+        patch.hoverPreviewTaskId = selected.id
+        _ = try store.updateSettings(patch)
+
+        _ = try store.patchTask(id: selected.id, title: "Updated title")
+        XCTAssertEqual(BubbleContent(model: try AppModel(store: store)).title, "Updated title")
+        _ = try store.patchTask(id: selected.id, completed: true)
+        XCTAssertEqual(BubbleContent(model: try AppModel(store: store)).task?.id, first.id)
+        _ = try store.patchTask(id: selected.id, completed: false)
+        _ = try store.indent(ids: [selected.id])
+        let state = TaskPanelState()
+        state.customStart = "2027-02-12"
+        let filtered = BubbleContent(model: try AppModel(store: store), state: state)
+        XCTAssertEqual(filtered.task?.id, first.id)
+        XCTAssertEqual(filtered.remaining, 2, "Filtering still counts matching subtasks")
+        try store.deleteTask(selected.id)
+        XCTAssertEqual(BubbleContent(model: try AppModel(store: store)).task?.id, first.id)
     }
 
     func testGroupIdentityDoesNotDependOnDuplicateDisplayNames() throws {

@@ -66,7 +66,7 @@ final class BubbleGroupSelectionTests: XCTestCase {
         XCTAssertEqual(view.filter, [model.groupDisplayName("life")])
         view.motion.toggleBubble(in: area, animated: false)
         view.motion.setHover(true, in: area)
-        let expected = min(ceil(86 + view.bubbleContent.textWidth(language: model.language)) + view.motion.filterExtra, 440)
+        let expected = min(ceil(78 + view.bubbleContent.textWidth(language: model.language)) + view.motion.filterExtra, 440)
         XCTAssertEqual(view.motion.panel.frame.width, expected, accuracy: 0.01,
                        "Hover geometry and rendered content must use the same selection")
     }
@@ -98,76 +98,8 @@ final class BubbleGroupSelectionTests: XCTestCase {
         XCTAssertNil(view.bubbleContent.group)
         XCTAssertNil(view.bubbleContent.due)
         XCTAssertEqual(view.bubbleContent.remaining, 0)
-        XCTAssertEqual(view.bubbleContent.title, model.text("这个分组还没有任务"))
+        XCTAssertEqual(view.bubbleContent.title, model.groupDisplayName("life"))
         XCTAssertEqual(view.filter, [model.groupDisplayName("life")])
-    }
-
-    func testEmptyAndCompletedSelectedGroupsShowStatusInsteadOfRepeatingTheirName() throws {
-        let (initial, _, _) = try fixture()
-        try initial.core.database.write { db in
-            try db.execute(sql: "DELETE FROM tasks WHERE category='life'")
-        }
-        let emptyModel = try AppModel(store: initial.core)
-        let empty = view(emptyModel, state())
-        XCTAssertEqual(empty.filter, [emptyModel.groupDisplayName("life")])
-        XCTAssertEqual(empty.bubbleContent.title, emptyModel.text("这个分组还没有任务"))
-        XCTAssertEqual(empty.bubbleContent.remaining, 0)
-        XCTAssertNil(empty.bubbleContent.task)
-        let task = try initial.core.addTask(title: "Completed task", category: "life")
-        _ = try initial.core.patchTask(id: task.id, completed: true)
-        let completedModel = try AppModel(store: initial.core)
-        let completed = view(completedModel, state())
-        XCTAssertEqual(completed.filter, [completedModel.groupDisplayName("life")])
-        XCTAssertEqual(completed.bubbleContent.title, completedModel.text("今天的事都做完了"))
-        XCTAssertEqual(completed.bubbleContent.remaining, 0)
-    }
-
-    func testRealTaskNamedAfterItsGroupIsStillShownAndUnchanged() throws {
-        let (initial, _, _) = try fixture()
-        try initial.core.database.write { db in
-            try db.execute(sql: "DELETE FROM tasks WHERE category='life'")
-        }
-        let name = initial.groupDisplayName("life")
-        let task = try initial.core.addTask(title: name, category: "life")
-        let model = try AppModel(store: initial.core)
-        let selected = view(model, state())
-        XCTAssertEqual(selected.bubbleContent.task?.id, task.id)
-        XCTAssertEqual(selected.bubbleContent.title, name)
-        XCTAssertEqual(selected.bubbleContent.remaining, 1)
-        XCTAssertEqual(selected.filter, [name])
-        XCTAssertEqual(model.tasks.first(where: { $0.id == task.id })?.title, name)
-    }
-
-    func testEmptyGroupStripWindowCapture() async throws {
-        let (initial, _, _) = try fixture()
-        try await initial.core.database.write { db in
-            try db.execute(sql: "DELETE FROM tasks WHERE category='life'")
-            try db.execute(sql: "UPDATE task_groups SET name='work' WHERE id='life'")
-        }
-        let model = try AppModel(store: initial.core)
-        let selected = view(model, state())
-        selected.motion.toggleBubble(in: area, animated: false)
-        selected.motion.setHover(true, in: area)
-        let width = selected.motion.panel.frame.width
-        let size = CGSize(width: width, height: 48)
-        let content = FloatingBubble(model: model, motion: selected.motion, details: selected.bubbleContent,
-            groupName: nil, contextMenu: { _, _ in }, width: width, reveal: 1,
-            extra: selected.motion.filterExtra, filter: selected.filter)
-            .background(Color.white)
-            .environment(\.colorScheme, .light)
-        let host = NativeRenderingFixture(content, size: size)
-        defer { host.close() }
-        let bitmap = try await host.capture(scale: 2)
-        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent()
-        let directory = repo.appendingPathComponent(".cache/group-strip-fix")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-            .write(to: directory.appendingPathComponent("empty-group.png"))
-        XCTAssertEqual(selected.bubbleContent.title, model.text("这个分组还没有任务"))
-        XCTAssertEqual(selected.filter, ["work"])
-        XCTAssertNil(selected.bubbleContent.group)
-        XCTAssertEqual(selected.bubbleContent.remaining, 0)
     }
 
     func testMainDateAndTagFiltersStayWithinSelectedGroupIncludingEmptyResults() throws {
@@ -179,7 +111,7 @@ final class BubbleGroupSelectionTests: XCTestCase {
         let view = view(model, state)
         XCTAssertEqual(view.bubbleContent.task?.id, life.id)
         XCTAssertEqual(view.bubbleContent.remaining, 1)
-        XCTAssertEqual(view.filter, [model.groupDisplayName("life"), model.dueLabel("2027-02-12") + " · #focus"])
+        XCTAssertEqual(view.filter, [model.groupDisplayName("life"), model.dueLabel("2027-02-12"), "#focus"])
         state.groupID = "work"
         XCTAssertEqual(view.bubbleContent.task?.id, work.id)
         XCTAssertEqual(view.bubbleContent.remaining, 2)
@@ -238,7 +170,7 @@ final class BubbleGroupSelectionTests: XCTestCase {
         controller.state.groupID = "life"
         controller.motion.toggleBubble(in: area, animated: false)
         controller.motion.setHover(true, in: area)
-        let expected = min(ceil(86 + view.bubbleContent.textWidth(language: model.language)) + controller.motion.filterExtra, 440)
+        let expected = min(ceil(78 + view.bubbleContent.textWidth(language: model.language)) + controller.motion.filterExtra, 440)
         XCTAssertEqual(controller.motion.panel.frame.width, expected, accuracy: 0.01)
         controller.state.groupID = "study"
         XCTAssertNil(controller.bubbleContent.task)
@@ -248,26 +180,5 @@ final class BubbleGroupSelectionTests: XCTestCase {
     private final class MemoryDefaults: UserDefaults {
         override func stringArray(forKey defaultName: String) -> [String]? { [] }
         override func set(_ value: Any?, forKey defaultName: String) {}
-    }
-}
-
-extension BubbleGroupSelectionTests {
-    func testIdleSelectedGroupKeepsSummaryAndAllViewKeepsTaskGroupMetadata() throws {
-        let (model, _, _) = try fixture()
-        let selected = state("work")
-        let panel = view(model, selected)
-        XCTAssertFalse(panel.filter.isEmpty)
-        XCTAssertGreaterThan(panel.motion.filterExtra, 0)
-        XCTAssertTrue(panel.hidesTaskGroup)
-        selected.groupID = nil
-        selected.scope = "next7"
-        XCTAssertFalse(panel.hidesTaskGroup, "A date condition must not hide the task group in All")
-        XCTAssertLessThanOrEqual(panel.filter.count, 2)
-        selected.groupID = "life"
-        selected.activeTag = "planning"
-        selected.hideCompleted = true
-        XCTAssertEqual(panel.filter.count, 2)
-        XCTAssertTrue(panel.filter.joined().contains("#planning"))
-        XCTAssertTrue(panel.hidesTaskGroup)
     }
 }

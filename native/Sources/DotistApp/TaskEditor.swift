@@ -1,23 +1,7 @@
 import AppKit
 import SwiftUI
 
-struct TaskEditor: View {
-    @Binding var text: String
-    @Binding var height: CGFloat
-    let font: NSFont
-    let label: String
-    let commit: () -> Void
-    let cancel: () -> Void
-    let indent: (Bool) -> Void
-    let blur: () -> Void
-    var body: some View {
-        NativeTaskEditor(text: $text, height: $height, font: font, label: label,
-                         commit: commit, cancel: cancel, indent: indent, blur: blur)
-            .modifier(DotistInputBackground(horizontalOutset: 8, verticalOutset: 4))
-    }
-}
-
-struct NativeTaskEditor: NSViewRepresentable {
+struct TaskEditor: NSViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
     let font: NSFont
@@ -89,8 +73,8 @@ struct NativeTaskEditor: NSViewRepresentable {
             baselineOffset.pointee = (geometry.baseline * scale).rounded() / scale
             return true
         }
-        var parent: NativeTaskEditor
-        init(_ parent: NativeTaskEditor) { self.parent = parent }
+        var parent: TaskEditor
+        init(_ parent: TaskEditor) { self.parent = parent }
         func textDidChange(_ notification: Notification) {
             guard let editor = notification.object as? TaskTextView else { return }
             parent.text = editor.string
@@ -122,9 +106,8 @@ final class TaskTextView: NSTextView {
         // Capture this editor session's action. Reading self.blur on the next
         // run loop can execute a new row's callback after representable reuse.
         let action = blur
-        let composing = hasMarkedText()
         let result = super.resignFirstResponder()
-        if result && !composing { DispatchQueue.main.async(execute: action) }
+        if result { DispatchQueue.main.async(execute: action) }
         return result
     }
 }

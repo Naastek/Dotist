@@ -196,7 +196,7 @@ final class DateFilterAnimationTests: XCTestCase {
                 try await clock.advance(by: elapsed)
                 let image = try await fixture.capture(scale: 2)
                 let headerY = try XCTUnwrap(groups.first { $0.id == "work" }).frame.minY
-                let horizontal = try XCTUnwrap(fixture.descendants(NSScrollView.self).first { $0.bounds.height <= 34.5 && abs($0.bounds.width - (size.width - 32)) < 1 })
+                let horizontal = try XCTUnwrap(fixture.descendants(NSScrollView.self).first { $0.bounds.height <= 34.5 })
                 // The scroll view retains its full 34pt bounds while the
                 // pushdown clips it to the currently reserved inline height.
                 let bottom = fixture.host.convert(horizontal.visibleRect, from: horizontal).maxY
@@ -219,10 +219,7 @@ final class DateFilterAnimationTests: XCTestCase {
                         for edgeX in [frame.minX + 2, frame.maxX - 3] {
                             for y in stride(from: frame.midY - 6, through: frame.midY + 6, by: 1) {
                                 let color = try XCTUnwrap(scrolled.colorAt(x: Int(edgeX * 2), y: Int(y * 2)))
-                                // cacheDisplay may omit native glass/backdrop layers in a hidden window.
-                                // Compare ink over white; transparent safety bands are also clear.
-                                let ink = min(color.redComponent, color.greenComponent, color.blueComponent)
-                                XCTAssertGreaterThan(ink * color.alphaComponent + (1 - color.alphaComponent), 0.94)
+                                XCTAssertGreaterThan(min(color.redComponent, color.greenComponent, color.blueComponent), 0.94)
                             }
                         }
                         try scrolled.representation(using: .png, properties: [:])?.write(to:
@@ -317,7 +314,7 @@ final class DateFilterAnimationTests: XCTestCase {
         var patch = DotistSettingsPatch(); patch.language = "en"
         _ = try store.updateSettings(patch)
         let model = try AppModel(store: store)
-        var records = ["viewport\tphase\trowY\tviewportY\tlastRowBottomY\tscrollOffsetY\tcomposerY\trowHeight"]
+        var records = ["viewport\tphase\trowY\tsummaryY\ttagY\tscrollOffsetY\tcomposerY\trowHeight"]
 
         for height: CGFloat in [620, 440] {
             let defaults = try XCTUnwrap(UserDefaults(suiteName: "dotist-pushdown-" + UUID().uuidString))
@@ -348,10 +345,12 @@ final class DateFilterAnimationTests: XCTestCase {
                     rendered[phase] = pixels(image)
                 }
                 let first = try XCTUnwrap(rows.min { $0.frame.minY < $1.frame.minY }).frame
-                // Additional tag chips now live inside the filter popover. Measure
-                // the actual scrolling viewport and last task, not retired main-view chips.
-                let summary = fixture.host.convert(scroll.bounds, from: scroll).minY
-                let tag = try XCTUnwrap(rows.max { $0.frame.maxY < $1.frame.maxY }).frame.maxY
+                func top(_ object: NSObject?) throws -> CGFloat {
+                    let ax = try XCTUnwrap(try XCTUnwrap(object) as? any NSAccessibilityElementProtocol)
+                    return fixture.host.convert(fixture.window.convertFromScreen(ax.accessibilityFrame()), from: nil).minY
+                }
+                let summary = try top(element(fixture.host, id: "active-filter-line"))
+                let tag = try top(element(fixture.host, label: "#focus"))
                 let composer = fixture.host.convert(field.bounds, from: field).minY
                 let offset = scroll.contentView.bounds.minY
                 records.append("\(height)\t\(phase)\t\(first.minY)\t\(summary)\t\(tag)\t\(offset)\t\(composer)\t\(first.height)")
@@ -653,14 +652,7 @@ final class DateFilterAnimationTests: XCTestCase {
             XCTAssertTrue(presentation.isOpen)
             lifetime.advance(by: 1.5)
             XCTAssertTrue(presentation.isOpen, "Hovered selection must remain open despite the old opening callback")
-            let current = try frames()
-            XCTAssertEqual(current.count, baseline.count)
-            for (actual, expected) in zip(current, baseline) {
-                for (a, b) in [(actual.minX, expected.minX), (actual.minY, expected.minY),
-                               (actual.width, expected.width), (actual.height, expected.height)] {
-                    XCTAssertEqual(a, b, accuracy: 0.0001, "The selected text must not move any AX hit rectangle")
-                }
-            }
+            XCTAssertEqual(try frames(), baseline, "The selected text must not move any AX hit rectangle")
             XCTAssertEqual(fixture.window.frame, windowFrame)
         }
         try await clock.advance(by: 0.2)

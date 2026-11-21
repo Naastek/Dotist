@@ -82,21 +82,8 @@ final class LayoutMotionTestClock {
     func advance(by interval: TimeInterval) async throws {
         advanceTime(by: interval)
         // Let the unchanged production run-loop timers deliver this instant.
-        // Logical time stays fixed even if this task resumes much later, so a
-        // generous wait cannot change the result; 25 ms was too short for the
-        // release runner, which then captured the previous frame.
-        try await Task.sleep(for: .milliseconds(120))
-    }
-    func waitForDelivery(_ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(5)
-        while !condition(), Date() < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        XCTAssertTrue(condition(), "Production callback was not delivered at the fixed logical instant")
-    }
-    func advance(by interval: TimeInterval, until condition: () -> Bool) async throws {
-        advanceTime(by: interval)
-        try await waitForDelivery(condition)
+        // Logical time stays fixed even if this task resumes much later.
+        try await Task.sleep(for: .milliseconds(25))
     }
     func advanceTime(by interval: TimeInterval) { time += interval }
     func restore() { LayoutMotionInputs.testOverride = saved }
@@ -490,20 +477,27 @@ final class ComposerRenderingRegressionTests: XCTestCase {
     func testBindingRefreshPreservesMarkedTextSelectionAndNativeCommands() async throws {
         var text = ""
         var focused = false
+        var composing = false
         var commits = 0
         var completions: [Bool] = []
         func input() -> ComposerInput {
             ComposerInput(text: Binding(get: { text }, set: { text = $0 }),
                 focused: Binding(get: { focused }, set: { focused = $0 }), placeholder: "Jot something down", label: "New task",
                 font: DotistDesign.nativeFont(13, language: "fr"), commit: { commits += 1 }, navigate: { _ in false },
-                complete: { completions.append($0); return false })
+                complete: { completions.append($0); return false },
+                composing: Binding(get: { composing }, set: { composing = $0 }))
         }
         let fixture = NativeRenderingFixture(input(), size: CGSize(width: 280, height: 24))
         defer { fixture.close() }
         let field = try XCTUnwrap(fixture.descendants(ComposerTextField.self).first)
         XCTAssertTrue(fixture.window.makeFirstResponder(field))
         let editor = try XCTUnwrap(field.currentEditor() as? ComposerFieldEditor)
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertTrue(focused, "An empty composer needs its focus appearance before the first edit")
         editor.setMarkedText("にほん", selectedRange: NSRange(location: 3, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(composing)
         let marked = editor.markedRange()
         let selection = editor.selectedRanges
         text = "stale binding" // Exercise a genuinely conflicting update during composition.
@@ -518,6 +512,7 @@ final class ComposerRenderingRegressionTests: XCTestCase {
         XCTAssertFalse(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:))))
         XCTAssertEqual(commits, 0); XCTAssertTrue(completions.isEmpty)
         editor.unmarkText()
+        XCTAssertFalse(composing)
         editor.setSelectedRange(NSRange(location: 1, length: 1))
         let selected = editor.selectedRanges
         text = editor.string
@@ -536,5 +531,58 @@ final class ComposerRenderingRegressionTests: XCTestCase {
         XCTAssertTrue(undo.canUndo)
         undo.undo()
         XCTAssertEqual(editor.string, before)
+        XCTAssertTrue(fixture.window.makeFirstResponder(nil))
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertFalse(focused)
+    }
+
+    func testQuickInputShowsOnlyCommittedDateAndKeepsNativeCommands() async throws {
+        var text = ""
+        var composing = false
+        var commits = 0
+        var cancels = 0
+        var cycles: [Int] = []
+        func input() -> QuickInput {
+            QuickInput(text: Binding(get: { text }, set: { text = $0 }),
+                placeholder: "快速添加", label: "快速添加", font: DotistDesign.nativeFont(22, language: "zh-CN"),
+                commit: { commits += 1 }, cancel: { cancels += 1 }, cycle: { cycles.append($0) },
+                composing: Binding(get: { composing }, set: { composing = $0 }))
+        }
+        let fixture = NativeRenderingFixture(input(), size: CGSize(width: 320, height: 30))
+        defer { fixture.close() }
+        let field = try XCTUnwrap(fixture.descendants(ComposerTextField.self).first)
+        XCTAssertTrue(fixture.window.makeFirstResponder(field))
+        let editor = try XCTUnwrap(field.currentEditor() as? ComposerFieldEditor)
+        let coordinator = try XCTUnwrap(field.delegate as? QuickInput.Coordinator)
+        let noReplacement = NSRange(location: NSNotFound, length: 0)
+        editor.setMarkedText("明天核对样稿", selectedRange: NSRange(location: 6, length: 0), replacementRange: noReplacement)
+        XCTAssertTrue(composing)
+        XCTAssertNil(TaskEntryDate().resolve(editor.string, composing: composing).day)
+
+        text = "stale binding"
+        fixture.host.rootView = input()
+        _ = try await fixture.capture(scale: 2)
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertEqual(editor.string, "明天核对样稿")
+        let returnKey = #selector(NSResponder.insertNewline(_:))
+        let tabKey = #selector(NSResponder.insertTab(_:))
+        let escapeKey = #selector(NSResponder.cancelOperation(_:))
+        for command in [returnKey, tabKey, escapeKey] {
+            XCTAssertFalse(coordinator.control(field, textView: editor, doCommandBy: command))
+        }
+        XCTAssertEqual(commits, 0)
+        XCTAssertEqual(cancels, 0)
+        XCTAssertTrue(cycles.isEmpty)
+
+        editor.insertText("明天核对样稿 #客户", replacementRange: noReplacement)
+        XCTAssertFalse(composing)
+        XCTAssertEqual(text, "明天核对样稿 #客户")
+        XCTAssertNotNil(TaskEntryDate().resolve(text, composing: composing).day)
+        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: tabKey))
+        XCTAssertTrue(coordinator.control(field, textView: editor, doCommandBy: returnKey))
+        XCTAssertEqual(cycles, [1])
+        XCTAssertEqual(commits, 1)
     }
 }

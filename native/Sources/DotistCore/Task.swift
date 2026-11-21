@@ -20,6 +20,14 @@ public struct DotistTask: Codable, Identifiable, Equatable, Sendable {
     public let parentId: String?
     public let dueDate: String?
     public let startDate: String?
+    public internal(set) var plannedDay: String? = nil
+    public internal(set) var plannedWeekStart: String? = nil
+}
+
+/// The user's intended work window, independent of the task's schedule.
+public enum TaskPlanScope: String, CaseIterable, Sendable {
+    case today = "plan-today"
+    case week = "plan-week"
 }
 
 public struct DotistGroup: Codable, Identifiable, Equatable, Sendable {
@@ -124,6 +132,7 @@ public struct DotistSettings: Codable, Equatable, Sendable {
     public var trayRightClick: String
     public var alwaysOnTop: Bool
     public var hoverExpand: Bool
+    public var hoverPreviewTaskId: String? = nil
     public var showDock: Bool
     public var showMenubar: Bool
     public var idleFade: Bool
@@ -157,6 +166,7 @@ extension DotistSettings {
         case opacity, sideTabOpacity, frost, toggleShortcut, quickAddShortcut, settingsShortcut, viewsShortcut, searchShortcut, shortcutScopes
         case trayMode, trayRotateSecs, trayLeftClick, trayRightClick
         case alwaysOnTop, hoverExpand, showDock, showMenubar, idleFade, locked
+        case hoverPreviewTaskId
         case windowWidth, windowHeight, idleOpacity, idleDelaySecs, idleFadeSecs
         case trayFilter, trayGroup, groupColors, tagOrder, allColor, filters, defaultFilter
         case autoCollapse, autoCollapseSecs, autoCheckUpdates, autoInstallUpdates
@@ -186,6 +196,7 @@ extension DotistSettings {
         trayRightClick = try values.decode(String.self, forKey: .trayRightClick)
         alwaysOnTop = try values.decode(Bool.self, forKey: .alwaysOnTop)
         hoverExpand = try values.decode(Bool.self, forKey: .hoverExpand)
+        hoverPreviewTaskId = try values.decodeIfPresent(String.self, forKey: .hoverPreviewTaskId)
         showDock = try values.decode(Bool.self, forKey: .showDock)
         showMenubar = try values.decode(Bool.self, forKey: .showMenubar)
         idleFade = try values.decode(Bool.self, forKey: .idleFade)
@@ -224,6 +235,8 @@ public struct DotistSettingsPatch: Encodable, Sendable {
     public var frost: UInt8?
     public var alwaysOnTop: Bool?
     public var hoverExpand: Bool?
+    /// A task ID selects a preview, an empty string clears it, and nil leaves it unchanged.
+    public var hoverPreviewTaskId: String?
     public var idleFade: Bool?
     public var locked: Bool?
     public var windowWidth: UInt32?

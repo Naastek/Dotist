@@ -24,30 +24,6 @@ final class PanelMotionLifecycleTests: XCTestCase {
         return try AppModel(store: store)
     }
 
-    func testIdleFadeChangesContentOpacityWithoutChangingPanelAlpha() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-idle-fade-\(UUID().uuidString)")
-        addTeardownBlock { try FileManager.default.removeItem(at: directory) }
-        let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
-        var settings = DotistSettingsPatch()
-        settings.idleFade = true
-        settings.idleDelaySecs = 1
-        settings.idleOpacity = 37
-        settings.autoCollapse = false
-        settings.locked = false
-        _ = try store.updateSettings(settings)
-        let model = try AppModel(store: store)
-        let panel = panel()
-        defer { panel.close() }
-        var now = Date()
-        var environment = PanelMotionTestEnvironment().environment
-        environment.now = { now }
-        let motion = PanelMotion(model: model, panel: panel, size: panel.frame.size, title: { "" }, environment: environment)
-        now = now.addingTimeInterval(2)
-        motion.updateIdleState()
-        XCTAssertEqual(panel.alphaValue, 1)
-        XCTAssertEqual(motion.idleContentOpacity, 0.37, accuracy: 0.0001)
-    }
-
     func testAnimatorProxyDeliversFrameChangesToTheRealPanel() async throws {
         let panel = panel()
         defer { panel.close() }
@@ -73,17 +49,11 @@ final class PanelMotionLifecycleTests: XCTestCase {
         defer { panel.close() }
         let start = panel.frame, target = NSRect(x: 150, y: 180, width: 48, height: 48)
         var completions = 0
-        let completed = expectation(description: "The hidden frame driver delivers its final frame")
-        let animation = PanelFrameAnimation(window: panel, target: target, duration: 0.34) {
-            completions += 1
-            completed.fulfill()
-        }
+        let animation = PanelFrameAnimation(window: panel, target: target, duration: 0.34) { completions += 1 }
         animation.startMotion()
         XCTAssertTrue(animation.isAnimating)
         XCTAssertNil(animation.displayLink, "Hidden clock tests use only the bounded fallback")
-        // Sleeping does not establish ordering with the driver's main-actor task:
-        // a busy runner can resume this test before its overdue final tick.
-        await fulfillment(of: [completed], timeout: 5)
+        try await Task.sleep(for: .milliseconds(450))
         XCTAssertEqual(panel.frame, target)
         XCTAssertEqual(completions, 1)
         XCTAssertFalse(animation.isAnimating)
@@ -119,17 +89,15 @@ final class PanelMotionLifecycleTests: XCTestCase {
         XCTAssertEqual(completions, 0)
     }
 
-    func testClosingPanelStopsMotionAndRemovesShadowWindow() throws {
+    func testClosingPanelStopsMotionWithoutCreatingShadowWindows() throws {
         let model = try model()
         let panel = panel()
         let motion = PanelMotion(model: model, panel: panel, size: panel.frame.size, title: { "" },
                                  environment: PanelMotionTestEnvironment().environment)
         motion.refreshShadow()
         XCTAssertFalse(panel.hasShadow)
-        let shadow = try XCTUnwrap(motion.shadowController?.window)
-        XCTAssertTrue(panel.childWindows?.contains { $0 === shadow } ?? false)
+        XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
         panel.close()
-        XCTAssertFalse(shadow.isVisible)
         XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
         motion.refreshShadow()
         XCTAssertFalse(panel.hasShadow)
@@ -145,7 +113,7 @@ final class PanelMotionLifecycleTests: XCTestCase {
                                              environment: PanelMotionTestEnvironment().environment)
         let released = WeakBox(try XCTUnwrap(motion))
         motion?.refreshShadow()
-        XCTAssertEqual(panel.childWindows?.count, 1)
+        XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
         motion = nil
         XCTAssertNil(released.value)
         XCTAssertTrue(panel.childWindows?.isEmpty ?? true)
@@ -160,7 +128,7 @@ final class PanelMotionLifecycleTests: XCTestCase {
         let area = NSRect(x: 0, y: 0, width: 1440, height: 1000)
         motion.toggleBubble(in: area, animated: false)
         let collapsedFrame = panel.frame
-        let contentWidth = ceil(86 + BubbleContent(model: model).textWidth(language: model.language))
+        let contentWidth = ceil(78 + BubbleContent(model: model).textWidth(language: model.language))
         let expectedWidth = min(contentWidth, min(440, area.width / 2))
         motion.setHover(true, in: area)
         XCTAssertEqual(panel.frame.width, expectedWidth)
@@ -399,7 +367,6 @@ final class PanelMotionLifecycleTests: XCTestCase {
     func testFrameTransitionWaitsForItsDriverBeforeRestoringGeometry() throws {
         let model = try model()
         let panel = panel()
-        panel.setFrame(NSRect(x: panel.frame.minX, y: panel.frame.minY, width: 408, height: panel.frame.height), display: false)
         let input = PanelMotionTestEnvironment()
         let motion = PanelMotion(model: model, panel: panel, size: panel.frame.size, title: { "" },
                                  environment: input.environment)

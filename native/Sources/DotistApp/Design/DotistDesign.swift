@@ -38,11 +38,6 @@ enum DotistDesign {
             ? NSColor.white.withAlphaComponent(0.10) : NSColor.white.withAlphaComponent(0.68)
     })
 
-    // 两套控件共用柔边反馈；不是新增玻璃层，静止时完全透明。
-    static func hoverInk(dark: Bool, highContrast: Bool) -> NSColor {
-        (dark ? NSColor.white : NSColor.black).withAlphaComponent(highContrast ? 0.24 : (dark ? 0.14 : 0.10))
-    }
-
     static func materialOpacity(_ opacity: UInt8, dark: Bool, highContrast: Bool) -> Double {
         let requested = Double(opacity) / 100
         return highContrast ? max(requested, 0.96) : requested
@@ -204,8 +199,10 @@ struct DotistControlTint: ViewModifier {
 struct DotistFocusRing: ViewModifier {
     @FocusState private var focused: Bool
     func body(content: Content) -> some View {
-        content.foregroundStyle(focused ? AnyShapeStyle(DotistDesign.accent) : AnyShapeStyle(.foreground))
-            .focused($focused).focusEffectDisabled()
+        Group {
+            if focused { content.foregroundStyle(DotistDesign.accent) }
+            else { content }
+        }.focused($focused).focusEffectDisabled()
     }
 }
 
@@ -241,7 +238,7 @@ struct DotistGlassTabs: View {
                         .lineLimit(1).fixedSize().frame(height: 28).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).focusable(true).focused($focused, equals: option.0)
-                .focusEffectDisabled()
+                .modifier(DotistTabFocusDecoration(focused: focused == option.0))
                 .accessibilityAddTraits(selection == option.0 ? .isSelected : [])
                 .onMoveCommand { direction in
                     guard let index = options.firstIndex(where: { $0.0 == (focused ?? selection) }) else { return }
@@ -252,5 +249,12 @@ struct DotistGlassTabs: View {
         }
         .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.9), value: selection)
         .accessibilityElement(children: .contain)
+    }
+}
+
+private struct DotistTabFocusDecoration: ViewModifier {
+    let focused: Bool
+    func body(content: Content) -> some View {
+        content.focusEffectDisabled()
     }
 }

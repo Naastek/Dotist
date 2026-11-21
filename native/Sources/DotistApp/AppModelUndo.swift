@@ -42,7 +42,7 @@ extension AppModel {
             self?.historyActionInFlight = false
             self?.updateHistoryAvailability()
         }) { store in
-            try store.apply(patch: redo ? patch.after : patch.before)
+            try store.apply(mutation: patch, redo: redo)
         }
     }
 }

@@ -156,7 +156,6 @@ struct DateFilterPushdown<Content: View>: View {
     }
     var body: some View {
         content()
-            .disabled(!isOpen)
             .frame(height: TaskDateFilterMetrics.rowHeight)
             .frame(height: TaskDateFilterMetrics.rowHeight * motion.fraction, alignment: .top)
             .clipped().opacity(Double(motion.fraction))

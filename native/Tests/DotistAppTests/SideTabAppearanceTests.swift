@@ -163,12 +163,12 @@ final class SideTabAppearanceTests: XCTestCase {
                             try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent(name + ".png"))
                             let expected = protection == 0 ? CGFloat(opacity) / 100 : 1
                             let reference = try canvasReference(size: CGSize(width: bitmap.pixelsWide, height: bitmap.pixelsHigh),
-                                tabs: snapshot.tabs, inward: inward, scheme: scheme, opacity: opacity, protection: protection)
+                                tabs: snapshot.tabs, inward: inward && expanded, scheme: scheme, opacity: opacity, protection: protection)
                             XCTAssertEqual(reference.pixelsWide, bitmap.pixelsWide)
                             XCTAssertEqual(reference.pixelsHigh, bitmap.pixelsHigh)
                             for (index, rect) in snapshot.tabs.enumerated() {
-                                let connectionX = Int(inward ? rect.minX : rect.maxX - 1)
-                                let outerX = Int(inward ? rect.maxX - 1 : rect.minX)
+                                let connectionX = Int(inward && expanded ? rect.minX : rect.maxX - 1)
+                                let outerX = Int(inward && expanded ? rect.maxX - 1 : rect.minX)
                                 let center = try XCTUnwrap(bitmap.colorAt(x: Int(rect.midX), y: Int(rect.midY))?.usingColorSpace(.deviceRGB))
                                 XCTAssertEqual(center.alphaComponent, expected, accuracy: 0.005, name)
                                 for y in Int(rect.minY)..<Int(rect.maxY) {
@@ -209,20 +209,29 @@ final class SideTabAppearanceTests: XCTestCase {
         // the rectangle is an illustration, not an activated desktop window.
         for scheme in [ColorScheme.light, .dark] {
             for inward in [false, true] {
-                let tabs = try XCTUnwrap(SideTabsSnapshot.render(names: ["全部", "Work projects 工作计划"], language: "zh-CN",
-                    scheme: scheme, inward: inward, expanded: true, opacity: 100, color: { _ in .teal }))
-                let canvas = ZStack(alignment: .topLeading) {
-                    (scheme == .dark ? Color(white: 0.08) : Color(white: 0.78)).zIndex(-2)
-                    RoundedRectangle(cornerRadius: 20).fill(scheme == .dark ? Color(white: 0.2) : Color(white: 0.97))
-                        .frame(width: 364, height: 180).offset(x: 220).zIndex(0)
-                    Image(decorative: tabs.image, scale: 1)
-                        .offset(x: inward ? 210 : 220 - CGFloat(tabs.image.width), y: SideTabGeometry.topInset)
-                        .zIndex(inward ? 1 : -1)
-                }.frame(width: 604, height: 180)
-                let renderer = ImageRenderer(content: canvas)
-                renderer.scale = 1
-                let image = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
-                try XCTUnwrap(image.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent("connection-\(scheme)-inward\(inward).png"))
+                for expanded in [false, true] {
+                    let tabs = try XCTUnwrap(SideTabsSnapshot.render(names: ["全部", "Work projects 工作计划"], language: "zh-CN",
+                        scheme: scheme, inward: inward, expanded: expanded, opacity: 100, color: { _ in .teal }))
+                    let panelX: CGFloat = 220
+                    let clearance = ExpandedReadingMaterial.opticalClearance
+                    let canvas = ZStack(alignment: .topLeading) {
+                        Color.clear.zIndex(-2)
+                        RoundedRectangle(cornerRadius: 20).fill(scheme == .dark ? Color(white: 0.2) : Color(white: 0.97))
+                            .frame(width: 364, height: 180).offset(x: panelX + clearance).zIndex(0)
+                        Image(decorative: tabs.image, scale: 1)
+                            .offset(x: panelX + tabs.panelOffsetX,
+                                    y: SideTabGeometry.topInset)
+                            .zIndex(inward && expanded ? 1 : -1)
+                    }.frame(width: 604, height: 180)
+                    let renderer = ImageRenderer(content: canvas)
+                    renderer.scale = 1
+                    let image = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+                    for x in Int(panelX)..<Int(panelX + clearance) {
+                        let pixel = try XCTUnwrap(image.colorAt(x: x, y: Int(SideTabGeometry.topInset + SideTabGeometry.height / 2)))
+                        XCTAssertEqual(pixel.alphaComponent, 1, accuracy: 1.0 / 255.0, "The glass clearance must not expose the desktop")
+                    }
+                    try XCTUnwrap(image.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent("connection-\(scheme)-inward\(inward)-expanded\(expanded).png"))
+                }
             }
         }
         print("SIDE TAB FIVE evidence=\(directory.path), screens=\(NSScreen.screens.count); ImageRenderer paper snapshots, no desktop window ordering")

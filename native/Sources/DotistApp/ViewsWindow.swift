@@ -3,8 +3,6 @@ import DotistCore
 import SwiftUI
 
 struct ViewsWindow: View {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorSchemeContrast) private var contrast
     @ObservedObject var model: AppModel
     @State private var view = "calendar"
     @State private var scale = "month"
@@ -61,7 +59,6 @@ struct ViewsWindow: View {
                 }.padding(.horizontal, narrow ? 16 : 24).padding(.top, 12).padding(.bottom, 20).frame(minWidth: 632, maxWidth: .infinity, alignment: .topLeading).background(WindowDragArea())
             }
         }.foregroundColor(DotistDesign.ink).modifier(DotistControlTint()).background(WindowMaterial(opacity: 78, frost: model.settings.frost)).modifier(DotistTheme(theme: model.settings.theme))
-            .clipShape(RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius, style: .continuous).inset(by: reduceTransparency || contrast == .increased ? 0 : GlassSilhouette.expandedInset))
         }
     }
 
@@ -424,17 +421,15 @@ private struct ViewTaskCard: View {
             ZStack {
                 Circle().stroke(task.completed ? DotistDesign.accent : DotistDesign.faint, lineWidth: 1.5)
                 if task.completed { Circle().fill(DotistDesign.accent); OpticalSymbol(name: "checkmark", size: calendarColumn ? 8 : 10, weight: .bold).foregroundColor(.white) }
-            }.frame(width: calendarColumn ? 14 : 18, height: calendarColumn ? 14 : 18)
-                .frame(width: 24, height: 24).contentShape(Rectangle())
+            }.frame(width: calendarColumn ? 14 : 18, height: calendarColumn ? 14 : 18).contentShape(Rectangle())
         }.buttonStyle(.plain).modifier(DotistFocusRing())
-            .padding(calendarColumn ? -5 : -3)
             .accessibilityLabel(Text(model.text(task.completed ? "恢复 {title}" : "完成 {title}").replacingOccurrences(of: "{title}", with: task.title)))
     }
 
     private var adjustmentButton: some View {
         Button { open = true } label: {
-            OpticalSymbol(name: "ellipsis", size: 12, weight: .medium).frame(width: 24, height: 24).contentShape(Rectangle())
-        }.buttonStyle(.plain).modifier(DotistFocusRing()).padding(-3)
+            OpticalSymbol(name: "ellipsis", size: 12, weight: .medium).frame(width: 18, height: 18).contentShape(Rectangle())
+        }.buttonStyle(.plain).modifier(DotistFocusRing())
             .foregroundColor(hovered || open ? DotistDesign.ink : DotistDesign.faint)
             .accessibilityLabel(Text(model.text("调整任务") + " " + task.title))
             .help(model.text("调整任务"))
@@ -553,7 +548,8 @@ private struct TaskDateField: View {
                 TextField("YYYY-MM-DD", text: $draft, onCommit: save)
                     .textFieldStyle(.plain)
                     .padding(.horizontal, 8).padding(.vertical, 6)
-                    .modifier(DotistInputBackground())
+                    .background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.surface))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(DotistDesign.rule, lineWidth: 0.5))
                     .modifier(DotistFocusRing())
                     .accessibilityLabel(Text(model.text(start ? "开始日" : "到期日")))
             }

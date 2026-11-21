@@ -183,6 +183,31 @@ final class TaskEmptyStateTests: XCTestCase {
         static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
     }
 
+    func testTodayPanelRendersCountForOneOverdueTask() async throws {
+        let app = NSApplication.shared
+        let enhancedUI = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = app.accessibilityAttributeValue(enhancedUI)
+        app.accessibilitySetValue(true, forAttribute: enhancedUI)
+        defer { app.accessibilitySetValue(previous, forAttribute: enhancedUI) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-today-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date())!.dotistDay
+        let overdue = try store.addTask(title: "Overdue task", dueDate: yesterday)
+        let model = try AppModel(store: store)
+        let fixture = NativeRenderingFixture(
+            MainWindow(model: model, state: TaskPanelState(scope: "today"),
+                       showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, collapse: {}, primary: false),
+            size: CGSize(width: 364, height: 620))
+        defer { fixture.close() }
+        try await Task.sleep(for: .milliseconds(100))
+        fixture.host.layoutSubtreeIfNeeded()
+        _ = try await fixture.capture(scale: 1)
+        let count = try XCTUnwrap(accessibilityElement(fixture.host, id: "today-agenda-count"))
+        XCTAssertEqual(count.accessibilityLabel(), model.todayCountLabel(1))
+        XCTAssertNotNil(accessibilityElement(fixture.host, id: "task-row:\(overdue.id)"))
+    }
+
     /// AX text frames follow OpticalText's visual correction rather than its
     /// outer layout box. Measure the difference in a known layout; it is not the
     /// VStack's spacing and must not be compared directly with the 12pt gap.
@@ -234,7 +259,7 @@ final class TaskEmptyStateTests: XCTestCase {
         let model = try AppModel(store: store)
         let hint = try XCTUnwrap(TaskEmptyState(scope: "all", groupID: "work").hint)
         let hintInset = try await hintAccessibilityInset(title: model.text(hint), language: model.language)
-        for scope in ["all", "tomorrow", "week", "undated"] {
+        for scope in ["all", "tomorrow", "week", "undated", TaskPlanScope.today.rawValue, TaskPlanScope.week.rawValue] {
             let state = TaskPanelState(groupID: "work", scope: scope, collapseStore: TaskGroupCollapseStore(defaults: defaults))
             let fixture = NativeRenderingFixture(MainWindow(model: model, state: state, showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, collapse: {}, primary: false)
                 .background(Color.white).environment(\.colorScheme, .light), size: CGSize(width: 364, height: 620))
@@ -259,7 +284,7 @@ final class TaskEmptyStateTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(frame.width, 32)
             XCTAssertGreaterThanOrEqual(frame.height, 32)
             let hint = try XCTUnwrap(accessibilityElement(fixture.host, id: "empty-state-hint"))
-            XCTAssertGreaterThanOrEqual(hint.accessibilityFrame().minY - hintInset - frame.maxY, 11.5, "清除附加条件与新增按钮应保留间距")
+            XCTAssertEqual(hint.accessibilityFrame().minY - hintInset - frame.maxY, 12, accuracy: 0.5, "Plus follows the existing copy")
             print("EMPTY HANDOFF window backing=\(fixture.window.backingScaleFactor)x, screens=\(NSScreen.screens.count), button=\(frame)")
             XCTAssertTrue(button.accessibilityPerformPress())
             try await Task.sleep(for: .milliseconds(80))
@@ -271,9 +296,7 @@ final class TaskEmptyStateTests: XCTestCase {
             editor.insertText("Keep this draft", replacementRange: NSRange(location: 0, length: 0))
             editor.setSelectedRange(NSRange(location: 5, length: 4))
             let selected = editor.selectedRanges
-            // While the composer is focused the plus is hidden (it has moved into the field),
-            // so a repeated press may be refused; either way the draft must survive.
-            _ = button.accessibilityPerformPress()
+            XCTAssertTrue(button.accessibilityPerformPress())
             try await Task.sleep(for: .milliseconds(80))
             XCTAssertTrue(field.currentEditor() === editor)
             XCTAssertEqual(editor.string, "Keep this draft")
@@ -289,6 +312,12 @@ final class TaskEmptyStateTests: XCTestCase {
             XCTAssertEqual(created.title, "Keep this draft")
             XCTAssertEqual(created.category, "work")
             XCTAssertEqual(created.dueDate, TaskEmptyState(scope: scope, groupID: "work").dueDate)
+            if let plan = TaskPlanScope(rawValue: scope) {
+                XCTAssertNil(created.dueDate)
+                XCTAssertEqual(created.plannedDay != nil, plan == .today)
+                XCTAssertNotNil(created.plannedWeekStart)
+                XCTAssertEqual(model.filteredTasks(scope: scope, groupID: "work").matches.map(\.id), [created.id])
+            }
             print("EMPTY COMMIT scope=\(scope), category=\(created.category), due=\(created.dueDate ?? "nil"), title=\(created.title)")
             try store.deleteTask(created.id)
             try await Task.sleep(for: .milliseconds(80))

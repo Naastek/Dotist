@@ -13,6 +13,7 @@ struct DotistMCPTools: Sendable {
         var parentId: String?
         var dueDate: String?
         var startDate: String?
+        var plan: Plan?
         var completed: Bool?
         var status: TaskStatus?
         var name: String?
@@ -20,6 +21,10 @@ struct DotistMCPTools: Sendable {
         var direction: Direction?
         var tasks: [Draft]?
         enum Direction: String, Decodable { case up, down }
+        enum Plan: String, Decodable {
+            case today, week
+            var scope: TaskPlanScope { self == .today ? .today : .week }
+        }
         struct Draft: Decodable {
             let title: String
             var category: String?
@@ -53,6 +58,8 @@ struct DotistMCPTools: Sendable {
             tool("restore_task", "Restore a task and only the descendants deleted in the same deletion batch.", ["id": id], required: ["id"]),
             tool("set_due_date", "Set or clear a task due date. It cannot be before its start date.", ["id": id, "due_date": date], required: ["id"]),
             tool("set_start_date", "Set or clear a task start date. It cannot be after its due date.", ["id": id, "start_date": date], required: ["id"]),
+            tool("set_task_plan", "Plan an open task for today or this week without changing its dates. Omit plan or pass null to remove it. An unfinished daily plan falls back to this week, then expires.",
+                 ["id": id, "plan": ["enum": ["today", "week", .null]]], required: ["id"]),
             tool("set_task_parent", "Move a task and its subtree under any parent (maximum five levels, no cycles), or omit parent_id to outdent it by one level.", ["id": id, "parent_id": ["type": ["string", "null"]]], required: ["id"]),
             tool("move_task", "Move a task up or down among its siblings without changing dates, group or state.", ["id": id, "direction": ["type": "string", "enum": ["up", "down"]]], required: ["id", "direction"]),
             tool("list_groups", "Read the ordered active task groups, including the internal inbox id for ungrouped tasks.", readOnly: true),
@@ -106,6 +113,7 @@ struct DotistMCPTools: Sendable {
             case "restore_task": return try result(store.restoreTask(arguments.taskID()))
             case "set_due_date": return try result(store.setDueDate(arguments.taskID(), date: arguments.dueDate))
             case "set_start_date": return try result(store.setStartDate(arguments.taskID(), date: arguments.startDate))
+            case "set_task_plan": return try result(store.setPlan(arguments.taskID(), scope: arguments.plan?.scope))
             case "set_task_parent": return try result(store.reparent(arguments.taskID(), parentId: arguments.parentId))
             case "move_task":
                 guard let direction = arguments.direction else { throw TaskStoreError("需要 direction：up 或 down") }

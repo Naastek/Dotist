@@ -69,29 +69,17 @@ final class MenuBarTests: XCTestCase {
         }
     }
 
-    func testZeroCountShrinksToIconAndNonzeroRestoresWidth() throws {
-        for scale in [1, 2] {
-            let icon = try render(nil, scale: scale)
-            for count in [1, 0, 100, 0, 9] {
-                let rep = try render(count, scale: scale)
-                if count == 0 {
-                    XCTAssertEqual(rep.pixelsWide, 16 * scale)
-                    for y in 0..<rep.pixelsHigh {
-                        for x in 0..<rep.pixelsWide {
-                            XCTAssertEqual(alpha(rep, x, y), alpha(icon, x, y), accuracy: 0.01)
-                        }
-                    }
-                } else {
-                    XCTAssertGreaterThan(rep.pixelsWide, 19 * scale)
-                }
-            }
-        }
-    }
-
     func testTemplateImagesRenderAtBothScales() throws {
         for scale in [1, 2] {
             let empty = try render(nil, scale: scale)
             var masks = Set<[Int]>()
+            let zero = try render(0, scale: scale)
+            XCTAssertEqual(zero.pixelsWide, empty.pixelsWide)
+            for y in 0..<zero.pixelsHigh {
+                for x in 0..<zero.pixelsWide {
+                    XCTAssertEqual(alpha(zero, x, y), alpha(empty, x, y), accuracy: 0.01)
+                }
+            }
             for count in [1, 9, 10, 99, 100] {
                 let image = MenuBarImage.make(count: count, accessibilityDescription: "\(count)")
                 XCTAssertTrue(image.isTemplate)
@@ -172,7 +160,7 @@ final class MenuBarTests: XCTestCase {
         let controller = MenuBarController(model: model, now: { now }, perform: { _ in })
         defer { if let item = controller.item { NSStatusBar.system.removeStatusItem(item) } }
         func expected(_ count: Int) -> String {
-            model.text("今天还有 {n} 件未完成任务").replacingOccurrences(of: "{n}", with: "\(count)")
+            model.todayCountLabel(count)
         }
         func waitForCount(_ count: Int) async {
             let predicate = NSPredicate { _, _ in controller.item?.button?.toolTip == expected(count) }
@@ -192,9 +180,11 @@ final class MenuBarTests: XCTestCase {
         XCTAssertGreaterThan(button.frame.width, 0)
         print("Status item width=\(button.frame.width) visible=\(item.isVisible) window=\(String(describing: button.window?.frame))")
 
-        _ = try store.addTask(title: "today", dueDate: "2026-11-02")
+        _ = try store.addTask(title: "overdue", dueDate: "2026-11-01")
         await waitForCount(1)
         XCTAssertEqual(button.title, "")
+        XCTAssertEqual(button.image?.size, MenuBarImage.size(count: 1))
+        XCTAssertEqual(button.accessibilityLabel(), expected(1))
         _ = try store.addTask(title: "tomorrow", dueDate: "2026-11-03")
         let snapshotArrived = expectation(for: NSPredicate { _, _ in model.tasks.count == 2 }, evaluatedWith: nil)
         await fulfillment(of: [snapshotArrived], timeout: 3)
@@ -249,7 +239,7 @@ final class MenuBarTests: XCTestCase {
                 await wait("Rotation advances", { controller.item?.button?.title != initial })
             }
         }
-        let work = try store.addGroup(name: "Empty menu group")
+        let work = try store.addGroup(name: "Work")
         patch = DotistSettingsPatch(); patch.trayGroup = work.id
         await publish(patch)
         XCTAssertEqual(model.settings.trayGroup, work.id)

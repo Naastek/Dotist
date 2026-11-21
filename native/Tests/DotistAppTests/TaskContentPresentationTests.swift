@@ -114,8 +114,7 @@ final class TaskContentPresentationTests: XCTestCase {
         XCTAssertEqual(surface.outgoingOpacity, 1)
         XCTAssertEqual(start.redComponent, before.redComponent, accuracy: 0.02)
         XCTAssertEqual(start.blueComponent, before.blueComponent, accuracy: 0.02)
-        try await clock.waitForDelivery { surface.isAnimatingForTesting }
-        try await clock.advance(by: 0.06, until: { surface.outgoingOpacity < 1 })
+        try await clock.advance(by: 0.06)
         let middle = try await pixel()
         XCTAssertGreaterThan(middle.redComponent, 0.1, "Outgoing red pixels must still be drawn")
         XCTAssertGreaterThan(middle.blueComponent, 0.05, "Incoming blue pixels must be drawn too")
@@ -124,8 +123,7 @@ final class TaskContentPresentationTests: XCTestCase {
         let retarget = try await pixel()
         XCTAssertEqual(retarget.redComponent, middle.redComponent, accuracy: 0.02)
         XCTAssertEqual(retarget.blueComponent, middle.blueComponent, accuracy: 0.02)
-        try await clock.waitForDelivery { surface.isAnimatingForTesting }
-        try await clock.advance(by: 0.2, until: { surface.outgoingOpacity == 0 })
+        try await clock.advance(by: 0.2)
         let after = try await pixel()
         XCTAssertGreaterThan(after.greenComponent, 0.4)
         XCTAssertEqual(surface.outgoingOpacity, 0)
@@ -133,8 +131,7 @@ final class TaskContentPresentationTests: XCTestCase {
         XCTAssertFalse(surface.isAccessibilityElement())
         state.groupID = nil; state.groupID = "life" // Reverse before a render.
         _ = try await fixture.capture(scale: 2)
-        try await clock.waitForDelivery { surface.isAnimatingForTesting || surface.outgoingOpacity == 0 }
-        try await clock.advance(by: 0.2, until: { surface.outgoingOpacity == 0 })
+        try await clock.advance(by: 0.2)
         _ = try await fixture.capture(scale: 2)
         XCTAssertEqual(surface.outgoingOpacity, 0, "An out-and-back must not retain a pending bitmap forever")
         XCTAssertFalse(fixture.window.isVisible)
@@ -158,9 +155,6 @@ final class TaskContentPresentationTests: XCTestCase {
         let state = TaskPanelState(scope: "all")
         let fixture = NativeRenderingFixture(TransparentInk(state: state), size: CGSize(width: 240, height: 160))
         defer { fixture.close() }
-        // Alpha is the oracle here; an opaque window backing is not ink.
-        fixture.window.isOpaque = false
-        fixture.window.backgroundColor = .clear
         let before = try await fixture.capture(scale: 2)
         try before.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/tmp/dotist-transparent-before-20261104.png"))
         state.scope = "today"
@@ -174,9 +168,7 @@ final class TaskContentPresentationTests: XCTestCase {
         XCTAssertEqual(incoming.greenComponent, background.greenComponent, accuracy: 0.01)
         XCTAssertEqual(incoming.blueComponent, background.blueComponent, accuracy: 0.01,
                        "Incoming ink must be invisible at the start even with no opaque SwiftUI backdrop")
-        let surface = try XCTUnwrap(fixture.descendants(TaskContentTransitionView.self).first)
-        try await clock.waitForDelivery { surface.isAnimatingForTesting }
-        try await clock.advance(by: 0.09, until: { surface.outgoingOpacity < 1 })
+        try await clock.advance(by: 0.09)
         let middle = try await fixture.capture(scale: 2)
         try middle.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/tmp/dotist-transparent-middle-20261104.png"))
         for x in [120, 320] {
@@ -184,7 +176,7 @@ final class TaskContentPresentationTests: XCTestCase {
             XCTAssertGreaterThan(alpha, 0.2)
             XCTAssertLessThan(alpha, 0.8, "Both outgoing and incoming ink must have intermediate alpha")
         }
-        try await clock.advance(by: 0.12, until: { surface.outgoingOpacity == 0 })
+        try await clock.advance(by: 0.12)
         let after = try await fixture.capture(scale: 2)
         XCTAssertEqual(after.colorAt(x: 320, y: 160)!.alphaComponent, 1, accuracy: 0.01)
         XCTAssertEqual(after.colorAt(x: 120, y: 160)!.alphaComponent, 0, accuracy: 0.01)

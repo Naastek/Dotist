@@ -6,29 +6,26 @@ import SwiftUI
 extension MainWindow {
     func interactiveTaskRow(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, next: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool, region: String, date: String?) -> some View {
         let carried = drag?.carries(task.id, region: region) == true
-        return TaskSelectableContent(selection: selection.row(task.id)) { selected, focused, actionFocused in
-            rowContent(task, children: children, sub: sub, allTasks: allTasks, previous: previous, hideDue: hideDue, titleParts: titleParts, actionsVisible: (actionsVisible || focused || actionFocused) && drag == nil && model.dragId == nil, selected: selected, focused: focused, keyboardInteractive: true)
+        return TaskSelectableContent(selection: selection.row(task.id)) { selected, focused in
+            rowContent(task, children: children, sub: sub, allTasks: allTasks, previous: previous, hideDue: hideDue, titleParts: titleParts, actionsVisible: (actionsVisible || focused) && drag == nil && model.dragId == nil, selected: selected, focused: focused)
                 .background {
                     let background = TaskRowBackgroundState(hovered: hoveredTask == task.id, selected: selected, editing: editing == task.id, dragging: drag != nil || model.dragId != nil, carried: carried)
                     RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(background.opacity)).padding(.horizontal, -6)
                         .allowsHitTesting(false)
                         .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || drag != nil || model.dragId != nil ? nil : .easeInOut(duration: 0.1), value: background)
                 }
-                .background(TaskRowKeyboard(selection: selection.row(task.id), label: task.title, enabled: editing == nil && draftAfter == nil && drag == nil && model.dragId == nil) { key in
-                    handleRowKey(key, task: task, previous: previous, allTasks: allTasks)
-                })
         }
         .contentShape(Rectangle())
+        .onKeyPress(keys: [.return, .space, .tab, .escape, .upArrow, .downArrow], phases: .down) { press in
+            handleRowKey(press, task: task, previous: previous, allTasks: allTasks)
+        }
         .onTapGesture { if !hold.suppressesClick { clickRow(task) } }
         .gesture(reorderGesture(task), including: editing == nil && draftAfter == nil ? .all : .subviews)
         .simultaneousGesture(holdGesture(task), including: editing == nil && draftAfter == nil ? .all : .subviews)
         .onContinuousHover(coordinateSpace: .named(Self.listSpace)) { phase in
             if case .active(let point) = phase { hold.pointer = point }
         }
-        .background(DateFilterHoverObserver(enabled: true) { over in
-            if over && hoveredTask != task.id { hoveredTask = task.id }
-            else if !over && hoveredTask == task.id { hoveredTask = nil }
-        })
+        .onHover { over in if over { hoveredTask = task.id } else if hoveredTask == task.id { hoveredTask = nil } }
         .popover(isPresented: Binding(get: { pickingTask == task.id }, set: { if !$0 && pickingTask == task.id { pickingTask = nil } })) {
             RangeCalendar(model: model, start: task.dueDate ?? "", end: task.dueDate ?? "", choose: { date, _ in
                 if task.dueDate == date { pickingTask = nil; return }
@@ -57,8 +54,15 @@ extension MainWindow {
     }
 
     @ViewBuilder private func rowMenu(_ task: DotistTask, sub: Bool, allTasks: Bool, previous: String?, next: String?) -> some View {
-            Button(model.text("添加任务（{name}）").replacingOccurrences(of: "{name}", with: model.groupDisplayName(task.category))) { activateGroupComposer(task.category) }
             Button(model.text("编辑 {title}").replacingOccurrences(of: "{title}", with: task.title)) { beginEditing(task) }
+            let isPreviewTask = model.settings.hoverPreviewTaskId == task.id
+            if isPreviewTask || (task.parentId == nil && !task.completed) {
+                Button(model.text(isPreviewTask ? "恢复自动预览" : "悬停时显示此任务")) {
+                    var patch = DotistSettingsPatch()
+                    patch.hoverPreviewTaskId = isPreviewTask ? "" : task.id
+                    model.updateSettings(patch)
+                }
+            }
             if model.depth(of: task) < 4 { Button(model.text("添加子任务")) { startDraft(after: task, asChild: true) } }
             if task.parentId != nil { Button(model.text("取消缩进")) { changeIndent(ids: [task.id], reverse: true) } }
             if previous != nil {
@@ -68,6 +72,7 @@ extension MainWindow {
             }
             if let previous { Button(model.text("上移")) { model.reorder(task.id, relativeTo: previous, after: false, allTasks: allTasks) } }
             if let next { Button(model.text("下移")) { model.reorder(task.id, relativeTo: next, after: true, allTasks: allTasks) } }
+            if !task.completed { planMenu(task) }
             Menu(model.text("到期日")) {
                 Button(model.text("今天")) { let date = Date().dotistDay; model.change { _ = try $0.setDueDate(task.id, date: date) } }
                 Button(model.text("明天")) { let date = Calendar.current.date(byAdding: .day, value: 1, to: Date())!.dotistDay; model.change { _ = try $0.setDueDate(task.id, date: date) } }
@@ -83,7 +88,24 @@ extension MainWindow {
             Button(model.text("删除")) { model.delete(task) }
     }
 
-    func rowContent(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool, selected: Bool = false, focused: Bool = false, depthOverride: Int? = nil, keyboardInteractive: Bool = false) -> some View {
+    private func planMenu(_ task: DotistTask) -> some View {
+        let active = TaskFiltering([]).planScope(for: task)
+        return Menu(model.text("计划")) {
+            ForEach(TaskPlanScope.allCases, id: \.self) { scope in
+                Button {
+                    model.change { _ = try $0.setPlan(task.id, scope: scope) }
+                } label: {
+                    if active == scope { Label(model.text(scope.title), systemImage: "checkmark") }
+                    else { Text(model.text(scope.title)) }
+                }
+            }
+            if active != nil {
+                Button(model.text("移出计划")) { model.change { _ = try $0.setPlan(task.id, scope: nil) } }
+            }
+        }
+    }
+
+    func rowContent(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool, selected: Bool = false, focused: Bool = false, depthOverride: Int? = nil) -> some View {
         let depth = depthOverride ?? model.depth(of: task)
         let actionCount = (depth < 4 ? 1 : 0) + (task.dueDate == nil ? 1 : 0) + 1
         let fadeWidth = actionsVisible ? TaskRowActionMetrics.width(count: actionCount) : 0
@@ -124,7 +146,7 @@ extension MainWindow {
             rowMetadata(task, children: children, allTasks: allTasks)
                 .opacity(editing == task.id ? 0 : 1)
                 .allowsHitTesting(editing != task.id)
-            rowActions(task, allTasks: allTasks, visible: actionsVisible, keyboardInteractive: keyboardInteractive)
+            rowActions(task, allTasks: allTasks, visible: actionsVisible)
         }
     }
 
@@ -148,27 +170,27 @@ extension MainWindow {
                 .contentShape(Rectangle()).onTapGesture { }
     }
 
-    @ViewBuilder private func rowActions(_ task: DotistTask, allTasks: Bool, visible: Bool, keyboardInteractive: Bool) -> some View {
+    @ViewBuilder private func rowActions(_ task: DotistTask, allTasks: Bool, visible: Bool) -> some View {
             if editing != task.id {
                 HStack(spacing: 1) {
                     if model.depth(of: task) < 4 {
-                        nativeRowAction(task, symbol: "plus", label: "添加子任务 {title}", visible: visible && keyboardInteractive) { startDraft(after: task, asChild: true) }
+                        Button { startDraft(after: task, asChild: true) } label: { OpticalSymbol(name: "plus", size: 11).frame(width: 22, height: 22) }
+                            .help(model.text("添加子任务"))
+                            .accessibilityLabel(Text(model.text("添加子任务 {title}").replacingOccurrences(of: "{title}", with: task.title)))
                     }
                     if task.dueDate == nil {
-                        nativeRowAction(task, symbol: "calendar", label: "设置到期日 {title}", visible: visible && keyboardInteractive) { pickingTask = task.id }
+                        Button { pickingTask = task.id } label: { OpticalSymbol(name: "calendar", size: 11).frame(width: 22, height: 22) }
+                            .help(model.text("设置到期日"))
+                            .accessibilityLabel(Text(model.text("设置到期日 {title}").replacingOccurrences(of: "{title}", with: task.title)))
                     }
-                    nativeRowAction(task, symbol: "xmark", label: "删除 {title}", visible: visible && keyboardInteractive, destructive: true) { model.delete(task) }
-                }.font(font(11, .regular))
-                    .background { TaskRowActionBacking(color: model.themeColor(forGroup: state.groupID), scheme: scheme, opaque: reduceTransparency || contrast == .increased, keyboardFocused: selection.row(task.id).actionFocused != nil) }
+                    Button { model.delete(task) } label: { OpticalSymbol(name: "xmark", size: 11).frame(width: 22, height: 22) }
+                        .help(model.text("删除"))
+                        .accessibilityLabel(Text(model.text("删除 {title}").replacingOccurrences(of: "{title}", with: task.title)))
+                }.buttonStyle(.plain).font(font(11, .regular)).foregroundColor(DotistDesign.muted)
                     .fixedSize()
                     .opacity(visible ? 1 : 0).allowsHitTesting(visible).accessibilityHidden(!visible)
                     .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.15), value: visible)
             }
-    }
-
-    private func nativeRowAction(_ task: DotistTask, symbol: String, label: String, visible: Bool, destructive: Bool = false, action: @escaping () -> Void) -> some View {
-        TaskNativeAction(symbol: symbol, label: model.text(label).replacingOccurrences(of: "{title}", with: task.title), identifier: "task-action:\(task.id):\(symbol)", selection: selection.row(task.id), visible: visible, destructive: destructive, tooltip: model.text(label).replacingOccurrences(of: "{title}", with: "").trimmingCharacters(in: .whitespaces), action: action)
-            .frame(width: 22, height: 22)
     }
 
     var displayOrder: [String] {
@@ -210,7 +232,7 @@ extension MainWindow {
         return true
     }
 
-    func handleRowKey(_ press: TaskRowKey, task: DotistTask, previous: String?, allTasks: Bool) -> KeyPress.Result {
+    private func handleRowKey(_ press: KeyPress, task: DotistTask, previous: String?, allTasks: Bool) -> KeyPress.Result {
         guard editing == nil else { return .ignored }
         let order = displayOrder
         if press.key == .escape { selection.update { $0.clear() }; clearInputs(); return .handled }

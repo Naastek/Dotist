@@ -32,7 +32,6 @@ final class TaskPanelState: ObservableObject {
     @Published var groupID: String?
     @Published var scope: String
     @Published var activeTag: String?
-    @Published var hideCompleted = false
     /// A calendar-picked range; it overrides the preset scope while set.
     @Published var customStart: String?
     @Published var customEnd: String?
@@ -47,20 +46,34 @@ final class TaskPanelState: ObservableObject {
     @Published var expanded: Set<String> = []
     @Published var folded: Set<String> = []
     static func scopeLabel(_ id: String) -> String {
+        if let plan = TaskPlanScope(rawValue: id) { return plan.title }
         switch id {
-        case "today": "今天"
-        case "tomorrow": "明天"
-        case "week": "本周"
-        case "nextweek": "下周"
-        case "next7": "未来 7 天"
-        case "overdue": "已逾期"
-        case "undated": "无日期"
-        case "done": "已完成"
-        default: "全部"
+        case "today": return "今天"
+        case "tomorrow": return "明天"
+        case "week": return "本周"
+        case "nextweek": return "下周"
+        case "next7": return "未来 7 天"
+        case "overdue": return "已逾期"
+        case "undated": return "无日期"
+        case "done": return "已完成"
+        default: return "全部"
         }
     }
 
     var dateFilterActive: Bool { customStart != nil || scope != "all" }
+    var isTodayAgenda: Bool { customStart == nil && scope == "today" }
+    var planScope: TaskPlanScope? { customStart == nil ? TaskPlanScope(rawValue: scope) : nil }
+
+    func todayAgenda(in model: AppModel, now: Date = Date(), calendar: Calendar = .current) -> TaskTodaySections? {
+        guard isTodayAgenda else { return nil }
+        return model.todayTaskSections(groupID: groupID, tag: activeTag, now: now, calendar: calendar)
+    }
+
+    /// Panel header line and floating bubble share this wording. nil means "All".
+    func filterSummary(in model: AppModel, includeGroup: Bool = true) -> String? {
+        let parts = filterParts(in: model, includeGroup: includeGroup)
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 
     /// One entry per active condition, in group, date, tag order.
     func filterParts(in model: AppModel, includeGroup: Bool = true) -> [String] {
@@ -100,6 +113,10 @@ final class TaskPanelState: ObservableObject {
     }
 }
 
+extension TaskPlanScope {
+    var title: String { self == .today ? "今日计划" : "本周计划" }
+}
+
 /// Navigation and task data stay local/shared respectively; motion is common to every panel.
 @MainActor
 final class GroupPanelController: NSWindowController, NSWindowDelegate, ObservableObject {
@@ -123,9 +140,9 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
         self.didClose = didClose
         // Inbox is storage for ungrouped tasks, never an independent group panel.
         guard groupID != DotistGroup.inboxID else { super.init(window: nil); return }
-        let size = NSSize(width: PanelLayoutMetrics.secondaryWidth, height: 620)
+        let size = NSSize(width: 364, height: 620)
         let panel = DotistPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.minSize = NSSize(width: PanelLayoutMetrics.secondaryWidth, height: 440)
+        panel.minSize = NSSize(width: 320, height: 440)
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
@@ -133,7 +150,7 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
         super.init(window: panel)
-        motion = PanelMotion(model: model, panel: panel, size: size, minimumWidth: PanelLayoutMetrics.secondaryWidth, title: { [weak self] in self?.bubbleTitle ?? "" },
+        motion = PanelMotion(model: model, panel: panel, size: size, title: { [weak self] in self?.bubbleTitle ?? "" },
             bubbleContent: { [weak self, model] in self?.bubbleContent ?? BubbleContent(model: model) })
         panel.delegate = self
         applyAppearance()

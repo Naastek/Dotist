@@ -14,6 +14,19 @@ final class MCPTests: XCTestCase {
         return try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
     }
 
+    func testPlanToolPreservesDeadlineAndClearsOnlyThePlan() async throws {
+        let store = try store()
+        let task = try store.addTask(title: "Review", dueDate: "2026-11-27")
+        let tools = DotistMCPTools(store: store, focus: { _ in XCTFail("Planning must not take focus") })
+        let planned = await tools.call("set_task_plan", ["id": .string(task.id), "plan": "week"])
+        XCTAssertNotEqual(planned.isError, true)
+        XCTAssertNotNil(try store.listTasks().first?.plannedWeekStart)
+        let cleared = await tools.call("set_task_plan", ["id": .string(task.id), "plan": .null])
+        XCTAssertNotEqual(cleared.isError, true)
+        XCTAssertNil(try store.listTasks().first?.plannedWeekStart)
+        XCTAssertEqual(try store.listTasks().first?.dueDate, task.dueDate)
+    }
+
     @MainActor func testToolsUseOneAtomicStoreAndOnlyExplicitFocusRequestsFocus() async throws {
         let store = try store()
         var focused = false
@@ -26,7 +39,7 @@ final class MCPTests: XCTestCase {
         let typo = await tools.call("add_tasks", ["category": "work", "tasks": [["title": "日期拼错", "due_data": "2026-11-10"]]])
         XCTAssertEqual(typo.isError, true)
         XCTAssertTrue(try store.listTasks().isEmpty)
-        let created = await tools.call("add_tasks", ["category": "work", "tasks": [["title": "第一项"], ["title": "第二项"]]])
+        let created = await tools.call("add_tasks", ["category": "工作", "tasks": [["title": "第一项"], ["title": "第二项"]]])
         XCTAssertNotEqual(created.isError, true)
         XCTAssertEqual(try store.listTasks().count, 2)
         XCTAssertFalse(focused)

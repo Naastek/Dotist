@@ -4,33 +4,6 @@ import XCTest
 
 @MainActor
 final class ToolbarConfigTests: XCTestCase {
-    func testDateOrderPersistsAndExpandedWidthDrivesDrag() {
-        let suite = "dotist-date-order-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let config = ToolbarConfig(defaults: defaults)
-        config.move(.filter, onto: .lock)
-        XCTAssertEqual(ToolbarConfig(defaults: defaults).order, config.order)
-        let frames: [ToolbarItem: CGRect] = [.filters: CGRect(x: 0, y: 0, width: 24, height: 24),
-            .filter: CGRect(x: 25, y: 0, width: 100, height: 24), .pin: CGRect(x: 126, y: 0, width: 24, height: 24)]
-        var session = ToolbarDragSession(item: .filter, items: [.filters, .filter, .pin], frames: frames)
-        session.translation = 63
-        XCTAssertEqual(session.target, 2)
-        XCTAssertEqual(session.offset(for: .pin), -101)
-        session.translation = -63
-        XCTAssertEqual(session.target, 0)
-        XCTAssertEqual(session.offset(for: .filters), 101)
-    }
-
-    func testAdditionalFiltersHaveIndependentVisibility() {
-        let suite = "dotist-filters-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let config = ToolbarConfig(defaults: defaults)
-        config.setVisibility(.hidden, for: .filters)
-        XCTAssertEqual(config.visibility(of: .filter), .hover)
-        XCTAssertEqual(ToolbarConfig(defaults: defaults).visibility(of: .filters), .hidden)
-    }
     func testLegacySearchIsIgnoredWithoutLosingOrderOrVisibility() throws {
         let suite = "dotist-toolbar-wIB1-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -39,7 +12,7 @@ final class ToolbarConfigTests: XCTestCase {
         let legacy = #"{"order":["collapse","search","lock","views","pin"],"visibility":["search","always","lock","hidden","views","always","pin","hidden","collapse","hover"]}"#
         defaults.set(Data(legacy.utf8), forKey: "dotist.toolbar.v1")
         let config = ToolbarConfig(defaults: defaults)
-        XCTAssertEqual(config.order, [.lock, .views, .pin, .filters, .filter, .completion, .calendar, .color, .collapse])
+        XCTAssertEqual(config.order, [.lock, .views, .pin, .filter, .completion, .calendar, .color, .collapse])
         XCTAssertEqual(config.visibility(of: .lock), .hidden)
         XCTAssertEqual(config.visibility(of: .views), .always)
         XCTAssertEqual(config.visibility(of: .collapse), .always)
@@ -57,7 +30,7 @@ final class ToolbarConfigTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(Data(#"{"order":["lock","search","lock","views"],"visibility":{"search":"always","views":"hidden"}}"#.utf8), forKey: "dotist.toolbar.v1")
         let config = ToolbarConfig(defaults: defaults)
-        XCTAssertEqual(config.order, [.lock, .views, .filters, .filter, .completion, .calendar, .pin, .color, .collapse])
+        XCTAssertEqual(config.order, [.lock, .views, .filter, .completion, .calendar, .pin, .color, .collapse])
         XCTAssertEqual(config.visibility(of: .views), .hidden)
     }
 
@@ -67,14 +40,14 @@ final class ToolbarConfigTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let config = ToolbarConfig(defaults: defaults)
         config.reset()
-        XCTAssertEqual(config.order, [.filters, .filter, .completion, .calendar, .views, .pin, .lock, .color, .collapse])
+        XCTAssertEqual(config.order, [.filter, .completion, .calendar, .views, .pin, .lock, .color, .collapse])
         XCTAssertEqual(config.visibility(of: .views), .hover)
         XCTAssertEqual(config.visibility(of: .color), .hover)
         XCTAssertEqual(config.visibility(of: .collapse), .always)
         config.move(.views, onto: .lock)
-        XCTAssertEqual(config.order, [.filters, .filter, .completion, .calendar, .pin, .lock, .views, .color, .collapse])
+        XCTAssertEqual(config.order, [.filter, .completion, .calendar, .pin, .lock, .views, .color, .collapse])
         config.move(.collapse, onto: .pin)
-        XCTAssertEqual(config.order, [.filters, .filter, .completion, .calendar, .pin, .lock, .views, .color, .collapse])
+        XCTAssertEqual(config.order, [.filter, .completion, .calendar, .pin, .lock, .views, .color, .collapse])
         config.move(.color, onto: .collapse)
         XCTAssertEqual(config.order.last, .collapse)
         config.setVisibility(.hidden, for: .collapse)

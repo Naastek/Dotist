@@ -7,6 +7,7 @@ enum ComposerMetrics {
     static let barHeight: CGFloat = 52
     static let fontSize: CGFloat = 13
     static let calendarSize: CGFloat = 13
+    static let glassLeadingInset: CGFloat = 6
     /// One text-independent reference run per script. Group label and input share
     /// it, so descenders in the typed text never move the baseline.
     static func baselineSample(containing text: String) -> String {
@@ -24,6 +25,7 @@ enum ComposerMetrics {
 /// Menu discards view offsets. A native template image preserves the input's
 /// baseline while letting the serif label retain its own glyph proportions.
 struct ComposerGroupLabel: View {
+    private static let maximumLabelWidth: CGFloat = 124
     @ObservedObject private var typography = DotistTypography.shared
     @Environment(\.displayScale) private var displayScale
     @Environment(\.colorScheme) private var scheme
@@ -41,7 +43,20 @@ struct ComposerGroupLabel: View {
         let scale = max(1, displayScale)
         let key = "\(DotistDesign.fontCacheKey)|\(font.fontDescriptor)|\(title)|\(scale)|\(scheme)" as NSString
         if let image = Self.images.object(forKey: key) { return image }
-        let text = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: NSColor(DotistDesign.muted)])
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(DotistDesign.muted)]
+        let text = NSAttributedString(string: title, attributes: attributes)
+        let fullLine = CTLineCreateWithAttributedString(text)
+        let fullWidth = ceil(text.size().width)
+        let line: CTLine
+        let width: CGFloat
+        if fullWidth > Self.maximumLabelWidth {
+            let ellipsis = CTLineCreateWithAttributedString(NSAttributedString(string: "…", attributes: attributes))
+            line = CTLineCreateTruncatedLine(fullLine, Double(Self.maximumLabelWidth), .end, ellipsis) ?? ellipsis
+            width = ceil(CTLineGetTypographicBounds(line, nil, nil, nil))
+        } else {
+            line = fullLine
+            width = fullWidth
+        }
         // The group name and the typed task share one text baseline, taken from
         // the input's own line geometry; ink-centering would let the bold serif
         // sit off the regular face beside it.
@@ -56,7 +71,7 @@ struct ComposerGroupLabel: View {
         NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance {
             baseline = inputCell.textBaseline(in: CGRect(x: 0, y: 0, width: 100, height: ComposerMetrics.rowHeight), scale: scale)
         }
-        let size = CGSize(width: max(1, ceil(text.size().width)), height: ComposerMetrics.rowHeight)
+        let size = CGSize(width: max(1, width), height: ComposerMetrics.rowHeight)
         guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: max(1, Int(ceil(size.width * scale))),
             pixelsHigh: Int(size.height * scale), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
             isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
@@ -70,7 +85,7 @@ struct ComposerGroupLabel: View {
         graphics.cgContext.textMatrix = .identity
         graphics.cgContext.textPosition = CGPoint(x: 0, y: size.height - baseline)
         NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance {
-            CTLineDraw(CTLineCreateWithAttributedString(text), graphics.cgContext)
+            CTLineDraw(line, graphics.cgContext)
         }
         NSGraphicsContext.restoreGraphicsState()
         let image = bitmap.cgImage.map { NSImage(cgImage: $0, size: size) } ?? NSImage(size: size)
@@ -235,6 +250,32 @@ final class ComposerFieldEditor: NSTextView {
         clipsToBounds = false
     }
     required init?(coder: NSCoder) { nil }
+    override func becomeFirstResponder() -> Bool {
+        guard super.becomeFirstResponder() else { return false }
+        (composer as? ComposerTextField)?.editorFocusChanged?()
+        return true
+    }
+    override func resignFirstResponder() -> Bool {
+        guard super.resignFirstResponder() else { return false }
+        (composer as? ComposerTextField)?.editorFocusChanged?()
+        return true
+    }
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        reportComposition()
+    }
+    override func unmarkText() {
+        super.unmarkText()
+        reportComposition()
+    }
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        let wasComposing = hasMarkedText()
+        super.insertText(string, replacementRange: replacementRange)
+        if wasComposing { reportComposition() }
+    }
+    private func reportComposition() {
+        (composer as? ComposerTextField)?.compositionChanged?(hasMarkedText())
+    }
     func centeredCaretRect(_ rect: NSRect) -> NSRect {
         guard let composer else { return rect }
         var result = rect
@@ -252,6 +293,8 @@ final class ComposerFieldEditor: NSTextView {
 final class ComposerTextField: NSTextField {
     var rowHeight: CGFloat = ComposerMetrics.rowHeight
     var requestFocusWhenAttached: (() -> Void)?
+    var editorFocusChanged: (() -> Void)?
+    var compositionChanged: ((Bool) -> Void)?
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil { requestFocusWhenAttached?() }
@@ -325,12 +368,19 @@ struct ComposerInput: NSViewRepresentable {
     let commit: () -> Void
     let navigate: (Int) -> Bool
     let complete: (Bool) -> Bool
+    var composing: Binding<Bool> = .constant(false)
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSTextField {
         let field = ComposerTextField()
         field.delegate = context.coordinator
         field.requestFocusWhenAttached = { [weak field, weak coordinator = context.coordinator] in
             if let field { coordinator?.requestFocus(field) }
+        }
+        field.editorFocusChanged = { [weak field, weak coordinator = context.coordinator] in
+            if let field { coordinator?.syncEditorFocus(field) }
+        }
+        field.compositionChanged = { [weak coordinator = context.coordinator] composing in
+            coordinator?.setComposing(composing)
         }
         return field
     }
@@ -350,8 +400,26 @@ struct ComposerInput: NSViewRepresentable {
         var parent: ComposerInput
         init(_ parent: ComposerInput) { self.parent = parent }
         private var focusScheduled = false
+        private var editorFocusGeneration = 0
+
+        func syncEditorFocus(_ field: NSTextField) {
+            editorFocusGeneration += 1
+            let generation = editorFocusGeneration
+            let bindingValue = parent.focused
+            // Read the first responder after AppKit completes the transition.
+            DispatchQueue.main.async { [weak self, weak field] in
+                guard let self, let field, self.editorFocusGeneration == generation,
+                      self.parent.focused == bindingValue else { return }
+                let focused = field.currentEditor().map { field.window?.firstResponder === $0 } ?? false
+                if bindingValue != focused { self.parent.focused = focused }
+            }
+        }
+
         func requestFocus(_ field: NSTextField) {
-            guard parent.focused, field.currentEditor() == nil, !focusScheduled else { return }
+            guard parent.focused, field.currentEditor() == nil else { return }
+            // A newer request owns the binding, even if the field is detached.
+            editorFocusGeneration += 1
+            guard !focusScheduled else { return }
             focusScheduled = true
             // Wait for SwiftUI to remove mutually exclusive editors and attach
             // this field. Read the latest binding so withdrawn requests expire.
@@ -360,17 +428,26 @@ struct ComposerInput: NSViewRepresentable {
                 self.focusScheduled = false
                 guard self.parent.focused, let field, let window = field.window,
                       field.currentEditor() == nil else { return }
+                self.editorFocusGeneration += 1
                 window.makeFirstResponder(field)
             }
         }
         func controlTextDidBeginEditing(_ notification: Notification) {
+            editorFocusGeneration += 1
             parent.focused = true
             if let editor = notification.userInfo?["NSFieldEditor"] as? NSTextView {
                 editor.insertionPointColor = NSColor(DotistDesign.accent)
                 editor.allowsUndo = true
             }
         }
-        func controlTextDidEndEditing(_ notification: Notification) { parent.focused = false }
+        func setComposing(_ composing: Bool) {
+            if parent.composing.wrappedValue != composing { parent.composing.wrappedValue = composing }
+        }
+        func controlTextDidEndEditing(_ notification: Notification) {
+            editorFocusGeneration += 1
+            setComposing(false)
+            parent.focused = false
+        }
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSTextField else { return }
             parent.text = field.stringValue
@@ -389,31 +466,17 @@ struct ComposerInput: NSViewRepresentable {
     }
 }
 
-/// The label and controls retain the same 24 pt optical line box.
+/// A shared 24pt line box, used by the real bar and offscreen rendering tests.
 struct ComposerLayout: Layout {
-    static func frames(in bounds: CGRect, groupWidth: CGFloat, dateWidth: CGFloat) -> (group: CGRect, field: CGRect, input: CGRect, date: CGRect) {
-        let date = min(dateWidth, max(0, bounds.width - 42))
-        let group = min(groupWidth, max(0, bounds.width - date - 70))
-        let y = bounds.midY - ComposerMetrics.rowHeight / 2
-        let fieldX = bounds.minX - 3 + group + 10
-        let field = CGRect(x: fieldX, y: bounds.midY - 18, width: max(0, bounds.maxX - fieldX), height: 36)
-        let dateX = max(fieldX + 12, bounds.maxX - 10 - date)
-        return (CGRect(x: bounds.minX - 3, y: y, width: group, height: 24), field,
-                CGRect(x: fieldX + 12, y: y, width: max(0, dateX - 8 - fieldX - 12), height: 24),
-                CGRect(x: dateX, y: y, width: date, height: 24))
-    }
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         CGSize(width: proposal.width ?? 324, height: ComposerMetrics.rowHeight)
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let frames = Self.frames(in: bounds, groupWidth: subviews[0].sizeThatFits(.unspecified).width, dateWidth: subviews[2].sizeThatFits(.unspecified).width)
-        for (view, frame) in zip(subviews, [frames.group, frames.input, frames.date]) {
-            view.place(at: frame.origin, proposal: ProposedViewSize(width: frame.width, height: frame.height))
-        }
+        let date = subviews[2].sizeThatFits(.unspecified).width
+        let group = min(subviews[0].sizeThatFits(.unspecified).width, max(0, bounds.width - date - 70))
+        let y = bounds.midY - ComposerMetrics.rowHeight / 2
+        subviews[0].place(at: CGPoint(x: bounds.minX - 3, y: y), proposal: ProposedViewSize(width: group, height: ComposerMetrics.rowHeight))
+        subviews[1].place(at: CGPoint(x: bounds.minX + group + 8, y: y), proposal: ProposedViewSize(width: max(0, bounds.width - group - date - 16), height: ComposerMetrics.rowHeight))
+        subviews[2].place(at: CGPoint(x: bounds.maxX - date, y: y), proposal: ProposedViewSize(width: date, height: ComposerMetrics.rowHeight))
     }
-}
-
-struct ComposerFrameKey: PreferenceKey {
-    static var defaultValue: [String: CGRect] = [:]
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) { value.merge(nextValue(), uniquingKeysWith: { _, new in new }) }
 }

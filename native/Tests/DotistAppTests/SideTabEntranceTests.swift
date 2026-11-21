@@ -9,8 +9,8 @@ final class SideTabEntranceTests: XCTestCase {
     func testCurrentCollapsedEarHasWiderActualRenderedGeometry() throws {
         let sample = try XCTUnwrap(SideTabsSnapshot.render(names: ["All", "Work"], language: "en",
             scheme: .light, inward: false, expanded: false, showLabels: false))
-        XCTAssertEqual(sample.tabs[0].width, 15)
-        XCTAssertEqual(sample.tabs[1].width, 10)
+        XCTAssertEqual(sample.tabs[0].width, 16)
+        XCTAssertEqual(sample.tabs[1].width, 11)
     }
 
     func testNeutralCurrentEarHasVisiblePixelContrastInBothAppearances() throws {
@@ -37,7 +37,7 @@ final class SideTabEntranceTests: XCTestCase {
         let motion = PanelMotion(model: model, panel: panel, size: panel.frame.size, title: { "" })
         let controller = SideTabsController(parent: panel, model: model, state: TaskPanelState(), motion: motion)
         defer { controller.stop(); motion.stop(); panel.close() }
-        let child = try XCTUnwrap(panel.childWindows?.first { $0.identifier?.rawValue == "dotist.side-tabs" })
+        let child = try XCTUnwrap(panel.childWindows?.first)
         let content = try XCTUnwrap(child.contentView)
         try await Task.sleep(for: .milliseconds(60))
         content.layoutSubtreeIfNeeded()
@@ -78,7 +78,7 @@ final class SideTabEntranceSamplingTests: XCTestCase {
                     let expected = CGFloat(UnitCurve.easeOut.value(at: t))
                     XCTAssertEqual(values[index], expected, accuracy: 0.000001)
                     if index > 0 { XCTAssertGreaterThanOrEqual(values[index - 1], values[index]) }
-                    XCTAssertEqual(rect.width, (index == 0 ? 15 : 10) - 8 * (1 - expected), accuracy: 0.000001)
+                    XCTAssertEqual(rect.width, (index == 0 ? 16 : 11) - 8 * (1 - expected), accuracy: 0.000001)
                     let alpha = bitmap.colorAt(x: Int(rect.midX), y: Int(rect.midY))?.alphaComponent ?? 0
                     XCTAssertEqual(alpha, 0.85 * expected, accuracy: 0.018,
                         "Actual row pixels must follow its own sample, including completely absent delayed rows")
@@ -138,8 +138,14 @@ final class SideTabEntranceSamplingTests: XCTestCase {
                 for (index, rect) in sample.tabs.enumerated() {
                     XCTAssertTrue(sample.window.insetBy(dx: -0.000001, dy: -0.000001).contains(rect))
                     XCTAssertEqual(rect.maxY, panel.maxY - 40 - CGFloat(index) * 40)
-                    XCTAssertEqual(inward ? rect.minX : rect.maxX,
-                        inward ? max(panel.minX - 10, -1000) : panel.minX, accuracy: 0.000001)
+                    if inward {
+                        let width = index == 1 ? SideTabGeometry.selectedWidth : SideTabGeometry.collapsedWidth
+                        let resting = max(-1000, panel.minX + ExpandedReadingMaterial.opticalClearance - width + 8 * (1 - values[index]))
+                        let expanded = max(-1000, panel.minX - SideTabGeometry.collapsedWidth)
+                        XCTAssertEqual(rect.minX, resting + (expanded - resting) * 0.3, accuracy: 0.000001)
+                    } else {
+                        XCTAssertEqual(rect.maxX, panel.minX + SideTabGeometry.connectionOverlap, accuracy: 0.000001)
+                    }
                     XCTAssertEqual(sample.opacities[index], Double(values[index]))
                 }
             }
@@ -156,7 +162,7 @@ final class SideTabEntranceSamplingTests: XCTestCase {
                             scheme: scheme, inward: inward, expanded: false, showLabels: false, opacity: 85,
                             reduceTransparency: protection == 1, contrast: protection == 2 ? .increased : .standard,
                             selectedIndex: 1, color: { _ in color }))
-                        XCTAssertEqual(image.tabs.map(\.width), [10, 15, 10])
+                        XCTAssertEqual(image.tabs.map(\.width), [11, 16, 11])
                         let bitmap = NSBitmapImageRep(cgImage: image.image)
                         let colors = try image.tabs.map { rect in
                             try XCTUnwrap(bitmap.colorAt(x: Int(rect.midX), y: Int(rect.midY))?.usingColorSpace(.deviceRGB))
@@ -216,7 +222,7 @@ final class SideTabEntranceControllerTests: XCTestCase {
             environment.reduceMotion = { clock.reduceMotion }
             environment.desktopEvents = false
             controller = SideTabsController(parent: panel, model: model, state: state, motion: motion, environment: environment)
-            child = try XCTUnwrap(panel.childWindows?.first { $0.identifier?.rawValue == "dotist.side-tabs" })
+            child = try XCTUnwrap(panel.childWindows?.first)
         }
         func sample(_ time: Double) {
             clock.time = time
@@ -224,10 +230,10 @@ final class SideTabEntranceControllerTests: XCTestCase {
             child.contentView?.layoutSubtreeIfNeeded()
         }
         func close() { controller.stop(); motion.stop(); panel.close() }
-        func capture(_ index: Int, resting: Bool = false) -> NSView? {
+        func capture(_ index: Int) -> NSView? {
             let row = controller.renderedRows[index]
             let screen = CGPoint(x: child.frame.minX + row.rect.midX, y: child.frame.minY + row.rect.midY)
-            let host = resting ? panel.contentView?.subviews.first : child.contentView
+            let host = child.contentView
             guard let host, let window = host.window else { return nil }
             let point = window.convertPoint(fromScreen: screen)
             return host.hitTest(host.superview?.convert(point, from: nil) ?? point)
@@ -242,22 +248,6 @@ final class SideTabEntranceControllerTests: XCTestCase {
             + children.flatMap(axRows)
     }
 
-    func testDisplayLinkSleepsAtRestAndResumesForEntranceAndHover() throws {
-        let h = try Harness()
-        defer { h.close() }
-        h.clock.visible = true
-        h.sample(10)
-        XCTAssertEqual(h.controller.displayLink?.isPaused, false)
-        h.sample(11)
-        XCTAssertEqual(h.controller.displayLink?.isPaused, true)
-        let row = h.controller.renderedRows[0].rect
-        h.clock.mouse = CGPoint(x: h.child.frame.minX + row.midX, y: h.child.frame.minY + row.midY)
-        h.sample(12)
-        XCTAssertEqual(h.controller.displayLink?.isPaused, false)
-        h.sample(13)
-        XCTAssertEqual(h.controller.displayLink?.isPaused, true)
-    }
-
     func testParentDragAndResizeCrossingPointerDoNotStartHoverUntilRelease() throws {
         for inward in [false, true] {
             for reduceMotion in [false, true] {
@@ -267,7 +257,7 @@ final class SideTabEntranceControllerTests: XCTestCase {
                 h.clock.reduceMotion = reduceMotion
                 h.sample(10)
                 h.sample(10.5)
-                XCTAssertEqual(h.controller.renderedRows[0].rect.width, 15, accuracy: 0.001)
+                XCTAssertEqual(h.controller.renderedRows[0].rect.width, 16, accuracy: 0.001)
 
                 // Simulate a press elsewhere followed by fast parent frame and
                 // pointer updates, including crossings of the selected ear.
@@ -280,14 +270,14 @@ final class SideTabEntranceControllerTests: XCTestCase {
                         CGPoint(x: inward ? max(x - 10, -1000) + 5 : x - 5, y: frame.maxY - 50)
                     h.panel.setFrame(frame, display: false)
                     h.sample(10.51 + Double(step) * 0.01)
-                    XCTAssertEqual(h.controller.renderedRows[0].rect.width, 15, accuracy: 0.001)
+                    XCTAssertEqual(h.controller.renderedRows[0].rect.width, 16, accuracy: 0.001)
                 }
                 // Releasing over the ear is a genuine hover, without requiring
                 // an additional mouse-moved event.
                 h.clock.mouseButtons = 0
                 h.sample(10.8)
                 h.sample(11.0)
-                XCTAssertGreaterThan(h.controller.renderedRows[0].rect.width, 15)
+                XCTAssertGreaterThan(h.controller.renderedRows[0].rect.width, 16)
                 let expandedWidth = h.controller.renderedRows[0].rect.width
                 h.clock.mouseButtons = 1
                 h.clock.mouse = CGPoint(x: h.panel.frame.midX, y: h.panel.frame.midY)
@@ -353,19 +343,18 @@ final class SideTabEntranceControllerTests: XCTestCase {
             let retracting = h.controller.renderedRows.map(\.opacity)
             h.motion.toggleBubble(in: CGRect(x: -1000, y: 0, width: 2000, height: 1000), animated: false)
             h.sample(10.08)
-            // Hidden tracks are sampled again only when the tabs reappear.
-            XCTAssertTrue(zip(h.controller.renderedRows.map(\.opacity), retracting).allSatisfy { $0 <= $1 })
+            XCTAssertEqual(h.controller.renderedRows.map(\.opacity), retracting)
             h.sample(10.5)
         }
-        XCTAssertEqual(main.controller.renderedRows[0].rect.width, 15)
-        XCTAssertEqual(group.controller.renderedRows.first { $0.groupID == id }?.rect.width, 15)
-        XCTAssertEqual(group.controller.renderedRows[0].rect.width, 10)
+        XCTAssertEqual(main.controller.renderedRows[0].rect.width, 16)
+        XCTAssertEqual(group.controller.renderedRows.first { $0.groupID == id }?.rect.width, 16)
+        XCTAssertEqual(group.controller.renderedRows[0].rect.width, 11)
         main.state.groupID = main.model.visibleGroups.last?.id
         main.sample(10.5)
-        XCTAssertEqual(main.controller.renderedRows[0].rect.width, 10)
+        XCTAssertEqual(main.controller.renderedRows[0].rect.width, 11)
         group.state.groupID = nil
         group.sample(10.5)
-        XCTAssertEqual(group.controller.renderedRows[0].rect.width, 15)
+        XCTAssertEqual(group.controller.renderedRows[0].rect.width, 16)
     }
 
     func testEntranceWaitsForTheActualPanelExpansionCompletion() throws {
@@ -379,7 +368,6 @@ final class SideTabEntranceControllerTests: XCTestCase {
         try h.panelInput.sampleFrameAnimation(for: h.panel, progress: 0.6)
         h.sample(10.2)
         XCTAssertTrue(h.controller.renderedRows.allSatisfy { $0.opacity == 0 && !$0.interactive })
-        h.clock.time = 10.34
         try h.panelInput.completeFrameAnimation(for: h.panel)
         h.sample(10.34)
         XCTAssertTrue(h.controller.renderedRows.allSatisfy { $0.opacity == 0 && !$0.interactive })
@@ -390,7 +378,7 @@ final class SideTabEntranceControllerTests: XCTestCase {
         XCTAssertTrue(h.controller.renderedRows.allSatisfy { $0.opacity == 1 && $0.interactive })
     }
 
-    func testReduceMotionAndLeftEdgeRestingHostShareImmediateSamplesAndHitRects() async throws {
+    func testReduceMotionAndLeftEdgeChildShareImmediateSamplesAndHitRects() async throws {
         let h = try Harness(inward: true)
         defer { h.close() }
         h.clock.reduceMotion = true
@@ -399,18 +387,15 @@ final class SideTabEntranceControllerTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(40))
         h.sample(10)
         XCTAssertTrue(h.controller.renderedRows.allSatisfy { $0.opacity == 1 && $0.interactive })
-        let resting = try XCTUnwrap(h.panel.contentView?.subviews.first)
-        XCTAssertFalse(resting.isHidden)
         XCTAssertEqual(h.child.frame.minX, -1000)
-        XCTAssertEqual(h.child.frame.width, 15)
+        XCTAssertEqual(h.child.frame.width, 16)
         for index in h.controller.renderedRows.indices {
-            XCTAssertEqual(String(describing: type(of: try XCTUnwrap(h.capture(index, resting: true)))), "PointerView")
+            XCTAssertEqual(String(describing: type(of: try XCTUnwrap(h.capture(index)))), "PointerView")
         }
         h.clock.visible = false
         h.sample(10)
-        XCTAssertTrue(resting.isHidden)
         XCTAssertTrue(h.child.ignoresMouseEvents)
-        for index in h.controller.renderedRows.indices { XCTAssertNil(h.capture(index, resting: true)) }
+        for index in h.controller.renderedRows.indices { XCTAssertNil(h.capture(index)) }
     }
 }
 

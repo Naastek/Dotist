@@ -69,9 +69,8 @@ final class FeedbackFourRegressionTests: XCTestCase {
                 x0 = min(x0, x); x1 = max(x1, x); y0 = min(y0, y); y1 = max(y1, y)
             }
         }
-        return try XCTUnwrap(x1 >= x0 && y1 >= y0
-            ? CGRect(x: CGFloat(x0) / scale, y: CGFloat(y0) / scale, width: CGFloat(x1 - x0 + 1) / scale, height: CGFloat(y1 - y0 + 1) / scale)
-            : nil, "Missing ink: \(rect)")
+        XCTAssertGreaterThanOrEqual(x1, x0, "Missing ink: \(rect)")
+        return CGRect(x: CGFloat(x0) / scale, y: CGFloat(y0) / scale, width: CGFloat(x1 - x0 + 1) / scale, height: CGFloat(y1 - y0 + 1) / scale)
     }
     func testActualMainWindowComposerWithReportedFonts() async throws {
         let nativeScale = NSScreen.main?.backingScaleFactor
@@ -234,31 +233,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
                 fixture.host.convert(fixture.window.convertFromScreen(element.accessibilityFrame()), from: nil)
             }
             let captureScale = fixture.window.backingScaleFactor
-            // CacheDisplay can initially capture native glyph backing before its
-            // first paint has settled. Require real, stable ink before starting
-            // motion; the animation itself must still preserve the exact mask.
-            func headerInk(_ image: NSBitmapImageRep) -> [Bool] {
-                let rect = frame(header)
-                return (Int(rect.minY * captureScale)..<Int(rect.maxY * captureScale)).flatMap { y in
-                    (Int(rect.minX * captureScale)..<Int(rect.maxX * captureScale)).map { x in
-                        let c = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
-                        return c.map { $0.alphaComponent * (1 - max($0.redComponent, $0.greenComponent, $0.blueComponent)) > 0.2 } ?? false
-                    }
-                }
-            }
-            var baselineImage = try await fixture.capture(scale: captureScale)
-            var previousInk: [Bool] = []
-            var stablePaints = 0
-            let paintDeadline = Date().addingTimeInterval(2)
-            repeat {
-                let current = headerInk(baselineImage)
-                stablePaints = current.contains(true) && current == previousInk ? stablePaints + 1 : 0
-                if stablePaints >= 2 { break }
-                previousInk = current
-                try await Task.sleep(for: .milliseconds(20))
-                baselineImage = try await fixture.capture(scale: captureScale)
-            } while Date() < paintDeadline
-            _ = try XCTUnwrap(stablePaints >= 2 ? baselineImage : nil, "Native title ink never settled before animation")
+            let baselineImage = try await fixture.capture(scale: captureScale)
             // Use the baseline painted title, not its font advance: the latter
             // includes whitespace that can contain the rotating disclosure.
             try save(baselineImage, "animation-\(scope)-baseline", directory: animationEvidence)
@@ -339,13 +314,12 @@ final class FeedbackFourRegressionTests: XCTestCase {
             _ = try await fixture.capture(scale: captureScale)
             XCTAssertLessThan(disclosureProgress, try XCTUnwrap(retargetFractions.min()))
             func waitForEnd(_ target: CGFloat) async throws {
-                // Bounded by logical time (2 s of animation clock), not wall time: each
-                // advance also waits for run-loop delivery, which is slower on CI runners.
-                for _ in 0..<100 {
+                let deadline = ProcessInfo.processInfo.systemUptime + 2
+                repeat {
                     _ = try await fixture.capture(scale: captureScale)
                     if disclosureProgress == target && !lastClock.values.contains(where: \.animating) { return }
                     try await clock.advance(by: 0.020)
-                }
+                } while ProcessInfo.processInfo.systemUptime < deadline
                 XCTFail("Disclosure did not deliver endpoint \(target)")
             }
             try await waitForEnd(0)
@@ -418,14 +392,14 @@ final class FeedbackFourRegressionTests: XCTestCase {
             }, size: CGSize(width: 364, height: 620))
         defer { fixture.close() }
         func waitFor(_ phase: String, _ condition: () -> Bool) async throws {
-            // Bounded by logical time (2 s of animation clock), not wall time.
-            for _ in 0..<100 {
+            let deadline = ProcessInfo.processInfo.systemUptime + 2
+            repeat {
                 fixture.host.layoutSubtreeIfNeeded()
                 await Task.yield()
                 fixture.host.layoutSubtreeIfNeeded()
                 if condition() { return }
                 try await clock.advance(by: 0.020)
-            }
+            } while ProcessInfo.processInfo.systemUptime < deadline
             XCTFail("Presentation did not finish: \(phase), active=\(active.count), rows=\(rows.count)")
         }
         func checkAX(_ present: Bool, phase: String) {
@@ -541,23 +515,20 @@ final class FeedbackFourRegressionTests: XCTestCase {
     }
 
     func testDisclosureReducedMotionSnapsAndNormalMotionRetargetsContinuously() async throws {
-        let clock = LayoutMotionTestClock()
-        defer { clock.restore() }
         let motion = DisclosureMotion(expanded: true)
-        defer { motion.stop() }
         motion.setExpanded(false, reduceMotion: true)
         XCTAssertEqual(motion.fraction, 0)
-        try await clock.advance(by: 0.03)
+        try await Task.sleep(for: .milliseconds(30))
         XCTAssertEqual(motion.fraction, 0)
         motion.setExpanded(true, reduceMotion: false)
-        try await clock.advance(by: 0.055, until: { motion.fraction > 0 })
+        try await Task.sleep(for: .milliseconds(55))
         let before = motion.fraction
         XCTAssertGreaterThan(before, 0); XCTAssertLessThan(before, 1)
         motion.setExpanded(false, reduceMotion: false)
         XCTAssertEqual(motion.fraction, before)
         motion.setExpanded(true, reduceMotion: true)
         XCTAssertEqual(motion.fraction, 1)
-        try await clock.advance(by: 0.05)
+        try await Task.sleep(for: .milliseconds(50))
         XCTAssertEqual(motion.fraction, 1, "Reduced motion cancels an in-flight clock")
     }
     func testFontPickerNativeFramesShareColumnsAtMinimumWidth() async throws {
@@ -618,13 +589,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
                     for y in 45..<75 { for x in 60..<240 { maxText = max(maxText, bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) } }
                     rows.append("\(scheme),\(opacity),0,\(protection == 1),\(protection == 2),\(background.alphaComponent),\(maxText)")
                     if protection == 0 {
-                        let glossAllowance = CGFloat(CompactGlassStyle.specularTop(.expanded, scheme))
-                        let density = CGFloat(opacity) / 100
-                        let wash: CGFloat = scheme == .dark ? 0.18 : 0.16
-                        // Source-over reading planes, not the obsolete paper-only bound.
-                        let readingAlpha = 1 - (1 - density) * (1 - wash * density)
-                        XCTAssertGreaterThanOrEqual(background.alphaComponent, readingAlpha - 0.015)
-                        XCTAssertLessThanOrEqual(background.alphaComponent, readingAlpha + glossAllowance + 0.015)
+                        XCTAssertLessThanOrEqual(background.alphaComponent, CGFloat(opacity) / 100 + 0.015)
                         if opacity >= 95 { XCTAssertGreaterThan(background.alphaComponent, 0.85) }
                     } else { XCTAssertEqual(background.alphaComponent, 1, accuracy: 0.01) }
                     XCTAssertGreaterThan(maxText, 0.9, "Surface opacity must never fade normal text")

@@ -98,7 +98,7 @@ final class NativeStoreTests: XCTestCase {
         XCTAssertEqual(try store.database.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM sync_outbox") }, 0)
         XCTAssertThrowsError(try store.addTask(title: "日期", category: "work", dueDate: "2026-1-01"))
         XCTAssertThrowsError(try store.addTask(title: String(repeating: "e\u{301}", count: 251), category: "work"))
-        XCTAssertEqual(try store.addTasks([.init(title: "第一项", category: "Work"), .init(title: "第二项", category: "life")]).count, 2)
+        XCTAssertEqual(try store.addTasks([.init(title: "第一项", category: "工作"), .init(title: "第二项", category: "life")]).count, 2)
     }
 
     func testStateAndFamilyRulesSurvivePartialUpdates() throws {

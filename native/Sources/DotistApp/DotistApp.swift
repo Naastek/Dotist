@@ -2,7 +2,6 @@ import AppKit
 import Combine
 import DotistCore
 import SwiftUI
-import ObjectiveC.runtime
 
 // Opt-in QA diagnostics record event routing without task text or user data.
 func shortcutTrace(_ message: String) {
@@ -21,10 +20,6 @@ func shortcutTrace(_ message: String) {
 @main
 struct DotistApplication {
     static func main() {
-        // Thin overlay scrollers that hide when idle, in every list, even when the system
-        // setting is "always" (the default once a mouse is connected). Must be set in the
-        // app's own domain before AppKit reads the preferred scroller style.
-        UserDefaults.standard.set("WhenScrolling", forKey: "AppleShowScrollBars")
         if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa" {
             let expected = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("data", isDirectory: true).standardizedFileURL.path
             let selected = ProcessInfo.processInfo.environment["DOTIST_DATA_DIR"].map { URL(fileURLWithPath: $0).standardizedFileURL.path }
@@ -44,32 +39,7 @@ struct DotistApplication {
     }
 }
 
-// Private AppKit selector, verified on macOS 27.2: keeps floating Liquid Glass lit
-// when not key. If AppKit removes it, the old inactive appearance returns.
-enum FloatingGlassAppearance {
-    static let alwaysActive = true
-    static func active(_ window: NSWindow) -> Bool {
-        guard !alwaysActive else { return true }
-        let selector = NSSelectorFromString("_hasActiveAppearance")
-        guard let method = class_getInstanceMethod(NSWindow.self, selector) else { return window.isKeyWindow }
-        typealias Implementation = @convention(c) (AnyObject, Selector) -> Bool
-        return unsafeBitCast(method_getImplementation(method), to: Implementation.self)(window, selector)
-    }
-}
-
-final class ViewsGlassWindow: NSWindow {
-    @objc(_hasActiveAppearance) func dotistHasActiveAppearance() -> Bool { FloatingGlassAppearance.active(self) }
-}
-
 final class DotistPanel: NSPanel {
-    override init(contentRect: NSRect, styleMask: NSWindow.StyleMask, backing: NSWindow.BackingStoreType, defer flag: Bool) {
-        super.init(contentRect: contentRect, styleMask: styleMask, backing: backing, defer: flag)
-        // Explicit opt-in keeps transparent optical margins and rounded corners
-        // in AppKit's window hit region, including the native resize border.
-        ignoresMouseEvents = false
-    }
-
-    @objc(_hasActiveAppearance) func dotistHasActiveAppearance() -> Bool { FloatingGlassAppearance.active(self) }
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }
@@ -77,7 +47,7 @@ final class DotistPanel: NSPanel {
 final class QuickPanel: NSPanel {
     override init(contentRect: NSRect, styleMask: NSWindow.StyleMask, backing: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: styleMask, backing: backing, defer: flag)
-        hasShadow = false
+        hasShadow = true
     }
     override var canBecomeKey: Bool { true }
     override func cancelOperation(_ sender: Any?) { orderOut(sender) }
@@ -115,9 +85,6 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     private var panel: DotistPanel!
     private var sideTabs: SideTabsController?
     private var viewsWindow: NSWindow?
-    private var viewsShadow: ViewsShadowController?
-    private var quickShadow: ViewsShadowController?
-    private var searchShadow: ViewsShadowController?
     private var settingsWindow: NSWindow?
     private var quickWindow: QuickPanel?
     private var searchWindow: QuickPanel?
@@ -132,9 +99,8 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     private var settingsObserver: AnyCancellable?
     private var appliedLanguage: String?
     private var appliedShortcutSignature: ShortcutSignature?
-    private(set) var expandedSize = NSSize(width: PanelLayoutMetrics.primaryWidth, height: 620)
+    private(set) var expandedSize = NSSize(width: 364, height: 620)
     private var idleTimer: Timer?
-    private var qaPerfDriver: QAPerfDriver?
     private var moveCheck: DispatchWorkItem?
     private var menuStates: [(NSMenuItem, Bool)] = []
     private var preferredWindowFrame = NSRect.zero
@@ -142,30 +108,8 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     private var userMoveInProgress = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        _ = QAEdge.flags // Read QA diagnostics once at launch.
         DotistDesign.registerFonts()
-        do {
-            if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa",
-               ["groups", "strip2"].contains(ProcessInfo.processInfo.environment["DOTIST_QA_SEED"] ?? "") {
-                let store = try TaskStore(includeExamples: true)
-                if try store.listGroups().allSatisfy({ $0.id == DotistGroup.inboxID }) {
-                    for name in ["Work", "Life", "Reading"] {
-                        let group = try store.addGroup(name: name)
-                        try store.addTask(title: "Explore " + name + " #example", category: group.id)
-                    }
-                }
-                if ProcessInfo.processInfo.environment["DOTIST_QA_SEED"] == "strip2" {
-                    let groups = try store.listGroups()
-                    let group = try groups.first(where: { $0.name == "QA Strip" }) ?? store.addGroup(name: "QA Strip", color: "teal")
-                    _ = try store.updateGroup(group.id, color: "teal")
-                    if try !store.listTasks().contains(where: { $0.category == group.id && !$0.completed }) {
-                        try store.addTask(title: "QA two-line task", category: group.id)
-                    }
-                    mainState.groupID = group.id
-                }
-                model = try AppModel(store: store)
-            } else { model = try AppModel() }
-        }
+        do { model = try AppModel() }
         catch {
             let alert = NSAlert()
             alert.messageText = "Dotist"
@@ -177,12 +121,12 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         updater = NativeUpdater(model: model)
         mainState.scope = model.settings.defaultFilter
         if model.settings.windowWidth > 0 && model.settings.windowHeight > 0 {
-            expandedSize = NSSize(width: max(Int(PanelLayoutMetrics.primaryWidth), Int(model.settings.windowWidth)), height: Int(model.settings.windowHeight))
+            expandedSize = NSSize(width: Int(model.settings.windowWidth), height: Int(model.settings.windowHeight))
         }
         panel = DotistPanel(contentRect: NSRect(origin: .zero, size: expandedSize), styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Dotist"
         panel.identifier = NSUserInterfaceItemIdentifier("dotist.main")
-        panel.minSize = NSSize(width: PanelLayoutMetrics.primaryWidth, height: 440)
+        panel.minSize = NSSize(width: 320, height: 440)
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
@@ -195,7 +139,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         if model.settings.theme == "dark" { panel.appearance = NSAppearance(named: .darkAqua) }
         motion = PanelMotion(model: model, panel: panel, size: expandedSize, title: { [model] in model!.bubbleTitle }, rememberFrame: { [weak self] in self?.rememberWindowFrame($0) })
         let container = NSView(frame: NSRect(origin: .zero, size: expandedSize))
-        let hosting = DotistHostingView(rootView: RootWindow(model: model, coordinator: self).environment(\.qaMainPanel, true))
+        let hosting = DotistHostingView(rootView: RootWindow(model: model, coordinator: self))
         hosting.sizingOptions = []
         hosting.frame = container.bounds
         hosting.autoresizingMask = [.width, .height]
@@ -294,58 +238,15 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             self.performMenuAction("show")
             if let task { self.revealTask(task) }
         }
-        if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa" {
-            let target = ProcessInfo.processInfo.environment["DOTIST_QA_OPEN"]
-            if target == "bubble" {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-                    guard let self, !self.bubble else { return }; self.toggleBubble()
-                }
-            } else if target == "palette" || target == "quickadd" || target == "settings" {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                    guard let self else { return }
-                    switch target { case "palette": self.showSearch(); case "quickadd": self.showQuick(); default: self.showSettings() }
-                }
-            }
-        }
-        if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa", ProcessInfo.processInfo.environment["DOTIST_QA_OPEN"] == "views" {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.showViews() }
-        }
-        if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa", ProcessInfo.processInfo.environment["DOTIST_QA_OPEN"] == "composer" {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                self?.panel.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
-                NotificationCenter.default.post(name: .init("DotistQAComposer"), object: nil)
-            }
-        }
-        if Bundle.main.bundleIdentifier == "dev.codex.dotist-native-qa", ProcessInfo.processInfo.environment["DOTIST_QA_OPEN"] == "strip" {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                guard let self else { return }
-                if !self.bubble { self.toggleBubble() }
-                var readyAt: Date?
-                var releaseAt: Date?
-                Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] timer in
-                    MainActor.assumeIsolated {
-                        guard let self else { timer.invalidate(); return }
-                        if self.animationInProgress || !self.bubble { readyAt = nil; return }
-                        if readyAt == nil { readyAt = Date().addingTimeInterval(0.3) }
-                        guard Date() >= readyAt! else { return }
-                        if releaseAt == nil { releaseAt = Date().addingTimeInterval(8) }
-                        guard Date() < releaseAt! else { timer.invalidate(); return }
-                        if !self.motion.hovering { self.motion.setHover(true) }
-                    }
-                }
-            }
-        }
-        if QAPerf.enabled { qaPerfDriver = QAPerfDriver(panel: panel, toggle: { [weak self] in self?.toggleBubble() }, isBubble: { [weak self] in self?.bubble ?? false }); qaPerfDriver?.start() }
         if model.settings.mcpEnabled { model.mcp.start() }
         idleTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in if QAPerf.enabled { QAPerf.count(.idleTimer) }; self?.updateIdleState() }
+            Task { @MainActor in self?.updateIdleState() }
         }
     }
 
     func windowDidResize(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === panel,
-              !bubble, !animationInProgress, panel.frame.width >= PanelLayoutMetrics.primaryWidth, panel.frame.height >= 440 else { return }
+              !bubble, !animationInProgress, panel.frame.width >= 320, panel.frame.height >= 440 else { return }
         expandedSize = panel.frame.size
     }
 
@@ -373,7 +274,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     func windowDidEndLiveResize(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === panel, !bubble, !animationInProgress else { return }
         var patch = DotistSettingsPatch()
-        patch.windowWidth = UInt32(max(PanelLayoutMetrics.primaryWidth, panel.frame.width.rounded()))
+        patch.windowWidth = UInt32(max(320, panel.frame.width.rounded()))
         patch.windowHeight = UInt32(max(440, panel.frame.height.rounded()))
         model.updateSettings(patch)
         preferredWindowFrame = panel.frame
@@ -385,14 +286,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         if let window = notification.object as? NSWindow, window === quickWindow || window === searchWindow { shortcutTrace("resign quick/search"); window.orderOut(nil) }
     }
     func windowWillClose(_ notification: Notification) {
-        if let window = notification.object as? NSWindow, window === quickWindow {
-            quickShadow?.stop(); quickShadow = nil; quickWindow = nil
-        }
-        if let window = notification.object as? NSWindow, window === searchWindow {
-            searchShadow?.stop(); searchShadow = nil; searchWindow = nil
-        }
         if let window = notification.object as? NSWindow, window === viewsWindow {
-            viewsShadow?.stop(); viewsShadow = nil
             NSApp.setActivationPolicy(model.settings.showDock ? .regular : .accessory)
         }
     }
@@ -428,29 +322,22 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         preferredWindowFrame = frame
     }
 
-    static func screenPlacement(for frame: NSRect, screens: [NSRect], main: NSRect, minimumSize: NSSize = NSSize(width: PanelLayoutMetrics.primaryWidth, height: 440)) -> NSRect {
-        func overlapArea(_ screen: NSRect) -> CGFloat {
-            let overlap = screen.intersection(frame)
-            return overlap.isNull ? 0 : overlap.width * overlap.height
-        }
-        if screens.contains(where: { overlapArea($0) >= frame.width * frame.height / 2 }) { return frame }
-        let best = screens.max(by: { overlapArea($0) < overlapArea($1) }).flatMap { overlapArea($0) > 0 ? $0 : nil } ?? main
-        let width = min(frame.width, max(minimumSize.width, best.width))
-        let height = min(frame.height, max(minimumSize.height, best.height))
-        return NSRect(x: min(max(frame.minX, best.minX), max(best.minX, best.maxX - width)),
-                      y: min(max(frame.minY, best.minY), max(best.minY, best.maxY - height)),
-                      width: width, height: height)
+    static func screenPlacement(for frame: NSRect, screens: [NSRect], main: NSRect) -> NSRect {
+        if screens.contains(where: {
+            let overlap = $0.intersection(frame)
+            return overlap.width >= 80 && overlap.height >= 80
+        }) { return frame }
+        return NSRect(x: min(max(frame.minX, main.minX), max(main.minX, main.maxX - frame.width)),
+                      y: min(max(frame.minY, main.minY), max(main.minY, main.maxY - frame.height)),
+                      width: frame.width, height: frame.height)
     }
 
     @objc private func screensChanged() {
         guard !userMoveInProgress, !animationInProgress, let main = NSScreen.main?.visibleFrame else { return }
         moveCheck?.cancel()
-        let target = Self.screenPlacement(for: preferredWindowFrame, screens: NSScreen.screens.map(\.visibleFrame), main: main, minimumSize: panel.minSize)
+        let target = Self.screenPlacement(for: preferredWindowFrame, screens: NSScreen.screens.map(\.visibleFrame), main: main)
         let offset = NSPoint(x: target.minX - preferredWindowFrame.minX, y: target.minY - preferredWindowFrame.minY)
-        var frame = panel.frame
-        frame.origin = NSPoint(x: frame.minX + offset.x - displayOffset.x, y: frame.minY + offset.y - displayOffset.y)
-        if !bubble { frame.size = target.size }
-        panel.setFrame(frame, display: true)
+        panel.setFrameOrigin(NSPoint(x: panel.frame.minX + offset.x - displayOffset.x, y: panel.frame.minY + offset.y - displayOffset.y))
         displayOffset = offset
     }
 
@@ -654,13 +541,13 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
 
     func showViews() {
         if viewsWindow == nil {
-            let window = ViewsGlassWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
             window.title = model.text("任务视图")
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.isOpaque = false
             window.backgroundColor = .clear
-            window.hasShadow = false
+            window.hasShadow = true
             window.isReleasedWhenClosed = false
             window.appearance = panel.appearance
             window.delegate = self
@@ -671,9 +558,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         }
         NSApp.setActivationPolicy(.regular)
         viewsWindow?.level = panel.level
-        if viewsShadow == nil, let viewsWindow { viewsShadow = ViewsShadowController(parent: viewsWindow) }
         viewsWindow?.makeKeyAndOrderFront(nil)
-        viewsShadow?.synchronize()
         viewsWindow?.makeFirstResponder(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -731,11 +616,11 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         patch.windowWidth = 0; patch.windowHeight = 0
         model.updateSettings(patch) { [weak self] success in
             guard success, let self else { return }
-            self.expandedSize = NSSize(width: PanelLayoutMetrics.primaryWidth, height: 620)
+            self.expandedSize = NSSize(width: 364, height: 620)
             self.motion.expandedSize = self.expandedSize
             guard !self.bubble else { return }
             let old = self.panel.frame
-            self.panel.setFrame(NSRect(x: old.maxX - PanelLayoutMetrics.primaryWidth, y: old.maxY - 620, width: PanelLayoutMetrics.primaryWidth, height: 620), display: true, animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+            self.panel.setFrame(NSRect(x: old.maxX - 364, y: old.maxY - 620, width: 364, height: 620), display: true, animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         }
     }
 
@@ -744,14 +629,12 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             let window = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 560, height: 112), styleMask: [.borderless], backing: .buffered, defer: false)
             window.isOpaque = false
             window.backgroundColor = .clear
-            window.hasShadow = false
+            window.hasShadow = true
             window.level = .floating
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            window.isReleasedWhenClosed = false
             window.appearance = panel.appearance
             window.delegate = self
             quickWindow = window
-            quickShadow = ViewsShadowController(parent: window, accessibleCornerRadius: 18)
         }
         if let window = quickWindow {
             model.error = nil
@@ -762,7 +645,6 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             quickWindow?.setFrameOrigin(NSPoint(x: area.midX - 280, y: area.maxY - area.height * 0.2 - 112))
         }
         quickWindow?.makeKeyAndOrderFront(nil)
-        quickShadow?.synchronize()
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -776,7 +658,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             let window = QuickPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 440), styleMask: [.borderless], backing: .buffered, defer: false)
             window.isOpaque = false
             window.backgroundColor = .clear
-            window.hasShadow = false
+            window.hasShadow = true
             window.level = .floating
             window.isReleasedWhenClosed = false
             window.isMovableByWindowBackground = true
@@ -784,7 +666,6 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             window.appearance = panel.appearance
             window.center()
             searchWindow = window
-            searchShadow = ViewsShadowController(parent: window)
         }
         guard let window = searchWindow else { return }
         window.title = model.text("搜索")
@@ -800,7 +681,6 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         }), in: window)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        searchShadow?.synchronize()
         shortcutTrace("search shown visible=\(window.isVisible)")
     }
 
@@ -818,8 +698,6 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         mainState.groupID = task.category
         model.scope = "all"
         model.selectTag(nil)
-        mainState.setGroupCollapsed(false, id: task.category)
-        if task.completed || TaskHierarchy(model.tasks).ancestors(of: task.id).contains(where: \.completed) { mainState.hideCompleted = false }
         for parent in TaskHierarchy(model.tasks).ancestors(of: task.id) {
             mainState.expanded.insert(parent.id)
             if parent.completed { mainState.folded.insert(task.category) }

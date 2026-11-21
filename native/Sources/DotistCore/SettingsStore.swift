@@ -78,6 +78,7 @@ final class SettingsStore: @unchecked Sendable {
         if let value = patch.frost { next.frost = value }
         if let value = patch.alwaysOnTop { next.alwaysOnTop = value }
         if let value = patch.hoverExpand { next.hoverExpand = value }
+        if let value = patch.hoverPreviewTaskId { next.hoverPreviewTaskId = value.isEmpty ? nil : value }
         if let value = patch.idleFade { next.idleFade = value }
         if let value = patch.locked { next.locked = value }
         if let value = patch.windowWidth { next.windowWidth = value }

@@ -114,7 +114,8 @@ final class SettingsPolishRenderingTests: XCTestCase {
             let production = try XCTUnwrap(SideTabsSnapshot.render(names: ["", "", ""], language: "zh-CN", scheme: .light,
                 inward: false, expanded: false, showLabels: false, entrance: playback.values, color: { _ in .none }))
             let geometry = SideTabGeometry.snapshot(panel: CGRect(x: 24, y: 0, width: 84, height: 164),
-                fullWidths: [84, 84, 84], progress: 0, inward: false, selectedIndex: 0, entrance: playback.values)
+                fullWidths: [84, 84, 84], progress: 0, inward: false, selectedIndex: 0, entrance: playback.values,
+                bridgesOpticalClearance: false)
             let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
             // Very early, nearly transparent antialiased pixels are covered by
             // the track regression; measure silhouettes once clearly visible.
@@ -127,8 +128,11 @@ final class SettingsPolishRenderingTests: XCTestCase {
                 }
                 let first = try XCTUnwrap(painted.first)
                 let last = try XCTUnwrap(painted.last)
-                XCTAssertEqual(CGFloat(last - first + 1) / scale, production.tabs[index].width, accuracy: 1.5,
-                    "Native preview silhouette must follow the actual production entrance geometry")
+                let hiddenOverlap = SideTabGeometry.connectionOverlap - ExpandedReadingMaterial.opticalClearance
+                let visibleWidth = production.tabs[index].width - hiddenOverlap
+                XCTAssertEqual(rect.width, visibleWidth, accuracy: 0.001)
+                XCTAssertEqual(CGFloat(last - first + 1) / scale, visibleWidth, accuracy: 1.5,
+                    "Native preview silhouette must match the visible production ear")
                 XCTAssertEqual(CGFloat(first) / scale, 12 + rect.minX, accuracy: 1.5)
             }
 

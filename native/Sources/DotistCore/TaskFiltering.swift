@@ -1,7 +1,7 @@
 import Foundation
 
 /// Inclusive Gregorian civil dates, in the same YYYY-MM-DD format as dueDate.
-public struct TaskDateRange: Equatable, Sendable {
+public struct TaskDateRange: Hashable, Sendable {
     public let start: String
     public let end: String
     public init(_ start: String, _ end: String) {
@@ -28,6 +28,8 @@ public struct TaskTodaySections: Sendable {
     public let today: TaskFilterResult
     public let upcoming: TaskFilterResult
     public let completed: TaskFilterResult
+    public var openMatches: [DotistTask] { overdue.matches + today.matches }
+    public var openCount: Int { overdue.matches.count + today.matches.count }
 }
 
 /// Shared by AppModel and tests. Every task matches its own date/status, and a
@@ -82,6 +84,27 @@ public struct TaskFiltering {
         }
     }
 
+    func planDates(for scope: TaskPlanScope?) -> (day: String?, weekStart: String?) {
+        guard let scope else { return (nil, nil) }
+        return (scope == .today ? day(now) : nil, range(scope: "week").start)
+    }
+
+    public func planScope(for task: DotistTask) -> TaskPlanScope? {
+        planScope(for: task, today: day(now), earliestWeekStart: earliestActiveWeekStart)
+    }
+
+    private var earliestActiveWeekStart: String { day(calendar.date(byAdding: .day, value: -6, to: now)!) }
+
+    private func planScope(for task: DotistTask, today: String, earliestWeekStart: String) -> TaskPlanScope? {
+        guard !task.completed, task.deletedAt == nil else { return nil }
+        if task.plannedDay == today { return .today }
+        // Evaluate on read so a missed midnight, sleep or restart needs no write.
+        // The stored start anchors the selected week even if system preferences change.
+        guard let start = task.plannedWeekStart, start >= earliestWeekStart, start <= today,
+              task.plannedDay.map({ $0 < today }) ?? true else { return nil }
+        return .week
+    }
+
     private func candidates(groupID: String?, tag: String?) -> [DotistTask] {
         let family = tag.map { TaskTags.filter(tasks, tag: $0) } ?? tasks
         return family.filter { groupID == nil || $0.category == groupID }
@@ -117,8 +140,13 @@ public struct TaskFiltering {
     public func filter(scope: String, groupID: String? = nil, tag: String? = nil,
                        customRange: TaskDateRange? = nil, completed: Bool = false) -> TaskFilterResult {
         let candidates = candidates(groupID: groupID, tag: tag)
-        let bounds = customRange ?? range(scope: scope)
         let today = day(now)
+        if customRange == nil, let plan = TaskPlanScope(rawValue: scope) {
+            let earliest = earliestActiveWeekStart
+            let matches = completed ? [] : candidates.filter { planScope(for: $0, today: today, earliestWeekStart: earliest) == plan }
+            return result(matches, within: candidates)
+        }
+        let bounds = customRange ?? range(scope: scope)
         let matches = candidates.filter { task in
             // An explicit calendar range always takes precedence over a preset.
             if customRange != nil { return task.completed == completed && task.dueDate.map(bounds.contains) == true }
@@ -141,9 +169,12 @@ public struct TaskFiltering {
         let today = day(now)
         let upcoming = TaskDateRange(day(calendar.date(byAdding: .day, value: 1, to: now)!), day(calendar.date(byAdding: .day, value: 7, to: now)!))
         let done = candidates.filter { $0.completed && ($0.dueDate == today || timestamp($0.updatedAt).map(day) == today) }
-        return TaskTodaySections(overdue: filter(scope: "overdue", groupID: groupID, tag: tag),
-                                 today: filter(scope: "today", groupID: groupID, tag: tag),
-                                 upcoming: filter(scope: "today", groupID: groupID, tag: tag, customRange: upcoming),
+        let overdue = candidates.filter { !$0.completed && $0.dueDate.map { $0 < today } == true }
+        let dueToday = candidates.filter { !$0.completed && $0.dueDate == today }
+        let dueUpcoming = candidates.filter { !$0.completed && $0.dueDate.map(upcoming.contains) == true }
+        return TaskTodaySections(overdue: result(overdue, within: candidates),
+                                 today: result(dueToday, within: candidates),
+                                 upcoming: result(dueUpcoming, within: candidates),
                                  completed: result(done, within: candidates, newestFirst: true))
     }
 }

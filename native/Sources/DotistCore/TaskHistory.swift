@@ -46,7 +46,19 @@ extension DotistTask {
             && completed == other.completed && status == other.status
             && position == other.position && parentId == other.parentId
             && dueDate == other.dueDate && startDate == other.startDate
+            && hasSamePlan(as: other)
             && createdAt == other.createdAt && deletedAt == other.deletedAt
+    }
+
+    func hasSamePlan(as other: DotistTask) -> Bool {
+        plannedDay == other.plannedDay && plannedWeekStart == other.plannedWeekStart
+    }
+
+    func withPlan(from other: DotistTask) -> DotistTask {
+        var task = self
+        task.plannedDay = other.plannedDay
+        task.plannedWeekStart = other.plannedWeekStart
+        return task
     }
 }
 
@@ -105,6 +117,16 @@ extension TaskStore {
     /// parent/category states never escape this transaction. New-task undo uses
     /// tombstones so its delete is also represented in the sync outbox.
     public func apply(patch: TaskRestorePoint) throws {
+        try apply(patch: patch, relativeTo: [:])
+    }
+
+    public func apply(mutation: TaskMutationPatch, redo: Bool) throws {
+        let target = redo ? mutation.after : mutation.before
+        let source = redo ? mutation.before : mutation.after
+        try apply(patch: target, relativeTo: Dictionary(uniqueKeysWithValues: source.tasks.map { ($0.id, $0) }))
+    }
+
+    private func apply(patch: TaskRestorePoint, relativeTo sources: [String: DotistTask]) throws {
         try write { db in
             let now = Self.timestamp()
             for state in patch.groups {
@@ -119,19 +141,29 @@ extension TaskStore {
             for id in patch.missingGroupIDs {
                 try db.execute(sql: "UPDATE task_groups SET deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL", arguments: [now, now, id])
             }
-            for state in patch.tasks {
-                let old = try DotistTask.fetchOne(db, sql: "SELECT * FROM tasks WHERE id=?", arguments: [state.id])
+            for target in patch.tasks {
+                let old = try DotistTask.fetchOne(db, sql: "SELECT * FROM tasks WHERE id=?", arguments: [target.id])
+                let state: DotistTask
+                if let old, let source = sources[target.id] {
+                    // A plan-only undo must leave intervening edits (especially dates) intact.
+                    if source.hasSamePlan(as: target) { state = target.withPlan(from: old) }
+                    else if source.withPlan(from: target).hasSameHistoryContent(as: target) {
+                        state = old.withPlan(from: target)
+                    } else { state = target }
+                } else { state = target }
                 // Redo/undo is a new sync mutation; revisions never move back.
                 let revision = max(old?.revision ?? 0, state.revision) + 1
                 try db.execute(sql: """
-                    INSERT INTO tasks (id,title,category,completed,status,position,created_at,updated_at,deleted_at,revision,parent_id,due_date,start_date)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                    INSERT INTO tasks (id,title,category,completed,status,position,created_at,updated_at,deleted_at,revision,parent_id,due_date,start_date,planned_day,planned_week_start)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title,category=excluded.category,completed=excluded.completed,status=excluded.status,
                     position=excluded.position,created_at=excluded.created_at,updated_at=excluded.updated_at,
                     deleted_at=excluded.deleted_at,revision=excluded.revision,parent_id=excluded.parent_id,
-                    due_date=excluded.due_date,start_date=excluded.start_date
+                    due_date=excluded.due_date,start_date=excluded.start_date,
+                    planned_day=excluded.planned_day,planned_week_start=excluded.planned_week_start
                     """, arguments: [state.id, state.title, state.category, state.completed, state.status.rawValue, state.position,
-                                      state.createdAt, state.updatedAt, state.deletedAt, revision, state.parentId, state.dueDate, state.startDate])
+                                      state.createdAt, state.updatedAt, state.deletedAt, revision, state.parentId, state.dueDate,
+                                      state.startDate, state.plannedDay, state.plannedWeekStart])
                 let restored = try Self.task(db, state.id, deleted: true)
                 let kind = state.deletedAt != nil ? "delete" : old == nil ? "create" : old?.deletedAt != nil ? "restore" : "update"
                 try Self.record(db, restored, kind: kind, base: old?.revision)

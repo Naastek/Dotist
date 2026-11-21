@@ -23,39 +23,6 @@ final class ComposerAlignmentTests: XCTestCase {
         XCTAssertLessThanOrEqual(rect.height, 24)
     }
 
-    func testComposerFieldGeometry() {
-        for width: CGFloat in [320, 364, 454] {
-            for groupWidth: CGFloat in [45, 500] {
-                let bounds = CGRect(x: 16, y: 14, width: width - 24, height: 24)
-                let frames = ComposerLayout.frames(in: bounds, groupWidth: groupWidth, dateWidth: 64)
-                XCTAssertEqual(frames.field.minX - frames.group.maxX, 10, accuracy: 0.001)
-                XCTAssertEqual(frames.field.maxX, width - 8, accuracy: 0.001)
-                XCTAssertEqual(frames.field.height, 36)
-                XCTAssertEqual(frames.input.minX - frames.field.minX, 12, accuracy: 0.001)
-                XCTAssertGreaterThanOrEqual(frames.date.minX - frames.input.maxX, 8)
-                XCTAssertEqual(frames.field.maxX - frames.date.maxX, 10, accuracy: 0.001)
-                XCTAssertTrue(frames.field.contains(frames.date))
-            }
-        }
-    }
-
-    func testFocusDoesNotMoveComposerInput() async throws {
-        let content = ComposerLayout {
-            ComposerGroupLabel(title: "All", language: "en")
-            ComposerInput(text: .constant(""), focused: .constant(false), placeholder: "New task", label: "New task",
-                font: DotistDesign.nativeFont(13, language: "en"), commit: {}, navigate: { _ in false }, complete: { _ in false })
-            ComposerCalendarIcon()
-        }.padding(.leading, 16).padding(.trailing, 8).frame(width: 320, height: 52)
-        let fixture = NativeRenderingFixture(content, size: CGSize(width: 320, height: 52), simulatedBackingScale: 2)
-        defer { fixture.close() }
-        let field = try XCTUnwrap(fixture.descendants(ComposerTextField.self).first)
-        _ = try await fixture.capture(scale: 2)
-        let before = fixture.host.convert(field.bounds, from: field)
-        XCTAssertTrue(fixture.window.makeFirstResponder(field))
-        _ = try await fixture.capture(scale: 2)
-        XCTAssertEqual(fixture.host.convert(field.bounds, from: field), before)
-    }
-
     func testNativeUndoRoutingPreservesEveryTextEditor() throws {
         func key(_ flags: NSEvent.ModifierFlags, characters: String = "z") throws -> NSEvent {
             try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
@@ -75,17 +42,23 @@ final class ComposerAlignmentTests: XCTestCase {
         defer { DotistDesign.fontPreferences = saved }
         for serif in ["newsreader", "source-serif-4", "system"] {
             DotistDesign.fontPreferences = .init(serifLatin: serif)
-            for (title, placeholder, language) in [("All", "Jot something down", "en"), ("生活", "写下一件小事", "zh-CN"), ("Travail", "Notez quelque chose", "fr")] {
+            let cases: [(title: String, placeholder: String, language: String, width: CGFloat)] = [
+                ("All", "Jot something down", "en", 364),
+                ("生活", "写下一件小事", "zh-CN", 364),
+                ("Travail", "Notez quelque chose", "fr", 364),
+                ("产品设计与研发协作项目进度和交付事项", "写下一件小事", "zh-CN", 320),
+            ]
+            for (title, placeholder, language, width) in cases {
                 let content = ComposerLayout {
                     Menu {} label: { ComposerGroupLabel(title: title, language: language) }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().frame(height: 24)
                     ComposerInput(text: .constant(""), focused: .constant(false), placeholder: placeholder, label: "New task",
                         font: DotistDesign.nativeFont(13, language: language), commit: {}, navigate: { _ in false }, complete: { _ in false }).frame(height: 24)
                     ComposerCalendarIcon(language: language)
-                }.padding(.leading, 16).padding(.trailing, 11).frame(width: 364, height: 52)
+                }.padding(.leading, 16).padding(.trailing, 11).frame(width: width, height: 52)
                     .foregroundStyle(Color.black).background(Color.white).environment(\.colorScheme, .light)
                 for backing: CGFloat in [1, 2] {
-                    let fixture = NativeRenderingFixture(content, size: CGSize(width: 364, height: 52), simulatedBackingScale: backing)
+                    let fixture = NativeRenderingFixture(content, size: CGSize(width: width, height: 52), simulatedBackingScale: backing)
                     defer { fixture.close() }
                     let field = try XCTUnwrap(fixture.descendants(ComposerTextField.self).first)
                     let popup = try XCTUnwrap(fixture.descendants(NSPopUpButton.self).first)
@@ -105,7 +78,8 @@ final class ComposerAlignmentTests: XCTestCase {
                             XCTAssertTrue(popup.selectedItem === selectedItem)
                             XCTAssertTrue(popup.attributedTitle.isEqual(to: attributedTitle), "Optical placement must preserve the native menu title and attributes")
                             let input = fixture.host.convert(field.bounds, from: field)
-                            let ranges = [CGFloat(16)..<(input.minX - 8), input.minX..<input.maxX, CGFloat(330)..<351]
+                            XCTAssertGreaterThanOrEqual(input.width, 120, "Long group names must leave room for the task field")
+                            let ranges = [CGFloat(16)..<(input.minX - 8), input.minX..<input.maxX, (width - 34)..<(width - 13)]
                             var centers: [CGFloat] = []
                             for (index, range) in ranges.enumerated() {
                                 var first = image.pixelsHigh, last = -1

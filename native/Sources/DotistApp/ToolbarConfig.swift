@@ -1,9 +1,7 @@
 import Foundation
 
 enum ToolbarItem: String, CaseIterable, Codable {
-    case filters, filter, completion, calendar, views, pin, lock, color, collapse
-
-    var isStandalone: Bool { self != .completion && self != .calendar }
+    case filter, completion, calendar, views, pin, lock, color, collapse
 }
 
 enum ToolbarVisibility: String, Codable, CaseIterable {
@@ -57,9 +55,9 @@ final class ToolbarConfig: ObservableObject {
     @Published private(set) var order: [ToolbarItem]
     @Published private(set) var visibility: [ToolbarItem: ToolbarVisibility]
 
-    static let defaultOrder: [ToolbarItem] = [.filters, .filter, .completion, .calendar, .views, .pin, .lock, .color, .collapse]
+    static let defaultOrder: [ToolbarItem] = [.filter, .completion, .calendar, .views, .pin, .lock, .color, .collapse]
     static let defaultVisibility: [ToolbarItem: ToolbarVisibility] =
-        [.filters: .hover, .filter: .hover, .completion: .hover, .calendar: .hover, .views: .hover, .pin: .hover, .lock: .hover, .color: .hover, .collapse: .always]
+        [.filter: .hover, .completion: .hover, .calendar: .hover, .views: .hover, .pin: .hover, .lock: .hover, .color: .hover, .collapse: .always]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -73,10 +71,6 @@ final class ToolbarConfig: ObservableObject {
             order = Self.defaultOrder
             visibility = Self.defaultVisibility
         }
-        let policies = [visibility[.filter], visibility[.calendar]]
-        let datePolicy: ToolbarVisibility = policies.contains(.always) ? .always : policies.contains(.hover) ? .hover : .hidden
-        visibility[.filter] = datePolicy
-        visibility[.calendar] = datePolicy
         visibility[.collapse] = .always
     }
 
@@ -91,7 +85,6 @@ final class ToolbarConfig: ObservableObject {
     func setVisibility(_ value: ToolbarVisibility, for item: ToolbarItem) {
         guard item != .collapse else { return }
         visibility[item] = value
-        if item == .filter || item == .calendar { visibility[.filter] = value; visibility[.calendar] = value }
         save()
     }
     /// Moves `item` to the slot currently held by `target` (⌘-drag reorder).

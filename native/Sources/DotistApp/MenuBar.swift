@@ -24,10 +24,8 @@ final class MenuBarController: NSObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _, _, _ in self?.refresh() }
             .store(in: &subscriptions)
-        for name in [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
-            NotificationCenter.default.publisher(for: name).receive(on: DispatchQueue.main)
-                .sink { [weak self] _ in self?.refresh() }.store(in: &subscriptions)
-        }
+        AppModel.civilDateChanges().receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refresh() }.store(in: &subscriptions)
     }
     deinit { rotateTimer?.invalidate() }
 
@@ -47,7 +45,7 @@ final class MenuBarController: NSObject {
         let countMode = model.settings.trayMode == "count"
         let group = selectedGroup()
         let count = countMode ? MenuBarImage.todayCount(tasks: model.tasks, groupID: group == "all" ? nil : group, now: now()) : nil
-        let description = count.map { model.text("今天还有 {n} 件未完成任务").replacingOccurrences(of: "{n}", with: "\($0)") } ?? "Dotist"
+        let description = count.map(model.todayCountLabel) ?? "Dotist"
         item?.button?.image = MenuBarImage.make(count: count, accessibilityDescription: description)
         item?.button?.imagePosition = .imageLeading
         item?.button?.toolTip = description
@@ -129,17 +127,19 @@ final class MenuBarController: NSObject {
         let prefs = model.settings
         guard ["next", "next_date", "rotate"].contains(prefs.trayMode) else { return [] }
         let selectedGroup = selectedGroup()
-        let today = Date().dotistDay
+        let date = now()
+        let today = date.dotistDay
         let calendar = Calendar.current
-        let start = calendar.startOfDay(for: Date())
+        let start = calendar.startOfDay(for: date)
         let weekday = calendar.component(.weekday, from: start)
         let monday = calendar.date(byAdding: .day, value: -((weekday + 5) % 7), to: start)!
-        let values = model.tasks.filter { task in
+        let values = prefs.trayFilter == "today"
+            ? model.todayTaskSections(groupID: selectedGroup == "all" ? nil : selectedGroup, now: date).openMatches
+            : model.tasks.filter { task in
             guard selectedGroup == "all" || selectedGroup == task.category else { return false }
             let due = task.dueDate
             switch prefs.trayFilter {
             case "all": return !task.completed && task.parentId == nil
-            case "today": return !task.completed && due.map { $0 <= today } == true
             case "overdue": return !task.completed && due.map { $0 < today } == true
             case "undated": return !task.completed && due == nil && task.parentId == nil
             case "done": return task.completed
@@ -184,8 +184,7 @@ enum MenuBarImage {
     }
 
     static func todayCount(tasks: [DotistTask], groupID: String?, now: Date = Date(), calendar: Calendar = .current) -> Int {
-        let sections = TaskFiltering(tasks, now: now, calendar: calendar).todaySections(groupID: groupID)
-        return sections.overdue.matches.count + sections.today.matches.count
+        TaskFiltering(tasks, now: now, calendar: calendar).todaySections(groupID: groupID).openCount
     }
 
     static func make(count: Int?, accessibilityDescription: String) -> NSImage {

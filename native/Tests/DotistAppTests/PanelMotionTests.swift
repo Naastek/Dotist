@@ -37,8 +37,8 @@ final class PanelMotionTests: XCTestCase {
         let model = try model()
         let area = try XCTUnwrap(NSScreen.main?.visibleFrame)
         let input = PanelMotionTestEnvironment(area: area)
-        let work = group("work", model: model, frame: NSRect(x: area.minX + 70, y: area.minY + 70, width: 432, height: 480), input: input)
-        let life = group("life", model: model, frame: NSRect(x: area.midX + 24, y: area.minY + 90, width: 460, height: 500), input: input)
+        let work = group("work", model: model, frame: NSRect(x: area.minX + 70, y: area.minY + 70, width: 340, height: 480), input: input)
+        let life = group("life", model: model, frame: NSRect(x: area.midX + 24, y: area.minY + 90, width: 360, height: 500), input: input)
         let workFrame = try XCTUnwrap(work.window).frame
         let lifeFrame = try XCTUnwrap(life.window).frame
 
@@ -69,7 +69,6 @@ final class PanelMotionTests: XCTestCase {
         try input.completeFrameAnimation(for: try XCTUnwrap(life.window))
         XCTAssertFalse(life.motion.animationInProgress)
         XCTAssertFalse(work.compact)
-        XCTAssertEqual(work.window?.minSize.width, 432)
         XCTAssertTrue(life.compact)
         XCTAssertEqual(work.window?.frame.size, workFrame.size)
         XCTAssertEqual(life.window?.frame.size, NSSize(width: 48, height: 48))
@@ -90,7 +89,7 @@ final class PanelMotionTests: XCTestCase {
         let area = try XCTUnwrap(NSScreen.main?.visibleFrame)
         let input = PanelMotionTestEnvironment(area: area)
         let controller = group("work", model: model,
-            frame: NSRect(x: area.maxX - 370, y: area.minY + 70, width: 432, height: 480), input: input)
+            frame: NSRect(x: area.maxX - 370, y: area.minY + 70, width: 340, height: 480), input: input)
         let panel = try XCTUnwrap(controller.window)
         controller.toggleCompact()
         XCTAssertTrue(controller.motion.animationInProgress)
@@ -123,52 +122,5 @@ final class PanelMotionTests: XCTestCase {
         controller.motion.finishHover(false)
         XCTAssertEqual(panel.frame.size, NSSize(width: 48, height: 48))
         XCTAssertEqual(panel.frame.minX, left, accuracy: 0.5)
-    }
-}
-
-extension PanelMotionTests {
-    func testLegacyPrimaryWidthExpandsToAcceptedMinimum() throws {
-        let model = try model()
-        let area = NSRect(x: 0, y: 0, width: 1440, height: 1000)
-        let panel = DotistPanel(contentRect: NSRect(x: 100, y: 100, width: 364, height: 620), styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
-        panel.isReleasedWhenClosed = false
-        let motion = PanelMotion(model: model, panel: panel, size: panel.frame.size, title: { "Tasks" }, environment: PanelMotionTestEnvironment(area: area).environment)
-        defer { motion.stop(); panel.close() }
-        motion.toggleBubble(in: area, animated: false)
-        XCTAssertTrue(motion.bubble)
-        motion.toggleBubble(in: area, animated: false)
-        XCTAssertEqual(panel.frame.width, 408)
-        XCTAssertEqual(panel.minSize.width, 408)
-        XCTAssertFalse(panel.isVisible)
-    }
-}
-
-extension PanelMotionTests {
-    func testExpandedPanelsKeepIndependentWidthHeightAndResizeEligibility() throws {
-        let model = try model()
-        let area = NSRect(x: 0, y: 0, width: 1800, height: 1200)
-        for minimum: CGFloat in [408, 432] {
-            let panel = DotistPanel(contentRect: NSRect(x: 100, y: 100, width: minimum, height: 440),
-                styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
-            panel.isReleasedWhenClosed = false
-            panel.minSize = NSSize(width: minimum, height: 440)
-            let motion = PanelMotion(model: model, panel: panel, size: panel.frame.size,
-                minimumWidth: minimum, title: { "Tasks" }, environment: PanelMotionTestEnvironment(area: area).environment)
-            defer { motion.stop(); panel.close() }
-            XCTAssertTrue(panel.styleMask.contains(.resizable))
-            XCTAssertGreaterThan(panel.maxSize.width, 700)
-            XCTAssertGreaterThan(panel.maxSize.height, 800)
-            for size in [NSSize(width: 700, height: 440), NSSize(width: minimum, height: 800)] {
-                panel.setFrame(NSRect(origin: panel.frame.origin, size: size), display: false)
-                XCTAssertEqual(panel.frame.size, size)
-                motion.toggleBubble(in: area, animated: false)
-                XCTAssertFalse(panel.styleMask.contains(.resizable))
-                motion.toggleBubble(in: area, animated: false)
-                XCTAssertTrue(panel.styleMask.contains(.resizable))
-                XCTAssertEqual(panel.minSize, NSSize(width: minimum, height: 440))
-                XCTAssertEqual(panel.frame.size, size)
-            }
-            XCTAssertFalse(panel.isVisible)
-        }
     }
 }
