@@ -82,6 +82,9 @@ private struct TaskContentTransitionOverlay: NSViewRepresentable {
 /// Only a viewport-sized bitmap is retained, and it is released at completion.
 final class TaskContentTransitionView: NSView {
     static let duration: TimeInterval = 0.18
+    #if DEBUG
+    static var installTimer: ((Timer) -> Void)?
+    #endif
     private weak var state: TaskPanelState?
     private var subscriptions: Set<AnyCancellable> = []
     private var selection: TaskContentSelection?
@@ -189,6 +192,9 @@ final class TaskContentTransitionView: NSView {
             }
         }
         timer = clock
+        #if DEBUG
+        if let installTimer = Self.installTimer { installTimer(clock); return }
+        #endif
         RunLoop.main.add(clock, forMode: .common)
     }
 

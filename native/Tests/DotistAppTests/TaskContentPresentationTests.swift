@@ -4,6 +4,39 @@ import SwiftUI
 import XCTest
 @testable import DotistApp
 
+/// Wait for the production transition to install its timer before moving time.
+/// Fire the same callback the run loop uses, independently of host scheduling.
+@MainActor
+private final class TaskContentTestClock {
+    private let time: LayoutMotionTestClock
+    private let savedInstaller = TaskContentTransitionView.installTimer
+    private var timer: Timer?
+    var hasActiveTimer: Bool { timer?.isValid == true }
+
+    init(reduceMotion: Bool = false) {
+        time = LayoutMotionTestClock(reduceMotion: reduceMotion)
+        TaskContentTransitionView.installTimer = { [weak self] timer in self?.timer = timer }
+    }
+
+    func advance(by interval: TimeInterval) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 2
+        while !hasActiveTimer && ProcessInfo.processInfo.systemUptime < deadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        let active = try XCTUnwrap(hasActiveTimer ? timer : nil, "The task content transition did not start")
+        time.advanceTime(by: interval)
+        active.fire()
+    }
+
+    func elapseWithoutAnimation(by interval: TimeInterval) { time.advanceTime(by: interval) }
+
+    func restore() {
+        timer?.invalidate()
+        TaskContentTransitionView.installTimer = savedInstaller
+        time.restore()
+    }
+}
+
 @MainActor
 final class TaskContentPresentationTests: XCTestCase {
     private struct Swatch: View {
@@ -31,7 +64,7 @@ final class TaskContentPresentationTests: XCTestCase {
         // SwiftUI's public getter is read-only. Its backing environment key lets
         // this fixture exercise either value without changing desktop settings.
         for reduced in [false, true] {
-            let clock = LayoutMotionTestClock(reduceMotion: reduced)
+            let clock = TaskContentTestClock(reduceMotion: reduced)
             defer { clock.restore() }
             for environment in [false, true] {
                 let state = TaskPanelState(scope: "all")
@@ -43,17 +76,19 @@ final class TaskContentPresentationTests: XCTestCase {
                 state.scope = "today"
                 _ = try await fixture.capture(scale: 2)
                 XCTAssertEqual(surface.outgoingOpacity, reduced ? 0 : 1)
-                try await clock.advance(by: 0.06)
-                let image = try await fixture.capture(scale: 2)
-                if reduced { XCTAssertEqual(surface.outgoingOpacity, 0) }
-                else {
+                if reduced {
+                    XCTAssertFalse(clock.hasActiveTimer)
+                    XCTAssertEqual(surface.outgoingOpacity, 0)
+                } else {
+                    try await clock.advance(by: 0.06)
+                    let image = try await fixture.capture(scale: 2)
                     XCTAssertGreaterThan(surface.outgoingOpacity, 0.5)
                     XCTAssertLessThan(surface.outgoingOpacity, 1)
                     let pixel = try XCTUnwrap(image.colorAt(x: 120, y: 100)?.usingColorSpace(.deviceRGB))
                     XCTAssertGreaterThan(pixel.redComponent, 0.1, "Outgoing pixels remain visible")
                     XCTAssertGreaterThan(pixel.blueComponent, 0.05, "Incoming pixels are visible too")
+                    try await clock.advance(by: 0.2)
                 }
-                try await clock.advance(by: 0.2)
                 _ = try await fixture.capture(scale: 2)
                 XCTAssertEqual(surface.outgoingOpacity, 0)
             }
@@ -99,7 +134,7 @@ final class TaskContentPresentationTests: XCTestCase {
     }
 
     func testOutgoingPixelsCrossfadeWithIncomingAndRapidChangeRetargetsComposite() async throws {
-        let clock = LayoutMotionTestClock()
+        let clock = TaskContentTestClock()
         defer { clock.restore() }
         let state = TaskPanelState(scope: "all")
         let fixture = NativeRenderingFixture(Swatch(state: state), size: CGSize(width: 240, height: 160))
@@ -150,7 +185,7 @@ final class TaskContentPresentationTests: XCTestCase {
     }
 
     func testTransparentViewportFadesIncomingInkInsteadOfShowingItImmediately() async throws {
-        let clock = LayoutMotionTestClock()
+        let clock = TaskContentTestClock()
         defer { clock.restore() }
         let state = TaskPanelState(scope: "all")
         let fixture = NativeRenderingFixture(TransparentInk(state: state), size: CGSize(width: 240, height: 160))
@@ -196,7 +231,7 @@ final class TaskContentPresentationTests: XCTestCase {
     }
 
     func testAllSwitchRendersAnIntermediateMainListAppearance() async throws {
-        let clock = LayoutMotionTestClock()
+        let clock = TaskContentTestClock()
         defer { clock.restore() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-content-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -226,7 +261,7 @@ final class TaskContentPresentationTests: XCTestCase {
     }
 
     func testEverySelectionDimensionUsesOneRenderedTransitionAtBothSizes() async throws {
-        let clock = LayoutMotionTestClock()
+        let clock = TaskContentTestClock()
         defer { clock.restore() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-content-matrix-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -330,7 +365,7 @@ final class TaskContentPresentationTests: XCTestCase {
     }
 
     func testReduceMotionAndDragDiscardOutgoingPixelsImmediately() async throws {
-        let clock = LayoutMotionTestClock()
+        let clock = TaskContentTestClock()
         defer { clock.restore() }
         let state = TaskPanelState(scope: "all")
         let controls = MotionControls()
@@ -358,7 +393,7 @@ final class TaskContentPresentationTests: XCTestCase {
     }
 
     func testFastModelDateAndPanelGroupSwitchesKeepLatestRowsScrollDraftAndSelection() async throws {
-        let clock = LayoutMotionTestClock()
+        let clock = TaskContentTestClock()
         defer { clock.restore() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-content-fast-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -375,10 +410,14 @@ final class TaskContentPresentationTests: XCTestCase {
         let state = TaskPanelState(groupID: "work", scope: "all", collapseStore: TaskGroupCollapseStore(defaults: defaults))
         let selection = TaskSelectionController()
         var rows: [TaskListRowFrame] = []
+        // The focused composer's native glass can clear the entire offscreen
+        // bitmap. Use its accessibility fallback to measure the task list.
         let fixture = NativeRenderingFixture(MainWindow(model: model, state: state, showViews: {}, showSearch: {},
             showSettings: {}, showGroupPanel: { _ in }, collapse: {}, toolbarConfig: ToolbarConfig(defaults: defaults), selection: selection)
             .onPreferenceChange(TaskListRowFrame.Key.self) { rows = $0 }
-            .environment(\.colorScheme, .light).background(Color.white), size: CGSize(width: 364, height: 440))
+            .environment(\.colorScheme, .light)
+            .environment(\._accessibilityReduceTransparency, true)
+            .background(Color.white), size: CGSize(width: 364, height: 440))
         defer { fixture.close() }
         _ = try await fixture.capture(scale: 2)
         let scroll = try XCTUnwrap(fixture.descendants(NSScrollView.self).first { $0.bounds.height > 100 })
@@ -404,8 +443,12 @@ final class TaskContentPresentationTests: XCTestCase {
         selection.update { $0.click(lifeIDs[0], order: lifeIDs, shift: false, command: true) }
         try await clock.advance(by: 0.04)
         let middle = region(try await fixture.capture(scale: 2), height: 440)
-        try await clock.advance(by: 0.13)
+        let surface = try XCTUnwrap(fixture.descendants(TaskContentTransitionView.self).first)
+        XCTAssertGreaterThan(surface.outgoingOpacity, 0)
+        XCTAssertLessThan(surface.outgoingOpacity, 1)
+        try await clock.advance(by: 0.15)
         let after = region(try await fixture.capture(scale: 2), height: 440)
+        XCTAssertEqual(surface.outgoingOpacity, 0)
         XCTAssertNotEqual(middle, after)
         XCTAssertEqual(Set(rows.map { $0.task.id }), Set(lifeIDs))
         XCTAssertTrue(rows.allSatisfy { abs($0.frame.height - 32) <= 0.5 })
@@ -419,7 +462,7 @@ final class TaskContentPresentationTests: XCTestCase {
     }
 
     func testReducedMotionHasNoIntermediateDateGroupOrEmptyAppearance() async throws {
-        let clock = LayoutMotionTestClock(reduceMotion: true)
+        let clock = TaskContentTestClock(reduceMotion: true)
         defer { clock.restore() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-content-reduced-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -439,7 +482,8 @@ final class TaskContentPresentationTests: XCTestCase {
         for change in [{ state.scope = "all" }, { state.groupID = "life" }, { state.activeTag = "missing" }] {
             change()
             let immediate = region(try await fixture.capture(scale: 2), height: 440)
-            try await clock.advance(by: 0.2)
+            XCTAssertFalse(clock.hasActiveTimer)
+            clock.elapseWithoutAnimation(by: 0.2)
             let later = region(try await fixture.capture(scale: 2), height: 440)
             XCTAssertEqual(immediate, later, "Reduce Motion must paint the final query immediately")
         }
