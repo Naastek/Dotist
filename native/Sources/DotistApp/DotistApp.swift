@@ -85,6 +85,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     private var panel: DotistPanel!
     private var sideTabs: SideTabsController?
     private var viewsWindow: NSWindow?
+    private var viewsShadow: ViewsWindowShadow?
     private var settingsWindow: NSWindow?
     private var quickWindow: QuickPanel?
     private var searchWindow: QuickPanel?
@@ -204,6 +205,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             self.panel.level = settings.alwaysOnTop ? .floating : .normal
             self.viewsWindow?.appearance = appearance
             self.viewsWindow?.level = settings.alwaysOnTop ? .floating : .normal
+            self.viewsShadow?.synchronize()
             self.settingsWindow?.appearance = appearance
             self.quickWindow?.appearance = appearance
             self.searchWindow?.appearance = appearance
@@ -305,8 +307,13 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     }
     func windowWillClose(_ notification: Notification) {
         if let window = notification.object as? NSWindow, window === viewsWindow {
+            viewsShadow?.detach()
             NSApp.setActivationPolicy(model.settings.showDock ? .regular : .accessory)
         }
+    }
+
+    func windowDidFailToEnterFullScreen(_ window: NSWindow) {
+        if window === viewsWindow { viewsShadow?.didFailToEnterFullScreen() }
     }
 
     func windowDidMove(_ notification: Notification) {
@@ -588,7 +595,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             window.titleVisibility = .hidden
             window.isOpaque = false
             window.backgroundColor = .clear
-            window.hasShadow = true
+            window.hasShadow = false
             window.isReleasedWhenClosed = false
             window.appearance = panel.appearance
             window.delegate = self
@@ -596,10 +603,12 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             window.minSize = NSSize(width: 680, height: 480)
             window.center()
             viewsWindow = window
+            viewsShadow = ViewsWindowShadow(parent: window)
         }
         NSApp.setActivationPolicy(.regular)
         viewsWindow?.level = panel.level
         viewsWindow?.makeKeyAndOrderFront(nil)
+        viewsShadow?.synchronize()
         viewsWindow?.makeFirstResponder(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
