@@ -321,7 +321,13 @@ final class FeedbackFourRegressionTests: XCTestCase {
             reversing = false
             try await clock.advance(by: 0.040)
             _ = try await fixture.capture(scale: captureScale)
-            XCTAssertLessThan(disclosureProgress, try XCTUnwrap(retargetFractions.min()))
+            let reversedFrom = try XCTUnwrap(retargetFractions.min())
+            let reversalDeadline = ProcessInfo.processInfo.systemUptime + 2
+            while disclosureProgress >= reversedFrom, ProcessInfo.processInfo.systemUptime < reversalDeadline {
+                try await Task.sleep(for: .milliseconds(10))
+                _ = try await fixture.capture(scale: captureScale)
+            }
+            XCTAssertLessThan(disclosureProgress, reversedFrom)
             func waitForEnd(_ target: CGFloat) async throws {
                 let deadline = ProcessInfo.processInfo.systemUptime + 2
                 repeat {
@@ -524,13 +530,19 @@ final class FeedbackFourRegressionTests: XCTestCase {
     }
 
     func testDisclosureReducedMotionSnapsAndNormalMotionRetargetsContinuously() async throws {
+        let clock = LayoutMotionTestClock()
+        defer { clock.restore() }
         let motion = DisclosureMotion(expanded: true)
         motion.setExpanded(false, reduceMotion: true)
         XCTAssertEqual(motion.fraction, 0)
         try await Task.sleep(for: .milliseconds(30))
         XCTAssertEqual(motion.fraction, 0)
         motion.setExpanded(true, reduceMotion: false)
-        try await Task.sleep(for: .milliseconds(55))
+        try await clock.advance(by: 0.055)
+        let tickDeadline = ProcessInfo.processInfo.systemUptime + 2
+        while motion.fraction == 0, ProcessInfo.processInfo.systemUptime < tickDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         let before = motion.fraction
         XCTAssertGreaterThan(before, 0); XCTAssertLessThan(before, 1)
         motion.setExpanded(false, reduceMotion: false)
