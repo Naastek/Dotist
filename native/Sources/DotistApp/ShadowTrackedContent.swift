@@ -26,6 +26,17 @@ final class ShadowInvalidationView: NSView {
     private var deadline = Date.distantPast
     private var closed = false
     private var observations: [NSObjectProtocol] = []
+    #if DEBUG
+    var testNow: (() -> Date)?
+    var installTestTimer: ((Timer) -> Void)?
+    #endif
+
+    private var now: Date {
+        #if DEBUG
+        if let testNow { return testNow() }
+        #endif
+        return Date()
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func viewDidMoveToWindow() {
@@ -57,7 +68,7 @@ final class ShadowInvalidationView: NSView {
         BenchPerf.count(.shadowRefresh)
         #endif
         window.invalidateShadow()
-        deadline = Date().addingTimeInterval(0.45)
+        deadline = now.addingTimeInterval(0.45)
         guard timer == nil, refreshDisplayLink == nil else { return }
         if window.isVisible, window.screen != nil {
             // Follow the display cadence (including ProMotion), rather than
@@ -75,6 +86,9 @@ final class ShadowInvalidationView: NSView {
             }
         }
         self.timer = timer
+        #if DEBUG
+        if let installTestTimer { installTestTimer(timer); return }
+        #endif
         RunLoop.main.add(timer, forMode: .common)
     }
 
@@ -83,7 +97,7 @@ final class ShadowInvalidationView: NSView {
         BenchPerf.count(.shadowTick)
         #endif
         window?.invalidateShadow()
-        if window == nil || Date() >= deadline {
+        if window == nil || now >= deadline {
             timer?.invalidate(); timer = nil
             refreshDisplayLink?.invalidate(); refreshDisplayLink = nil
         }

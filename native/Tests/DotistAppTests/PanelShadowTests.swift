@@ -426,31 +426,55 @@ final class PanelShadowTests: XCTestCase {
         XCTAssertFalse(panel.hasShadow)
     }
 
-    func testShadowRefreshContinuesAfterViewUpdatesAndStopsWhenRemoved() async throws {
+    func testShadowRefreshContinuesAfterViewUpdatesAndStopsWhenRemoved() throws {
         _ = NSApplication.shared
         let panel = ShadowCountingPanel(contentRect: NSRect(x: 0, y: 0, width: 280, height: 48), styleMask: [.borderless], backing: .buffered, defer: false)
         panel.hasShadow = true
         panel.isReleasedWhenClosed = false
         defer { panel.close() }
         let view = ShadowInvalidationView()
+        defer { view.stop() }
+        var now = Date()
+        var installedTimer: Timer?
+        view.testNow = { now }
+        view.installTestTimer = { installedTimer = $0 }
         panel.contentView = view
+        let timer = try XCTUnwrap(installedTimer)
+
+        now += 0.3
         view.refresh()
+        XCTAssertTrue(installedTimer === timer, "View updates must reuse the active refresh timer")
         let firstCount = panel.invalidations
-        try await Task.sleep(for: .milliseconds(100))
-        XCTAssertGreaterThan(panel.invalidations, firstCount + 1, "Invalidate after glass commits and on each reveal/tint animation tick")
-        try await Task.sleep(for: .milliseconds(450))
+        now += 0.2
+        timer.fire()
+        now += 1.0 / 60
+        timer.fire()
+        XCTAssertEqual(panel.invalidations, firstCount + 2, "Refreshes must continue on each tick after a view update")
+        XCTAssertTrue(timer.isValid, "A view update must extend the original deadline")
+
+        now += 0.45
+        timer.fire()
+        XCTAssertFalse(timer.isValid, "Static surfaces must not keep a refresh timer running")
         let settledCount = panel.invalidations
-        try await Task.sleep(for: .milliseconds(60))
-        XCTAssertEqual(panel.invalidations, settledCount, "Static surfaces must not keep a refresh timer running")
+        timer.fire()
+        XCTAssertEqual(panel.invalidations, settledCount)
+
         view.refresh()
+        let closingTimer = try XCTUnwrap(installedTimer)
+        XCTAssertTrue(closingTimer.isValid)
         panel.close()
+        XCTAssertFalse(closingTimer.isValid)
         let stoppedCount = panel.invalidations
         view.refresh()
-        try await Task.sleep(for: .milliseconds(60))
+        closingTimer.fire()
         XCTAssertEqual(panel.invalidations, stoppedCount)
+
         NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: panel)
         XCTAssertGreaterThan(panel.invalidations, stoppedCount, "Retained settings/search windows must resume refreshing when reopened")
-        view.stop()
+        let reopenedTimer = try XCTUnwrap(installedTimer)
+        XCTAssertTrue(reopenedTimer.isValid)
+        panel.contentView = nil
+        XCTAssertFalse(reopenedTimer.isValid, "Removing the view must stop refreshing")
     }
 }
 
