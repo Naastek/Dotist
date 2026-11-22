@@ -59,6 +59,7 @@ struct TransientGlassSurface: View {
 /// A thin directional reflection with a continuous compact rim and a confined
 /// inner light. Neither layer paints the interior or changes the window shadow.
 struct GlassEdge: View {
+    @Environment(\.appearsActive) private var appearsActive
     let cornerRadius: CGFloat
     let compact: Bool
     let scheme: ColorScheme
@@ -81,6 +82,17 @@ struct GlassEdge: View {
         }
     }
 
+    private struct InactiveRim {
+        let top: Double
+        let bottom: Double
+        let side: Double
+        let line: CGFloat
+        let innerTop: Double
+        let innerBottom: Double
+        let innerWidth: CGFloat
+        let blur: CGFloat
+    }
+
     private func profile(width: CGFloat) -> Profile {
         let dark = scheme == .dark
         let ball = Profile(highlight: dark ? 0.78 : 0.68, secondary: dark ? 0.18 : 0.12,
@@ -90,6 +102,28 @@ struct GlassEdge: View {
         if compact { return ball.interpolated(to: strip, fraction: min(1, max(0, (width - 48) / 192))) }
         return Profile(highlight: dark ? 0.58 : 0.48, secondary: dark ? 0.12 : 0.08,
             line: 0.8, innerLight: dark ? 0.14 : 0.11, innerWidth: 2.0, blur: 1.0)
+    }
+
+    /// WindowServer dims native Liquid Glass's top-and-bottom specular rim when
+    /// another app owns focus while leaving the vertical sides largely unchanged.
+    /// Restore that vertical-axis rim without brightening the interior or sides.
+    private func inactiveRim(width: CGFloat) -> InactiveRim {
+        let dark = scheme == .dark
+        if compact {
+            let wide = Double(min(1, max(0, (width - 48) / 192)))
+            let top = dark ? (0.22 - 0.06 * wide) : (0.86 + 0.10 * wide)
+            let bottom = dark ? 0.16 : 0.94
+            return InactiveRim(
+                top: top, bottom: bottom, side: dark ? 0.02 : 0.05, line: 1.0,
+                innerTop: dark ? 0.06 : 0.28, innerBottom: dark ? 0.05 : 0.32,
+                innerWidth: 2.2, blur: 1.1
+            )
+        }
+        return InactiveRim(
+            top: dark ? 0.34 : 0.94, bottom: dark ? 0.28 : 0.96, side: dark ? 0.02 : 0.04, line: 1.0,
+            innerTop: dark ? 0.09 : 0.30, innerBottom: dark ? 0.08 : 0.34,
+            innerWidth: 2.5, blur: 1.2
+        )
     }
 
     var body: some View {
@@ -109,6 +143,27 @@ struct GlassEdge: View {
                     .blur(radius: p.blur)
                     .clipShape(shape)
                 shape.strokeBorder(light, lineWidth: p.line)
+                if !appearsActive {
+                    let rim = inactiveRim(width: geometry.size.width)
+                    let falloff = min(0.32, max(cornerRadius * 1.4, 14) / max(1, geometry.size.height))
+                    let verticalRim = LinearGradient(stops: [
+                        .init(color: .white.opacity(rim.top), location: 0),
+                        .init(color: .white.opacity(rim.side), location: falloff),
+                        .init(color: .white.opacity(rim.side * 0.5), location: 0.5),
+                        .init(color: .white.opacity(rim.side), location: 1 - falloff),
+                        .init(color: .white.opacity(rim.bottom), location: 1)
+                    ], startPoint: .top, endPoint: .bottom)
+                    let verticalInner = LinearGradient(stops: [
+                        .init(color: .white.opacity(rim.innerTop), location: 0),
+                        .init(color: .white.opacity(0), location: falloff),
+                        .init(color: .white.opacity(0), location: 1 - falloff),
+                        .init(color: .white.opacity(rim.innerBottom), location: 1)
+                    ], startPoint: .top, endPoint: .bottom)
+                    shape.inset(by: 1).strokeBorder(verticalInner, lineWidth: rim.innerWidth)
+                        .blur(radius: rim.blur)
+                        .clipShape(shape)
+                    shape.strokeBorder(verticalRim, lineWidth: rim.line)
+                }
             }
         }
         .allowsHitTesting(false)
