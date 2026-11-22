@@ -13,6 +13,10 @@ enum GlassTintMaterial {
     static let tabUnselectedTint = 0.06
     static let tabSelectedTint = 0.30
     static let tabHighContrastSelectedTint = 0.42
+    /// Outward bleed used to clip WindowServer's focus-dependent native glass
+    /// specular rim outside the control silhouette while preserving the live
+    /// optical interior refraction and blur.
+    static let nativeRimBleed: CGFloat = 8
 }
 
 /// One native optical surface for small floating controls and lifted content.
@@ -40,9 +44,16 @@ struct TransientGlassSurface: View {
             // Preserve the previous compact surface. The local environment
             // override does not prevent WindowServer's non-key graying.
             let tint = color == .none ? nil : DotistTheme.tint(color, scheme).opacity(compact ? GlassTintMaterial.compactTintScale : 1)
+            let bleed: CGFloat = compact ? GlassTintMaterial.nativeRimBleed : 0
+            let glassShape = RoundedRectangle(cornerRadius: cornerRadius + bleed, style: .continuous)
             Color.clear
-                .glassEffect(Glass.regular.tint(tint)
-                    .interactive(compact ? false : interactive), in: shape)
+                .background {
+                    Color.clear
+                        .glassEffect(Glass.regular.tint(tint)
+                            .interactive(compact ? false : interactive), in: glassShape)
+                        .padding(-bleed)
+                }
+                .mask(shape)
                 .environment(\.appearsActive, compact || appearsActive)
                 .overlay {
                     if compact && scheme == .dark {
@@ -56,10 +67,12 @@ struct TransientGlassSurface: View {
     }
 }
 
-/// A thin directional reflection with a continuous compact rim and a confined
-/// inner light. Neither layer paints the interior or changes the window shadow.
+/// A unified, focus-independent reflection layer shared by the floating button,
+/// hover strip, and expanded task card. Because the underlying native glass has
+/// its focus-dependent outer rim clipped via `GlassTintMaterial.nativeRimBleed`,
+/// this single layer renders identically whether focused or unfocused without
+/// double-stacking highlights, painting the interior, or altering window shadows.
 struct GlassEdge: View {
-    @Environment(\.appearsActive) private var appearsActive
     let cornerRadius: CGFloat
     let compact: Bool
     let scheme: ColorScheme
@@ -71,58 +84,63 @@ struct GlassEdge: View {
         let innerLight: Double
         let innerWidth: CGFloat
         let blur: CGFloat
+        let rimTop: Double
+        let rimBottom: Double
+        let rimSide: Double
+        let rimLine: CGFloat
+        let rimInnerTop: Double
+        let rimInnerBottom: Double
+        let rimInnerWidth: CGFloat
+        let rimBlur: CGFloat
 
         func interpolated(to other: Profile, fraction: CGFloat) -> Profile {
             let t = Double(fraction)
             func mix(_ a: Double, _ b: Double) -> Double { a + (b - a) * t }
-            return Profile(highlight: mix(highlight, other.highlight), secondary: mix(secondary, other.secondary),
-                line: CGFloat(mix(Double(line), Double(other.line))), innerLight: mix(innerLight, other.innerLight),
+            return Profile(
+                highlight: mix(highlight, other.highlight),
+                secondary: mix(secondary, other.secondary),
+                line: CGFloat(mix(Double(line), Double(other.line))),
+                innerLight: mix(innerLight, other.innerLight),
                 innerWidth: CGFloat(mix(Double(innerWidth), Double(other.innerWidth))),
-                blur: CGFloat(mix(Double(blur), Double(other.blur))))
+                blur: CGFloat(mix(Double(blur), Double(other.blur))),
+                rimTop: mix(rimTop, other.rimTop),
+                rimBottom: mix(rimBottom, other.rimBottom),
+                rimSide: mix(rimSide, other.rimSide),
+                rimLine: CGFloat(mix(Double(rimLine), Double(other.rimLine))),
+                rimInnerTop: mix(rimInnerTop, other.rimInnerTop),
+                rimInnerBottom: mix(rimInnerBottom, other.rimInnerBottom),
+                rimInnerWidth: CGFloat(mix(Double(rimInnerWidth), Double(other.rimInnerWidth))),
+                rimBlur: CGFloat(mix(Double(rimBlur), Double(other.rimBlur)))
+            )
         }
-    }
-
-    private struct InactiveRim {
-        let top: Double
-        let bottom: Double
-        let side: Double
-        let line: CGFloat
-        let innerTop: Double
-        let innerBottom: Double
-        let innerWidth: CGFloat
-        let blur: CGFloat
     }
 
     private func profile(width: CGFloat) -> Profile {
         let dark = scheme == .dark
-        let ball = Profile(highlight: dark ? 0.78 : 0.68, secondary: dark ? 0.18 : 0.12,
-            line: 1.0, innerLight: dark ? 0.22 : 0.18, innerWidth: 3.0, blur: 1.2)
-        let strip = Profile(highlight: dark ? 0.72 : 0.62, secondary: dark ? 0.16 : 0.10,
-            line: 0.9, innerLight: dark ? 0.19 : 0.15, innerWidth: 2.5, blur: 1.0)
+        let ball = Profile(
+            highlight: dark ? 0.78 : 0.72, secondary: dark ? 0.18 : 0.12,
+            line: 1.0, innerLight: dark ? 0.22 : 0.22, innerWidth: 3.0, blur: 1.2,
+            rimTop: dark ? 0.22 : 0.88, rimBottom: dark ? 0.16 : 0.62,
+            rimSide: dark ? 0.02 : 0.05, rimLine: 1.0,
+            rimInnerTop: dark ? 0.06 : 0.26, rimInnerBottom: dark ? 0.05 : 0.12,
+            rimInnerWidth: 2.2, rimBlur: 1.1
+        )
+        let strip = Profile(
+            highlight: dark ? 0.72 : 0.66, secondary: dark ? 0.16 : 0.10,
+            line: 0.9, innerLight: dark ? 0.19 : 0.18, innerWidth: 2.5, blur: 1.0,
+            rimTop: dark ? 0.16 : 0.92, rimBottom: dark ? 0.16 : 0.64,
+            rimSide: dark ? 0.02 : 0.05, rimLine: 1.0,
+            rimInnerTop: dark ? 0.06 : 0.28, rimInnerBottom: dark ? 0.05 : 0.12,
+            rimInnerWidth: 2.2, rimBlur: 1.1
+        )
         if compact { return ball.interpolated(to: strip, fraction: min(1, max(0, (width - 48) / 192))) }
-        return Profile(highlight: dark ? 0.58 : 0.48, secondary: dark ? 0.12 : 0.08,
-            line: 0.8, innerLight: dark ? 0.14 : 0.11, innerWidth: 2.0, blur: 1.0)
-    }
-
-    /// WindowServer dims native Liquid Glass's top-and-bottom specular rim when
-    /// another app owns focus while leaving the vertical sides largely unchanged.
-    /// Restore that vertical-axis rim without brightening the interior or sides.
-    private func inactiveRim(width: CGFloat) -> InactiveRim {
-        let dark = scheme == .dark
-        if compact {
-            let wide = Double(min(1, max(0, (width - 48) / 192)))
-            let top = dark ? (0.22 - 0.06 * wide) : (0.86 + 0.10 * wide)
-            let bottom = dark ? 0.16 : 0.94
-            return InactiveRim(
-                top: top, bottom: bottom, side: dark ? 0.02 : 0.05, line: 1.0,
-                innerTop: dark ? 0.06 : 0.28, innerBottom: dark ? 0.05 : 0.32,
-                innerWidth: 2.2, blur: 1.1
-            )
-        }
-        return InactiveRim(
-            top: dark ? 0.34 : 0.94, bottom: dark ? 0.28 : 0.96, side: dark ? 0.02 : 0.04, line: 1.0,
-            innerTop: dark ? 0.09 : 0.30, innerBottom: dark ? 0.08 : 0.34,
-            innerWidth: 2.5, blur: 1.2
+        return Profile(
+            highlight: dark ? 0.58 : 0.48, secondary: dark ? 0.12 : 0.08,
+            line: 0.8, innerLight: dark ? 0.14 : 0.11, innerWidth: 2.0, blur: 1.0,
+            rimTop: dark ? 0.34 : 0.94, rimBottom: dark ? 0.28 : 0.90,
+            rimSide: dark ? 0.02 : 0.04, rimLine: 1.0,
+            rimInnerTop: dark ? 0.09 : 0.30, rimInnerBottom: dark ? 0.08 : 0.26,
+            rimInnerWidth: 2.5, rimBlur: 1.2
         )
     }
 
@@ -136,34 +154,33 @@ struct GlassEdge: View {
                 .init(color: .white.opacity(compact ? p.secondary : 0.015), location: 0.55),
                 .init(color: .white.opacity(p.secondary), location: 1)
             ], startPoint: .topLeading, endPoint: .bottomTrailing)
-            let innerLight = LinearGradient(stops: [.init(color: .white.opacity(p.innerLight), location: 0),
-                .init(color: .clear, location: 0.5)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            let innerLight = LinearGradient(stops: [
+                .init(color: .white.opacity(p.innerLight), location: 0),
+                .init(color: .clear, location: 0.5)
+            ], startPoint: .topLeading, endPoint: .bottomTrailing)
+            let falloff = min(0.32, max(cornerRadius * 1.4, 14) / max(1, geometry.size.height))
+            let verticalRim = LinearGradient(stops: [
+                .init(color: .white.opacity(p.rimTop), location: 0),
+                .init(color: .white.opacity(p.rimSide), location: falloff),
+                .init(color: .white.opacity(p.rimSide * 0.5), location: 0.5),
+                .init(color: .white.opacity(p.rimSide), location: 1 - falloff),
+                .init(color: .white.opacity(p.rimBottom), location: 1)
+            ], startPoint: .top, endPoint: .bottom)
+            let verticalInner = LinearGradient(stops: [
+                .init(color: .white.opacity(p.rimInnerTop), location: 0),
+                .init(color: .white.opacity(0), location: falloff),
+                .init(color: .white.opacity(0), location: 1 - falloff),
+                .init(color: .white.opacity(p.rimInnerBottom), location: 1)
+            ], startPoint: .top, endPoint: .bottom)
             ZStack {
                 shape.inset(by: 1).strokeBorder(innerLight, lineWidth: p.innerWidth)
                     .blur(radius: p.blur)
                     .clipShape(shape)
                 shape.strokeBorder(light, lineWidth: p.line)
-                if !appearsActive {
-                    let rim = inactiveRim(width: geometry.size.width)
-                    let falloff = min(0.32, max(cornerRadius * 1.4, 14) / max(1, geometry.size.height))
-                    let verticalRim = LinearGradient(stops: [
-                        .init(color: .white.opacity(rim.top), location: 0),
-                        .init(color: .white.opacity(rim.side), location: falloff),
-                        .init(color: .white.opacity(rim.side * 0.5), location: 0.5),
-                        .init(color: .white.opacity(rim.side), location: 1 - falloff),
-                        .init(color: .white.opacity(rim.bottom), location: 1)
-                    ], startPoint: .top, endPoint: .bottom)
-                    let verticalInner = LinearGradient(stops: [
-                        .init(color: .white.opacity(rim.innerTop), location: 0),
-                        .init(color: .white.opacity(0), location: falloff),
-                        .init(color: .white.opacity(0), location: 1 - falloff),
-                        .init(color: .white.opacity(rim.innerBottom), location: 1)
-                    ], startPoint: .top, endPoint: .bottom)
-                    shape.inset(by: 1).strokeBorder(verticalInner, lineWidth: rim.innerWidth)
-                        .blur(radius: rim.blur)
-                        .clipShape(shape)
-                    shape.strokeBorder(verticalRim, lineWidth: rim.line)
-                }
+                shape.inset(by: 1).strokeBorder(verticalInner, lineWidth: p.rimInnerWidth)
+                    .blur(radius: p.rimBlur)
+                    .clipShape(shape)
+                shape.strokeBorder(verticalRim, lineWidth: p.rimLine)
             }
         }
         .allowsHitTesting(false)

@@ -47,9 +47,10 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
         return peak
     }
 
-    /// Inactive GlassEdge must restore both top and bottom specular rims for all
-    /// three floating forms while keeping the interior clear and pigment pure white.
-    func testInactiveRimRestoresTopAndBottomEdgesWithoutPaintingInterior() throws {
+    /// Unified GlassEdge must render identically regardless of focus state while
+    /// preserving visible top and bottom specular rims, quiet vertical sides,
+    /// pure white pigment, and a completely clear interior across all three forms.
+    func testUnifiedGlassEdgeIsFocusInvariantWithTopAndBottomRims() throws {
         for scheme in [ColorScheme.light, .dark] {
             for form in forms {
                 let active = try fixedBitmap(
@@ -64,31 +65,39 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
                         .environment(\.appearsActive, false),
                     size: form.size
                 )
-                let w = inactive.pixelsWide, h = inactive.pixelsHigh
-                let centerAlpha = try alpha(inactive, x: w / 2, y: h / 2)
-                XCTAssertLessThan(centerAlpha, 0.01, "Inactive \(scheme) \(form.id) must not paint interior")
+                let w = active.pixelsWide, h = active.pixelsHigh
+                let centerAlpha = try alpha(active, x: w / 2, y: h / 2)
+                XCTAssertLessThan(centerAlpha, 0.01, "Unified \(scheme) \(form.id) must not paint interior")
 
                 let activeTop = try bandPeakAlpha(active, xs: (w / 2 - 4)...(w / 2 + 4), ys: 0...5)
                 let inactiveTop = try bandPeakAlpha(inactive, xs: (w / 2 - 4)...(w / 2 + 4), ys: 0...5)
                 let activeBottom = try bandPeakAlpha(active, xs: (w / 2 - 4)...(w / 2 + 4), ys: (h - 6)...(h - 1))
                 let inactiveBottom = try bandPeakAlpha(inactive, xs: (w / 2 - 4)...(w / 2 + 4), ys: (h - 6)...(h - 1))
+                let activeRight = try bandPeakAlpha(active, xs: (w - 6)...(w - 1), ys: (h / 2 - 4)...(h / 2 + 4))
                 let inactiveRight = try bandPeakAlpha(inactive, xs: (w - 6)...(w - 1), ys: (h / 2 - 4)...(h / 2 + 4))
 
-                let minTopGain: CGFloat = scheme == .dark ? 0.08 : 0.15
-                let minBottomGain: CGFloat = scheme == .dark ? 0.10 : 0.35
-                XCTAssertGreaterThan(inactiveTop, activeTop + minTopGain, "Inactive \(scheme) \(form.id) top rim must strengthen")
-                XCTAssertGreaterThan(inactiveBottom, activeBottom + minBottomGain, "Inactive \(scheme) \(form.id) bottom rim must strengthen")
-                XCTAssertGreaterThan(inactiveBottom, inactiveRight * 1.4, "Inactive \(scheme) \(form.id) bottom rim must lead quiet vertical side")
+                XCTAssertEqual(activeTop, inactiveTop, accuracy: 0.005, "\(scheme) \(form.id) top rim must be identical across focus states")
+                XCTAssertEqual(activeBottom, inactiveBottom, accuracy: 0.005, "\(scheme) \(form.id) bottom rim must be identical across focus states")
+                XCTAssertEqual(activeRight, inactiveRight, accuracy: 0.005, "\(scheme) \(form.id) side rim must be identical across focus states")
+
+                let minTop: CGFloat = scheme == .dark ? 0.30 : 0.70
+                let minBottom: CGFloat = scheme == .dark ? 0.20 : 0.50
+                XCTAssertGreaterThan(activeTop, minTop, "Unified \(scheme) \(form.id) top rim must remain visible")
+                XCTAssertGreaterThan(activeBottom, minBottom, "Unified \(scheme) \(form.id) bottom rim must remain visible")
+                XCTAssertGreaterThan(activeBottom, activeRight * 1.4, "Unified \(scheme) \(form.id) bottom rim must lead quiet vertical side")
 
                 var checked = 0
                 for y in stride(from: 0, to: h, by: 2) {
                     for x in stride(from: 0, to: w, by: 2) {
-                        let c = try XCTUnwrap(inactive.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
-                        guard c.alphaComponent >= 0.15 else { continue }
+                        let a = try XCTUnwrap(active.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                        let b = try XCTUnwrap(inactive.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                        XCTAssertEqual(a.alphaComponent, b.alphaComponent, accuracy: 0.005,
+                            "Unified \(scheme) \(form.id) must not differ by focus at (\(x), \(y))")
+                        guard a.alphaComponent >= 0.15 else { continue }
                         checked += 1
-                        XCTAssertGreaterThan(c.redComponent, 0.95)
-                        XCTAssertGreaterThan(c.greenComponent, 0.95)
-                        XCTAssertGreaterThan(c.blueComponent, 0.95)
+                        XCTAssertGreaterThan(a.redComponent, 0.95)
+                        XCTAssertGreaterThan(a.greenComponent, 0.95)
+                        XCTAssertGreaterThan(a.blueComponent, 0.95)
                     }
                 }
                 XCTAssertGreaterThan(checked, 0)
@@ -180,9 +189,21 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
             patch.alwaysOnTop = true
             model.updateSettings(patch)
 
+            let usePatternBackdrop = ProcessInfo.processInfo.environment["DOTIST_GLASS_BACKDROP"] == "pattern"
             let backdropView = ZStack {
                 (scheme == .dark ? Color(red: 0.14, green: 0.16, blue: 0.20) : Color(red: 0.24, green: 0.27, blue: 0.33))
-            }.frame(width: backdropSize.width, height: backdropSize.height)
+                if usePatternBackdrop {
+                    HStack(spacing: 18) {
+                        ForEach(0..<16, id: \.self) { index in
+                            Rectangle()
+                                .fill(index.isMultiple(of: 2) ? Color.orange.opacity(0.75) : Color.cyan.opacity(0.70))
+                                .frame(width: 14)
+                        }
+                    }
+                    .frame(width: backdropSize.width * 1.6, height: backdropSize.height * 1.6)
+                    .rotationEffect(.degrees(18))
+                }
+            }.frame(width: backdropSize.width, height: backdropSize.height).clipped()
             let backdropHost = NSHostingView(rootView: backdropView)
             backdropHost.sizingOptions = []
             backdropHost.frame = NSRect(origin: .zero, size: backdropSize)

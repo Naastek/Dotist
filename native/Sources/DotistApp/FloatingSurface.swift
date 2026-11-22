@@ -110,21 +110,26 @@ struct FloatingPanelSurface: View {
                 // while the optical band and reflection keep their strength.
                 let radius = DotistDesign.windowCornerRadius - ExpandedReadingMaterial.opticalClearance
                 let opticalShape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+                let bleed = GlassTintMaterial.nativeRimBleed
+                let glassShape = RoundedRectangle(cornerRadius: radius + bleed, style: .continuous)
                 let amount = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
                 ZStack {
-                    Color.clear.glassEffect(.regular.tint(DotistTheme.tint(color, scheme)), in: opticalShape)
-                        .padding(ExpandedReadingMaterial.opticalClearance)
+                    Color.clear
+                        .background {
+                            Color.clear
+                                .glassEffect(.regular.tint(DotistTheme.tint(color, scheme)), in: glassShape)
+                                .padding(-bleed)
+                        }
                         .mask {
                             // alpha = 1 at the rim, amount in the interior. Mask
-                            // after optical clearance so native light is contained
-                            // by the window silhouette, not a tighter material rect.
-                            Color.white.overlay {
+                            // clips the oversized native glass rim outside opticalShape.
+                            opticalShape.fill(.white).overlay {
                                 ExpandedReadingMaterial.interiorMask(cornerRadius: radius)
-                                    .padding(ExpandedReadingMaterial.opticalClearance)
                                     .opacity(1 - amount)
                                     .blendMode(.destinationOut)
                             }.compositingGroup()
                         }
+                        .padding(ExpandedReadingMaterial.opticalClearance)
                     ExpandedReadingMaterial(opacity: opacity, frost: frost, color: color, scheme: scheme, cornerRadius: radius)
                         .applyingBackgroundOpacity(amount)
                         .padding(ExpandedReadingMaterial.opticalClearance)
