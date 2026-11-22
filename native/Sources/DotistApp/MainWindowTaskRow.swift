@@ -172,24 +172,24 @@ extension MainWindow {
 
     @ViewBuilder private func rowActions(_ task: DotistTask, allTasks: Bool, visible: Bool) -> some View {
             if editing != task.id {
-                HStack(spacing: 1) {
-                    if model.depth(of: task) < 4 {
-                        Button { startDraft(after: task, asChild: true) } label: { OpticalSymbol(name: "plus", size: 11).frame(width: 22, height: 22) }
-                            .help(model.text("添加子任务"))
-                            .accessibilityLabel(Text(model.text("添加子任务 {title}").replacingOccurrences(of: "{title}", with: task.title)))
-                    }
-                    if task.dueDate == nil {
-                        Button { pickingTask = task.id } label: { OpticalSymbol(name: "calendar", size: 11).frame(width: 22, height: 22) }
-                            .help(model.text("设置到期日"))
-                            .accessibilityLabel(Text(model.text("设置到期日 {title}").replacingOccurrences(of: "{title}", with: task.title)))
-                    }
-                    Button { model.delete(task) } label: { OpticalSymbol(name: "xmark", size: 11).frame(width: 22, height: 22) }
-                        .help(model.text("删除"))
-                        .accessibilityLabel(Text(model.text("删除 {title}").replacingOccurrences(of: "{title}", with: task.title)))
-                }.buttonStyle(.plain).font(font(11, .regular)).foregroundColor(DotistDesign.muted)
-                    .fixedSize()
-                    .opacity(visible ? 1 : 0).allowsHitTesting(visible).accessibilityHidden(!visible)
-                    .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.15), value: visible)
+                OnDemandRowActions(visible: visible, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) {
+                    HStack(spacing: 1) {
+                        if model.depth(of: task) < 4 {
+                            Button { startDraft(after: task, asChild: true) } label: { OpticalSymbol(name: "plus", size: 11).frame(width: 22, height: 22) }
+                                .help(model.text("添加子任务"))
+                                .accessibilityLabel(Text(model.text("添加子任务 {title}").replacingOccurrences(of: "{title}", with: task.title)))
+                        }
+                        if task.dueDate == nil {
+                            Button { pickingTask = task.id } label: { OpticalSymbol(name: "calendar", size: 11).frame(width: 22, height: 22) }
+                                .help(model.text("设置到期日"))
+                                .accessibilityLabel(Text(model.text("设置到期日 {title}").replacingOccurrences(of: "{title}", with: task.title)))
+                        }
+                        Button { model.delete(task) } label: { OpticalSymbol(name: "xmark", size: 11).frame(width: 22, height: 22) }
+                            .help(model.text("删除"))
+                            .accessibilityLabel(Text(model.text("删除 {title}").replacingOccurrences(of: "{title}", with: task.title)))
+                    }.buttonStyle(.plain).font(font(11, .regular)).foregroundColor(DotistDesign.muted)
+                        .fixedSize()
+                }
             }
     }
 
@@ -202,8 +202,12 @@ extension MainWindow {
         traceReorder("row.click", taskID: task.id, fields: ["edit": "\(edit)"])
         let flags = NSEvent.modifierFlags
         selection.update { $0.click(task.id, order: displayOrder, shift: flags.contains(.shift), command: flags.contains(.command)) }
-        selection.row(task.id).focusRequest.send()
-        if flags.intersection([.shift, .command]).isEmpty && edit { beginEditing(task) }
+        if flags.intersection([.shift, .command]).isEmpty && edit {
+            selection.setFocusTarget(task.id)
+            beginEditing(task)
+        } else {
+            selection.row(task.id).focusRequest.send()
+        }
     }
 
     private func changeIndent(ids: [String], reverse: Bool) {
@@ -271,4 +275,69 @@ extension MainWindow {
         return .ignored
     }
 
+}
+
+/// Mounts row action buttons only while hovered/focused, keeping them alive
+/// just long enough for the fade-out animation before unmounting.
+struct OnDemandRowActions<Content: View>: View {
+    let visible: Bool
+    let reduceMotion: Bool
+    let fadeDuration: TimeInterval
+    @ViewBuilder let content: () -> Content
+
+    @State private var keepingMounted: Bool
+    @State private var shown: Bool
+    @State private var unmountTask: Task<Void, Never>?
+
+    init(visible: Bool, reduceMotion: Bool, fadeDuration: TimeInterval = 0.15, @ViewBuilder content: @escaping () -> Content) {
+        self.visible = visible
+        self.reduceMotion = reduceMotion
+        self.fadeDuration = fadeDuration
+        self.content = content
+        _keepingMounted = State(initialValue: visible)
+        _shown = State(initialValue: visible)
+    }
+
+    var body: some View {
+        Group {
+            if visible || keepingMounted {
+                content()
+                    .opacity(shown ? 1 : 0)
+                    .allowsHitTesting(visible)
+                    .accessibilityHidden(!visible)
+            }
+        }
+        .onChange(of: visible) { _, nowVisible in
+            unmountTask?.cancel()
+            unmountTask = nil
+            if nowVisible {
+                keepingMounted = true
+                if reduceMotion {
+                    shown = true
+                } else {
+                    withAnimation(.easeOut(duration: fadeDuration)) {
+                        shown = true
+                    }
+                }
+            } else if reduceMotion {
+                shown = false
+                keepingMounted = false
+            } else {
+                withAnimation(.easeOut(duration: fadeDuration)) {
+                    shown = false
+                }
+                let delay = Duration.milliseconds(Int((fadeDuration * 1000).rounded(.up)) + 15)
+                unmountTask = Task { @MainActor in
+                    try? await Task.sleep(for: delay)
+                    guard !Task.isCancelled else { return }
+                    keepingMounted = false
+                    unmountTask = nil
+                }
+            }
+        }
+        .onDisappear {
+            unmountTask?.cancel()
+            unmountTask = nil
+        }
+    }
 }

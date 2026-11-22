@@ -57,11 +57,14 @@ extension MainWindow {
                 .onReceive(selection.navigation) { id in proxy.scrollTo(id, anchor: .center) }
                 .onChange(of: model.focusNavigation) { _ in
                     guard primary, let id = model.focusId else { return }
+                    selection.setFocusTarget(id)
                     proxy.scrollTo(id, anchor: .center)
                 }
                 .onAppear {
-                    if let id = model.focusId { proxy.scrollTo(id, anchor: .center) }
-                    else if let id = model.gotoGroup { proxy.scrollTo(id, anchor: .top) }
+                    if let id = model.focusId {
+                        selection.setFocusTarget(id)
+                        proxy.scrollTo(id, anchor: .center)
+                    } else if let id = model.gotoGroup { proxy.scrollTo(id, anchor: .top) }
                     model.gotoGroup = nil
                 }
                 }

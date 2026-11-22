@@ -82,9 +82,15 @@ extension TaskStore {
     /// multi-operation UI action in one outer transaction on the same queue.
     func write<T>(_ operation: (Database) throws -> T) throws -> T {
         try database.unsafeReentrantWrite { db in
+            let outermost = !inWriteTransaction
+            if outermost { inWriteTransaction = true }
+            defer { if outermost { inWriteTransaction = false } }
             var result: T?
             try db.inSavepoint {
                 result = try operation(db)
+                if outermost {
+                    noteWriteCommitted()
+                }
                 return .commit
             }
             return result!

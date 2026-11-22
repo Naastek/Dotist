@@ -56,6 +56,7 @@ final class AppModel: ObservableObject {
     private let queue = DispatchQueue(label: "dev.dotist.native.store", qos: .userInitiated)
     private var observation: (any DatabaseCancellable)?
     private var pendingSnapshot: TaskSnapshot?
+    private var appliedWriteSequence: UInt64 = 0
     private var groupsByID: [String: DotistGroup] = [:]
     private var hierarchy = TaskHierarchy([])
     private var childrenByParent: [String: [DotistTask]] = [:]
@@ -98,10 +99,10 @@ final class AppModel: ObservableObject {
                 self?.objectWillChange.send()
             }
         }.store(in: &dateFilterObservers)
-        observation = core.observe(onError: { [weak self] error in
+        observation = core.observeVersioned(onError: { [weak self] error in
             Task { @MainActor in self?.error = error.localizedDescription }
-        }, onChange: { [weak self] snapshot in
-            Task { @MainActor in self?.apply(snapshot) }
+        }, onChange: { [weak self] snapshot, sequence in
+            MainActor.assumeIsolated { self?.apply(snapshot, writeSequence: sequence) }
         })
     }
 
@@ -244,7 +245,11 @@ final class AppModel: ObservableObject {
         taggedTasks = TaskTags.filter(tasks, tag: tag, description: tagDescription)
     }
 
-    private func apply(_ snapshot: TaskSnapshot) {
+    private func apply(_ snapshot: TaskSnapshot, writeSequence: UInt64? = nil) {
+        if let writeSequence {
+            guard writeSequence >= appliedWriteSequence else { return }
+            appliedWriteSequence = writeSequence
+        }
         guard dragId == nil else { pendingSnapshot = snapshot; return }
         guard tasks != snapshot.tasks || groups != snapshot.groups else { return }
         tasks = snapshot.tasks
@@ -282,26 +287,28 @@ final class AppModel: ObservableObject {
     }
 
     func change(recordHistory: Bool = true, completed: (() -> Void)? = nil, failed: (() -> Void)? = nil, _ operation: @escaping (TaskStore) throws -> Void) {
+        changeWithSnapshot(recordHistory: recordHistory, completed: { _ in completed?() }, failed: failed, operation)
+    }
+
+    private func changeWithSnapshot(recordHistory: Bool = true, completed: ((TaskSnapshot) -> Void)? = nil, failed: (() -> Void)? = nil, _ operation: @escaping (TaskStore) throws -> Void) {
         pendingChanges += 1
         busy = true
         updateHistoryAvailability()
         let core = core
         queue.async { [weak self] in
             do {
-                let patch: TaskMutationPatch?
-                if recordHistory { patch = try core.captureChanges(operation) }
-                else { try operation(core); patch = nil }
-                let snapshot = try? core.snapshot()
+                let result = try core.performAndSnapshot(recordHistory: recordHistory, operation)
                 let settings = try? core.settings()
                 DispatchQueue.main.async {
-                    self?.pendingChanges -= 1
-                    self?.busy = (self?.pendingChanges ?? 0) > 0
-                    self?.error = nil
-                    if let patch { self?.recordHistory(patch) }
-                    if let settings { self?.settings = settings }
-                    if let snapshot { self?.apply(snapshot) }
-                    completed?()
-                    self?.updateHistoryAvailability()
+                    guard let self else { return }
+                    self.pendingChanges -= 1
+                    self.busy = self.pendingChanges > 0
+                    self.error = nil
+                    if let patch = result.patch { self.recordHistory(patch) }
+                    if let settings, self.settings != settings { self.settings = settings }
+                    self.apply(result.snapshot, writeSequence: result.writeSequence)
+                    completed?(result.snapshot)
+                    self.updateHistoryAvailability()
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -361,18 +368,13 @@ final class AppModel: ObservableObject {
     /// The active drag remains frozen until the UI ends its session. The store
     /// validates the anchor and commits the complete move in one transaction.
     func commitReorder(taskID: String, to target: TaskReorderEngine.Target, completed: (() -> Void)? = nil, failed: (() -> Void)? = nil) {
-        var committedSnapshot: TaskSnapshot?
-        change(completed: { [weak self] in
-            // Publish the committed snapshot before the UI releases its frozen
-            // drag. Database observation delivery may otherwise arrive later.
-            if let committedSnapshot {
-                self?.apply(committedSnapshot)
-                self?.expanded.formUnion(TaskHierarchy(committedSnapshot.tasks).ancestors(of: taskID).map(\.id))
-            }
+        changeWithSnapshot(completed: { [weak self] snapshot in
+            // The committed snapshot is already applied before releasing the
+            // frozen drag; expand moved ancestors from the same snapshot.
+            self?.expanded.formUnion(TaskHierarchy(snapshot.tasks).ancestors(of: taskID).map(\.id))
             completed?()
         }, failed: failed) { store in
             try store.commitReorder(taskID, groupID: target.groupID, parentID: target.parentID, beforeID: target.beforeID)
-            committedSnapshot = try store.snapshot()
         }
     }
 
@@ -390,18 +392,15 @@ final class AppModel: ObservableObject {
     }
 
     private func changeHierarchy(completed: (() -> Void)?, failed: (() -> Void)?, _ operation: @escaping (TaskStore) throws -> [DotistTask]) {
-        var snapshot: TaskSnapshot?
-        var parents: Set<String> = []
-        change(completed: { [weak self] in
-            if let snapshot { self?.apply(snapshot) }
+        var movedIDs: [String] = []
+        changeWithSnapshot(completed: { [weak self] snapshot in
+            let hierarchy = TaskHierarchy(snapshot.tasks)
+            var parents: Set<String> = []
+            for id in movedIDs { parents.formUnion(hierarchy.ancestors(of: id).map(\.id)) }
             self?.expanded.formUnion(parents)
             completed?()
         }, failed: failed) { store in
-            let moved = try operation(store)
-            let committed = try store.snapshot()
-            snapshot = committed
-            let hierarchy = TaskHierarchy(committed.tasks)
-            for task in moved { parents.formUnion(hierarchy.ancestors(of: task.id).map(\.id)) }
+            movedIDs = try operation(store).map(\.id)
         }
     }
 

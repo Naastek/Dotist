@@ -111,7 +111,7 @@ final class PanelFrameQuantizationTests: XCTestCase {
         panel.setFrame(NSRect(x: 1425, y: 874, width: 250, height: 48), display: false); motion.finishHover(true)
         motion.toggleBubble(in: input.area)
         var updates = 0
-        let observation = motion.$surfaceInsets.dropFirst().sink { _ in updates += 1 }
+        let observation = motion.surface.$value.dropFirst().sink { _ in updates += 1 }
         defer { observation.cancel() }
         panel.setFrame(NSRect(x: 1374, y: 744, width: 301, height: 178), display: false)
         try await Task.sleep(for: .milliseconds(5))

@@ -101,6 +101,9 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     private var appliedShortcutSignature: ShortcutSignature?
     private(set) var expandedSize = NSSize(width: 364, height: 620)
     private var idleTimer: Timer?
+    #if DOTIST_BENCH
+    private var benchDriver: BenchPerfDriver?
+    #endif
     private var moveCheck: DispatchWorkItem?
     private var menuStates: [(NSMenuItem, Bool)] = []
     private var preferredWindowFrame = NSRect.zero
@@ -211,6 +214,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
                 self.settingsWindow?.title = self.model.text("Dotist 设置")
             }
             NSApp.setActivationPolicy(settings.showDock || self.viewsWindow?.isVisible == true ? .regular : .accessory)
+            self.syncIdleTimer()
         }
         if let x = UserDefaults.standard.object(forKey: "dotist.native.window.x") as? Double,
            let y = UserDefaults.standard.object(forKey: "dotist.native.window.y") as? Double,
@@ -229,8 +233,17 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         }
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
         if !CommandLine.arguments.contains("--background") {
+            #if DOTIST_BENCH
+            if BenchPerf.noActivate {
+                panel.orderFrontRegardless()
+            } else {
+                panel.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            #else
             panel.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            #endif
         }
         GlassDebugState.shared.showPanel(avoiding: panel)
         model.mcp.focus = { [weak self] task in
@@ -239,9 +252,14 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             if let task { self.revealTask(task) }
         }
         if model.settings.mcpEnabled { model.mcp.start() }
-        idleTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.updateIdleState() }
+        motion.onIdlePollingChange = { [weak self] in self?.syncIdleTimer() }
+        syncIdleTimer()
+        #if DOTIST_BENCH
+        if BenchPerf.enabled {
+            benchDriver = BenchPerfDriver(toggle: { [weak self] in self?.toggleBubble() })
+            benchDriver?.start()
         }
+        #endif
     }
 
     func windowDidResize(_ notification: Notification) {
@@ -341,9 +359,32 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         displayOffset = offset
     }
 
+    private var needsIdleTimer: Bool {
+        let prefs = model.settings
+        if !prefs.locked && (prefs.autoCollapse || prefs.idleFade) { return true }
+        if motion?.needsIdlePolling == true { return true }
+        return groupPanels.contains { $0.motion.needsIdlePolling }
+    }
+
+    private func syncIdleTimer() {
+        if needsIdleTimer {
+            guard idleTimer == nil else { return }
+            idleTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.updateIdleState() }
+            }
+        } else {
+            idleTimer?.invalidate()
+            idleTimer = nil
+        }
+    }
+
     private func updateIdleState() {
+        #if DOTIST_BENCH
+        BenchPerf.count(.idleTimer)
+        #endif
         motion.updateIdleState()
         groupPanels.forEach { $0.motion.updateIdleState() }
+        syncIdleTimer()
     }
 
     private func installMenu() {
@@ -574,8 +615,13 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         let controller = GroupPanelController(model: model, groupID: id, near: groupPanels.last?.window?.frame ?? panel.frame,
             showViews: { [weak self] in self?.showViews() }, showSearch: { [weak self] in self?.showSearch() },
             showSettings: { [weak self] in self?.showSettings() }, showGroupPanel: { [weak self] in self?.showGroupPanel($0) },
-            didClose: { [weak self] closed in self?.groupPanels.removeAll { $0 === closed } })
+            didClose: { [weak self] closed in
+                self?.groupPanels.removeAll { $0 === closed }
+                self?.syncIdleTimer()
+            })
+        controller.motion.onIdlePollingChange = { [weak self] in self?.syncIdleTimer() }
         groupPanels.append(controller)
+        syncIdleTimer()
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

@@ -429,6 +429,7 @@ final class PanelShadowTests: XCTestCase {
     func testShadowRefreshContinuesAfterViewUpdatesAndStopsWhenRemoved() async throws {
         _ = NSApplication.shared
         let panel = ShadowCountingPanel(contentRect: NSRect(x: 0, y: 0, width: 280, height: 48), styleMask: [.borderless], backing: .buffered, defer: false)
+        panel.hasShadow = true
         panel.isReleasedWhenClosed = false
         defer { panel.close() }
         let view = ShadowInvalidationView()

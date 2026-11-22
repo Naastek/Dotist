@@ -23,6 +23,16 @@ public final class TaskStore: @unchecked Sendable {
     public let database: DatabaseQueue
     private let path: String
     private let preferences: SettingsStore
+    private let stateLock = NSLock()
+    private var _snapshotFetchCount = 0
+    private var _writeSequence: UInt64 = 0
+    private var _selfSnapshottedSequence: UInt64?
+    var inWriteTransaction = false
+    public var snapshotFetchCount: Int { stateLock.withLock { _snapshotFetchCount } }
+
+    func noteWriteCommitted() {
+        stateLock.withLock { _writeSequence &+= 1 }
+    }
 
     public static var dataDirectory: URL {
         ProcessInfo.processInfo.environment["DOTIST_DATA_DIR"].map { URL(fileURLWithPath: $0) }
@@ -96,13 +106,72 @@ public final class TaskStore: @unchecked Sendable {
         onError: @escaping (Error) -> Void,
         onChange: @escaping (TaskSnapshot) -> Void
     ) -> any DatabaseCancellable {
-        ValueObservation.tracking { db in
-            try TaskSnapshot(tasks: Self.tasks(db), groups: Self.groups(db))
-        }.removeDuplicates().start(in: database, scheduling: .async(onQueue: .main), onError: onError, onChange: onChange)
+        observeVersioned(onError: onError) { snapshot, _ in onChange(snapshot) }
+    }
+
+    public func observeVersioned(
+        onError: @escaping (Error) -> Void,
+        onChange: @escaping (TaskSnapshot, UInt64) -> Void
+    ) -> any DatabaseCancellable {
+        var initialized = false
+        var lastDataVersion: Int?
+        struct VersionedSnapshot: Equatable {
+            let snapshot: TaskSnapshot
+            let sequence: UInt64
+        }
+        let observation = ValueObservation.trackingConstantRegion { [weak self] db -> VersionedSnapshot? in
+            let dataVersion = try Int.fetchOne(db, sql: "PRAGMA data_version")
+            guard let self else {
+                return VersionedSnapshot(snapshot: try TaskSnapshot(tasks: Self.tasks(db), groups: Self.groups(db)), sequence: 0)
+            }
+            let seq = self.stateLock.withLock { self._writeSequence }
+            if !initialized {
+                initialized = true
+                lastDataVersion = dataVersion
+                return VersionedSnapshot(snapshot: try self.buildSnapshot(db), sequence: seq)
+            }
+            let externalChange = lastDataVersion != nil && dataVersion != nil && lastDataVersion != dataVersion
+            lastDataVersion = dataVersion
+            let skip = !externalChange && self.stateLock.withLock {
+                self._selfSnapshottedSequence == self._writeSequence
+            }
+            if skip { return nil }
+            return VersionedSnapshot(snapshot: try self.buildSnapshot(db), sequence: seq)
+        }.removeDuplicates()
+        return observation.start(in: database, scheduling: .async(onQueue: .main), onError: onError) { value in
+            if let value { onChange(value.snapshot, value.sequence) }
+        }
+    }
+
+    public func performAndSnapshot(
+        recordHistory: Bool,
+        _ operation: (TaskStore) throws -> Void
+    ) throws -> (patch: TaskMutationPatch?, snapshot: TaskSnapshot, writeSequence: UInt64) {
+        try write { db in
+            let patch: TaskMutationPatch?
+            if recordHistory {
+                patch = try self.captureChanges(operation)
+            } else {
+                try operation(self)
+                patch = nil
+            }
+            let snapshot = try self.buildSnapshot(db)
+            let nextSeq = self.stateLock.withLock { () -> UInt64 in
+                let seq = self._writeSequence &+ 1
+                self._selfSnapshottedSequence = seq
+                return seq
+            }
+            return (patch, snapshot, nextSeq)
+        }
     }
 
     public func snapshot() throws -> TaskSnapshot {
-        try read { try TaskSnapshot(tasks: Self.tasks($0), groups: Self.groups($0)) }
+        try read { try self.buildSnapshot($0) }
+    }
+
+    private func buildSnapshot(_ db: Database) throws -> TaskSnapshot {
+        stateLock.withLock { _snapshotFetchCount += 1 }
+        return try TaskSnapshot(tasks: Self.tasks(db), groups: Self.groups(db))
     }
     public func listTasks() throws -> [DotistTask] { try read(Self.tasks) }
     public func listGroups() throws -> [DotistGroup] { try read(Self.groups) }
@@ -487,15 +556,24 @@ public final class TaskStore: @unchecked Sendable {
         }
     }
 
+    private struct ReorderPeer: FetchableRecord {
+        let id: String
+        let position: Int64
+        init(row: Row) {
+            id = row[0]
+            position = row[1]
+        }
+    }
+
     private static func reorder(_ db: Database, task: DotistTask, target: DotistTask, after: Bool) throws {
         guard task.id != target.id else { return }
-        var peers = try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE deleted_at IS NULL ORDER BY position,id")
+        var peers = try ReorderPeer.fetchAll(db, sql: "SELECT id, position FROM tasks WHERE deleted_at IS NULL ORDER BY position,id")
         guard let source = peers.firstIndex(where: { $0.id == task.id }) else { throw TaskStoreError("找不到任务") }
-        peers.remove(at: source)
+        let moved = peers.remove(at: source)
         guard let targetIndex = peers.firstIndex(where: { $0.id == target.id }) else { throw TaskStoreError("找不到任务") }
         let insertion = targetIndex + (after ? 1 : 0)
         if insertion == source { return }
-        peers.insert(task, at: insertion)
+        peers.insert(moved, at: insertion)
         // Keep the narrowest valid gap so unrelated tasks retain their manual order and positions.
         func candidate(_ left: Bool) -> (unrelated: Int, changed: Int, first: Int, last: Int, start: Int64) {
             var first = insertion
@@ -520,9 +598,10 @@ public final class TaskStore: @unchecked Sendable {
         for (index, peer) in peers[chosen.first...chosen.last].enumerated() {
             let position = chosen.start + Int64(index)
             if peer.position == position { continue }
+            let current = try Self.task(db, peer.id)
             try db.execute(sql: "UPDATE tasks SET position=?,updated_at=?,revision=revision+1 WHERE id=?",
-                           arguments: [position, peer.completed ? peer.updatedAt : now, peer.id])
-            try record(db, Self.task(db, peer.id), kind: "reorder", base: peer.revision)
+                           arguments: [position, current.completed ? current.updatedAt : now, peer.id])
+            try record(db, Self.task(db, peer.id), kind: "reorder", base: current.revision)
         }
     }
 

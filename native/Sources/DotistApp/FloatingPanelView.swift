@@ -49,6 +49,9 @@ struct FloatingPanelView<Content: View>: View {
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var scheme
     var body: some View {
+        #if DOTIST_BENCH
+        let _ = BenchPerf.count(.floatingPanelBody)
+        #endif
         GeometryReader { geometry in
             let fixed = motion.bubble || motion.animationInProgress
             let width = fixed ? motion.transitionSize.width : geometry.size.width
@@ -78,10 +81,9 @@ struct FloatingPanelView<Content: View>: View {
             .clipShape(FloatingPanelShape(compact: motion.bubble, transitioning: motion.animationInProgress,
                 onRight: motion.bubbleOnRight, reveal: hoverReveal, base: 48 + extra,
                 debug: glassDebug.enabled && !reduceTransparency && contrast != .increased ? glassDebug.parameters : nil))
-            .background(FloatingSurface(opacity: model.settings.opacity, frost: model.settings.frost,
+            .background(ObservedFloatingSurface(surface: motion.surface, opacity: model.settings.opacity, frost: model.settings.frost,
                 compact: motion.bubble, transitioning: motion.animationInProgress, onRight: motion.bubbleOnRight,
-                size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID), base: 48 + extra,
-                frameInsets: motion.surfaceInsets))
+                size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID), base: 48 + extra))
             .background(WindowShadowInvalidation())
         }
         .environment(\.glassDebugParameters, glassDebug.enabled ? glassDebug.parameters : nil)
@@ -109,6 +111,25 @@ struct FloatingPanelView<Content: View>: View {
             }
         }
         .modifier(DotistTheme(theme: model.settings.theme))
+    }
+}
+
+private struct ObservedFloatingSurface: View {
+    @ObservedObject var surface: PanelSurfaceInsets
+    let opacity: UInt8
+    let frost: UInt8
+    let compact: Bool
+    let transitioning: Bool
+    let onRight: Bool
+    let size: CGSize
+    let reveal: CGFloat
+    let color: DotistGroupColor
+    let base: CGFloat
+
+    var body: some View {
+        FloatingSurface(opacity: opacity, frost: frost, compact: compact, transitioning: transitioning,
+            onRight: onRight, size: size, reveal: reveal, color: color, base: base,
+            frameInsets: surface.value)
     }
 }
 

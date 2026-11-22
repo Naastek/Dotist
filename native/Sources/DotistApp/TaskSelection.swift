@@ -20,21 +20,68 @@ struct TaskSelection: Equatable {
 }
 
 @MainActor final class TaskRowSelection: ObservableObject {
+    let id: String
     @Published var selected = false
+    @Published var focusable = false
     let focusRequest = PassthroughSubject<Void, Never>()
+    private var focusRequestObserver: AnyCancellable?
+    fileprivate var onFocusRequested: ((String) -> Void)?
+
+    init(id: String = "", focusable: Bool = false, onFocusRequested: ((String) -> Void)? = nil) {
+        self.id = id
+        self.focusable = focusable
+        self.onFocusRequested = onFocusRequested
+        focusRequestObserver = focusRequest.sink { [weak self] in
+            guard let self else { return }
+            self.onFocusRequested?(self.id)
+        }
+    }
 }
 
 /// This object intentionally does not publish globally. Only rows whose bit
 /// changes invalidate their title/checkmark, not the outline or its geometry.
+/// Uses a roving focus target so only one task row participates in SwiftUI's
+/// FocusBridge key-view loop at a time while preserving Tab entry and arrow navigation.
 @MainActor final class TaskSelectionController: ObservableObject {
     private(set) var value = TaskSelection()
+    private(set) var focusTargetID: String?
     let navigation = PassthroughSubject<String, Never>()
     private var rows: [String: TaskRowSelection] = [:]
+
     func row(_ id: String) -> TaskRowSelection {
         if let row = rows[id] { return row }
-        let row = TaskRowSelection(); row.selected = value.ids.contains(id); rows[id] = row
+        let isInitialTarget = focusTargetID == nil
+        if isInitialTarget { focusTargetID = id }
+        let row = TaskRowSelection(id: id, focusable: isInitialTarget) { [weak self] target in
+            self?.setFocusTarget(target)
+        }
+        row.selected = value.ids.contains(id)
+        rows[id] = row
         return row
     }
+
+    func setFocusTarget(_ id: String?) {
+        guard focusTargetID != id else {
+            if let id, let row = rows[id], !row.focusable { row.focusable = true }
+            return
+        }
+        if let previous = focusTargetID, let row = rows[previous], row.focusable {
+            row.focusable = false
+        }
+        focusTargetID = id
+        if let id, let row = rows[id], !row.focusable {
+            row.focusable = true
+        }
+    }
+
+    func ensureValidFocusTarget(in order: [String]) {
+        if let current = focusTargetID, order.contains(current) {
+            if let row = rows[current], !row.focusable { row.focusable = true }
+            return
+        }
+        setFocusTarget(order.first)
+    }
+
     func update(_ operation: (inout TaskSelection) -> Void) {
         let old = value.ids
         operation(&value)
@@ -48,8 +95,20 @@ struct TaskSelectableContent<Content: View>: View {
     let content: (Bool, Bool) -> Content
     var body: some View {
         content(selection.selected, focused)
-            .focusable().focused($focused).focusEffectDisabled()
-            .onReceive(selection.focusRequest) { _ in focused = true }
+            .focusable(selection.focusable).focused($focused).focusEffectDisabled()
+            .onReceive(selection.focusRequest) { _ in
+                focused = true
+                // When focusable was just promoted from false to true in the same
+                // turn, re-assert focus once SwiftUI commits the focusable state.
+                DispatchQueue.main.async {
+                    guard selection.focusable, !focused,
+                          !(NSApp.keyWindow?.firstResponder is NSTextView) else { return }
+                    focused = true
+                }
+            }
+            .onChange(of: selection.focusable) { _, canFocus in
+                if !canFocus && focused { focused = false }
+            }
     }
 }
 

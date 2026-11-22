@@ -33,7 +33,7 @@ final class ShadowInvalidationView: NSView {
         stop()
         closed = false
         guard let window else { return }
-        for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
+        for name in [NSWindow.didResizeNotification] {
             observations.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.refresh() }
             })
@@ -52,7 +52,10 @@ final class ShadowInvalidationView: NSView {
     }
 
     func refresh() {
-        guard !closed, let window else { return }
+        guard !closed, let window, window.hasShadow else { return }
+        #if DOTIST_BENCH
+        BenchPerf.count(.shadowRefresh)
+        #endif
         window.invalidateShadow()
         deadline = Date().addingTimeInterval(0.45)
         guard timer == nil, refreshDisplayLink == nil else { return }
@@ -76,6 +79,9 @@ final class ShadowInvalidationView: NSView {
     }
 
     fileprivate func refreshFrame() {
+        #if DOTIST_BENCH
+        BenchPerf.count(.shadowTick)
+        #endif
         window?.invalidateShadow()
         if window == nil || Date() >= deadline {
             timer?.invalidate(); timer = nil

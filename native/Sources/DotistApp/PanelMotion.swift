@@ -3,6 +3,13 @@ import CoreText
 import DotistCore
 import SwiftUI
 
+/// Isolates per-frame inset updates so observing `PanelMotion` does not
+/// re-evaluate `FloatingPanelView.body` on every animation frame.
+@MainActor
+final class PanelSurfaceInsets: ObservableObject {
+    @Published var value = EdgeInsets()
+}
+
 /// All task panels share one motion implementation, with independent window state.
 @MainActor
 final class PanelMotion: ObservableObject {
@@ -29,7 +36,8 @@ final class PanelMotion: ObservableObject {
 
     var environment: Environment
     @Published private(set) var bubble = false
-    @Published private(set) var surfaceInsets = EdgeInsets()
+    let surface = PanelSurfaceInsets()
+    var surfaceInsets: EdgeInsets { surface.value }
     @Published private(set) var hovering = false
     @Published var bubbleOnRight = true
     /// Active-filter wording shown beside the collapsed ball (nil for "All").
@@ -62,6 +70,11 @@ final class PanelMotion: ObservableObject {
     private var frameAnimation: PanelFrameAnimation?
     private var insetTransition: PanelSurfaceTransition?
     private var insetObservations: [NSObjectProtocol] = []
+    var idleAlphaDidChange: ((CGFloat, TimeInterval) -> Void)?
+    var onIdlePollingChange: (() -> Void)?
+    var needsIdlePolling: Bool {
+        !stopped && (panel.alphaValue < 0.99 || (bubble && (hoverRequiresExit || hovering)))
+    }
 
     init(model: AppModel, panel: DotistPanel, size: NSSize, title: @escaping () -> String, bubbleContent: (() -> BubbleContent)? = nil, environment: Environment = Environment(), rememberFrame: @escaping (NSRect) -> Void = { _ in }) {
         self.model = model
@@ -83,8 +96,11 @@ final class PanelMotion: ObservableObject {
                 MainActor.assumeIsolated {
                     guard let self, !self.stopped, let transition = self.insetTransition else { return }
                     // Publish even when size is unchanged: an anchor-only move
-                    // must invalidate FloatingPanelView's observed motion.
-                    self.surfaceInsets = transition.insets(at: self.panel.frame)
+                    // must invalidate the observed surface insets.
+                    #if DOTIST_BENCH
+                    BenchPerf.count(.surfaceInsets)
+                    #endif
+                    self.surface.value = transition.insets(at: self.panel.frame)
                 }
             })
         }
@@ -196,23 +212,25 @@ final class PanelMotion: ObservableObject {
         let end = FloatingSurface.opticalInsets(compact: compact, reduceTransparency: false, increasedContrast: false)
         let transition = PanelSurfaceTransition(start: frame, target: target, from: surfaceInsets, to: end, onRight: bubbleOnRight)
         insetTransition = transition
-        surfaceInsets = transition.insets(at: frame)
+        surface.value = transition.insets(at: frame)
     }
 
     private func finishBubbleTransition() {
         insetTransition = nil
-        surfaceInsets = FloatingSurface.opticalInsets(compact: bubble, reduceTransparency: false, increasedContrast: false)
+        surface.value = FloatingSurface.opticalInsets(compact: bubble, reduceTransparency: false, increasedContrast: false)
         animationInProgress = false
         refreshShadow()
         if bubble {
             // A collapse click often leaves the pointer inside the new circle.
             // Only a fresh pointer entry should reveal the detail capsule.
             hoverRequiresExit = panel.frame.contains(environment.mouseLocation())
+            onIdlePollingChange?()
             return
         }
         panel.minSize = NSSize(width: 320, height: 440)
         panel.styleMask.insert(.resizable)
         rememberFrame(panel.frame)
+        onIdlePollingChange?()
     }
 
     func setHover(_ active: Bool) {
@@ -256,6 +274,7 @@ final class PanelMotion: ObservableObject {
         if active { panel.setFrame(target, display: true) }
         hovering = active
         refreshShadow()
+        onIdlePollingChange?()
     }
 
     func finishHover(_ active: Bool) {
@@ -354,10 +373,12 @@ final class PanelMotion: ObservableObject {
         let faded = !active && !prefs.locked && prefs.idleFade && idle >= Double(prefs.idleDelaySecs)
         let target = faded ? CGFloat(prefs.idleOpacity) / 100 : 1
         guard abs(panel.alphaValue - target) > 0.01 else { return }
+        let duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : (faded ? Double(prefs.idleFadeSecs) : 0.12)
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : (faded ? Double(prefs.idleFadeSecs) : 0.12)
+            context.duration = duration
             panel.animator().alphaValue = target
         }
+        idleAlphaDidChange?(target, duration)
     }
 
 }

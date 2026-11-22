@@ -99,6 +99,9 @@ struct MainWindow: View {
     }
 
     var body: some View {
+        #if DOTIST_BENCH
+        let _ = BenchPerf.count(.mainWindowBody)
+        #endif
         VStack(spacing: 0) {
             if let error = model.error {
                 Text(model.text(error)).font(font(12)).foregroundColor(DotistDesign.danger).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16)
@@ -161,12 +164,20 @@ struct MainWindow: View {
                 }
             }
         }
-        .onReceive(Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect()) { _ in autoScrollReorder() }
+        .onDemandTimer(every: 1.0 / 30, active: drag != nil) {
+            #if DOTIST_BENCH
+            BenchPerf.count(.timer30Hz)
+            #endif
+            autoScrollReorder()
+        }
         .onReceive(model.$undo) { entry in
             undoToastVisible = entry != nil
             undoToastLifetime.restart(at: ProcessInfo.processInfo.systemUptime)
         }
-        .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
+        .onDemandTimer(every: 0.1, active: undoToastVisible || notice != nil) {
+            #if DOTIST_BENCH
+            BenchPerf.count(.timer10Hz)
+            #endif
             let now = ProcessInfo.processInfo.systemUptime
             if undoToastVisible && !undoToastLifetime.isVisible(at: now) { undoToastVisible = false }
             if notice != nil && !noticeLifetime.isVisible(at: now) { notice = nil }
@@ -181,6 +192,10 @@ struct MainWindow: View {
             category = id ?? DotistGroup.inboxID
             leaveInputs()
             selection.update { $0.clear() }
+            selection.ensureValidFocusTarget(in: displayOrder)
+        }
+        .onChange(of: model.tasks) { _ in
+            selection.ensureValidFocusTarget(in: displayOrder)
         }
         .onChange(of: model.groups) { groups in
             if let id = state.groupID, !groups.contains(where: { $0.id == id }) { state.groupID = nil }
@@ -197,6 +212,7 @@ struct MainWindow: View {
             cancelReorder()
             leaveInputs()
             selection.update { $0.clear() }
+            selection.ensureValidFocusTarget(in: displayOrder)
             if primary { model.scope = scope }
         }
         .onChange(of: model.scopeNavigation) { _ in
@@ -207,4 +223,55 @@ struct MainWindow: View {
         }
     }
 
+}
+
+@MainActor
+final class OnDemandTimerDriver: ObservableObject {
+    private var timer: Timer?
+    private var interval: TimeInterval = 0
+    var action: (() -> Void)?
+    var isRunning: Bool { timer != nil }
+
+    func setActive(_ active: Bool, every interval: TimeInterval) {
+        guard active else {
+            stop()
+            return
+        }
+        if timer != nil, self.interval == interval { return }
+        stop()
+        self.interval = interval
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.action?() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    isolated deinit { stop() }
+}
+
+private struct OnDemandTimerModifier: ViewModifier {
+    let interval: TimeInterval
+    let active: Bool
+    let action: () -> Void
+    @StateObject private var driver = OnDemandTimerDriver()
+
+    func body(content: Content) -> some View {
+        driver.action = action
+        return content
+            .onAppear { driver.setActive(active, every: interval) }
+            .onChange(of: active) { _, isActive in driver.setActive(isActive, every: interval) }
+            .onDisappear { driver.stop() }
+    }
+}
+
+private extension View {
+    func onDemandTimer(every interval: TimeInterval, active: Bool, perform action: @escaping () -> Void) -> some View {
+        modifier(OnDemandTimerModifier(interval: interval, active: active, action: action))
+    }
 }

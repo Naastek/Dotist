@@ -38,6 +38,9 @@ final class PanelFrameAnimation {
             guard let view = window.contentView else { currentProgress = 1; return }
             let link = view.displayLink(target: PanelFrameDisplayTarget(animation: self),
                                         selector: #selector(PanelFrameDisplayTarget.tick(_:)))
+            #if DOTIST_BENCH
+            if BenchPerf.enabled { BenchPerf.begin(target.width < start.width ? "collapse" : "expand", period: link.duration) }
+            #endif
             displayLink = link
             link.add(to: .main, forMode: .common)
             return
@@ -74,34 +77,55 @@ final class PanelFrameAnimation {
             guard let window else { cancel(); return }
             let progress = CGFloat(currentProgress)
             let frame = Self.frame(from: start, to: target, progress: progress, previous: previous)
-            window.setFrame(frame, display: true)
+            if window.frame != frame {
+                #if DOTIST_BENCH
+                let setStart = CACurrentMediaTime()
+                BenchPerf.count(.panelSetFrame)
+                #endif
+                window.setFrame(frame, display: true)
+                #if DOTIST_BENCH
+                BenchPerf.recordSetFrameMs((CACurrentMediaTime() - setStart) * 1000)
+                #endif
+            } else {
+                #if DOTIST_BENCH
+                BenchPerf.count(.panelSetFrameSkipped)
+                #endif
+            }
             previous = window.frame
             if progress >= 1 {
                 let done = completion
                 completion = nil
                 stopDrivers()
+                #if DOTIST_BENCH
+                if BenchPerf.enabled { BenchPerf.end() }
+                #endif
                 done?()
             }
         }
     }
 
-    /// Invert the x coordinate of CA's easeInEaseOut cubic (not smoothstep or
-    /// NSAnimation's differently defined easeInOut curve).
-    static func easedProgress(_ time: CGFloat) -> CGFloat {
-        if time <= 0 { return 0 }; if time >= 1 { return 1 }
+    private static let easeInEaseOutPoints: (CGFloat, CGFloat, CGFloat, CGFloat) = {
         let timing = CAMediaTimingFunction(name: .easeInEaseOut)
         var a: [Float] = [0, 0], b: [Float] = [0, 0]
         timing.getControlPoint(at: 1, values: &a)
         timing.getControlPoint(at: 2, values: &b)
-        func cubic(_ u: CGFloat, _ p: Float, _ q: Float) -> CGFloat {
-            3 * (1 - u) * (1 - u) * u * CGFloat(p) + 3 * (1 - u) * u * u * CGFloat(q) + u * u * u
+        return (CGFloat(a[0]), CGFloat(a[1]), CGFloat(b[0]), CGFloat(b[1]))
+    }()
+
+    /// Invert the x coordinate of CA's easeInEaseOut cubic (not smoothstep or
+    /// NSAnimation's differently defined easeInOut curve).
+    static func easedProgress(_ time: CGFloat) -> CGFloat {
+        if time <= 0 { return 0 }; if time >= 1 { return 1 }
+        let (ax, ay, bx, by) = easeInEaseOutPoints
+        func cubic(_ u: CGFloat, _ p: CGFloat, _ q: CGFloat) -> CGFloat {
+            3 * (1 - u) * (1 - u) * u * p + 3 * (1 - u) * u * u * q + u * u * u
         }
         var low: CGFloat = 0, high: CGFloat = 1
         for _ in 0..<30 {
             let u = (low + high) / 2
-            if cubic(u, a[0], b[0]) < time { low = u } else { high = u }
+            if cubic(u, ax, bx) < time { low = u } else { high = u }
         }
-        return cubic((low + high) / 2, a[1], b[1])
+        return cubic((low + high) / 2, ay, by)
     }
 
     static func frame(from start: NSRect, to target: NSRect, progress: CGFloat, previous: NSRect) -> NSRect {
@@ -129,7 +153,13 @@ private final class PanelFrameDisplayTarget: NSObject {
     init(animation: PanelFrameAnimation) { self.animation = animation }
     @objc func tick(_ link: CADisplayLink) {
         guard let animation else { link.invalidate(); return }
+        #if DOTIST_BENCH
+        if BenchPerf.enabled { BenchPerf.tickStart(linkTimestamp: link.timestamp, linkTargetTimestamp: link.targetTimestamp) }
+        #endif
         animation.advanceFrame()
+        #if DOTIST_BENCH
+        if BenchPerf.enabled { BenchPerf.tickEnd() }
+        #endif
     }
 }
 

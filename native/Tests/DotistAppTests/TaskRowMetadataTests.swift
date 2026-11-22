@@ -97,4 +97,49 @@ final class TaskRowMetadataTests: XCTestCase {
         XCTAssertGreaterThan(actionChanges, 0, "The real focused row must reveal its actions to the left")
         print("wE1 real row: progressChangedPixels=\(progressChanges), actionChangedPixels=\(actionChanges), frame=\(row.frame)")
     }
+
+    func testOnDemandRowActionsMountOnDemandKeepFadeOutAndUnmount() async throws {
+        _ = NSApplication.shared
+        final class HostState: ObservableObject {
+            @Published var visible = false
+            var mountCount = 0
+            var unmountCount = 0
+        }
+        struct ProbeView: View {
+            @ObservedObject var state: HostState
+            var body: some View {
+                OnDemandRowActions(visible: state.visible, reduceMotion: false, fadeDuration: 0.08) {
+                    Color.clear
+                        .frame(width: TaskRowActionMetrics.width(count: 3), height: 22)
+                        .onAppear { state.mountCount += 1 }
+                        .onDisappear { state.unmountCount += 1 }
+                }
+                .frame(width: 120, height: 32)
+            }
+        }
+        let state = HostState()
+        let host = NSHostingView(rootView: ProbeView(state: state))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 120, height: 32), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(state.mountCount, 0, "Idle row actions must not mount before hover or focus")
+
+        state.visible = true
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(state.mountCount, 1, "Becoming visible must mount action buttons immediately")
+        XCTAssertEqual(state.unmountCount, 0)
+
+        state.visible = false
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(state.unmountCount, 0, "Action buttons must remain mounted during the fade-out window")
+
+        try await Task.sleep(for: .milliseconds(120))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(state.unmountCount, 1, "Action buttons must unmount once fade-out finishes")
+    }
 }
