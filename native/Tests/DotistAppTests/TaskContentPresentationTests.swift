@@ -393,6 +393,16 @@ final class TaskContentPresentationTests: XCTestCase {
     }
 
     func testFastModelDateAndPanelGroupSwitchesKeepLatestRowsScrollDraftAndSelection() async throws {
+        try await verifyFastModelDateAndPanelGroupSwitches(editing: true)
+    }
+
+    func testFastModelDateAndPanelGroupSwitchesRenderIntermediateListPixels() async throws {
+        // An offscreen window with an active field editor only paints the editor
+        // in cacheDisplay. Run the same switches without focus for the pixel check.
+        try await verifyFastModelDateAndPanelGroupSwitches(editing: false)
+    }
+
+    private func verifyFastModelDateAndPanelGroupSwitches(editing: Bool) async throws {
         let clock = TaskContentTestClock()
         defer { clock.restore() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-content-fast-" + UUID().uuidString)
@@ -423,10 +433,16 @@ final class TaskContentPresentationTests: XCTestCase {
         let scroll = try XCTUnwrap(fixture.descendants(NSScrollView.self).first { $0.bounds.height > 100 })
         scroll.contentView.scroll(to: CGPoint(x: 0, y: 64))
         scroll.reflectScrolledClipView(scroll.contentView)
-        let field = try XCTUnwrap(fixture.descendants(ComposerTextField.self).first)
-        XCTAssertTrue(fixture.window.makeFirstResponder(field))
-        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
-        editor.insertText("Keep this draft", replacementRange: NSRange(location: NSNotFound, length: 0))
+        let editor: NSTextView?
+        if editing {
+            let field = try XCTUnwrap(fixture.descendants(ComposerTextField.self).first)
+            XCTAssertTrue(fixture.window.makeFirstResponder(field))
+            let fieldEditor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            fieldEditor.insertText("Keep this draft", replacementRange: NSRange(location: NSNotFound, length: 0))
+            editor = fieldEditor
+        } else {
+            editor = nil
+        }
         let window = fixture.window.frame
         model.scope = "today" // Menu/keyboard routes are bridged into panel state.
         _ = try await fixture.capture(scale: 2)
@@ -442,21 +458,28 @@ final class TaskContentPresentationTests: XCTestCase {
         XCTAssertEqual(rows.count, 24)
         selection.update { $0.click(lifeIDs[0], order: lifeIDs, shift: false, command: true) }
         try await clock.advance(by: 0.04)
-        let middle = region(try await fixture.capture(scale: 2), height: 440)
         let surface = try XCTUnwrap(fixture.descendants(TaskContentTransitionView.self).first)
         XCTAssertGreaterThan(surface.outgoingOpacity, 0)
         XCTAssertLessThan(surface.outgoingOpacity, 1)
-        try await clock.advance(by: 0.15)
-        let after = region(try await fixture.capture(scale: 2), height: 440)
+        let middle = editing ? nil : region(try await fixture.capture(scale: 2), height: 440)
+        // Advance past completion so the bitmap is painted without the outgoing overlay.
+        try await clock.advance(by: TaskContentTransitionView.duration)
         XCTAssertEqual(surface.outgoingOpacity, 0)
-        XCTAssertNotEqual(middle, after)
+        XCTAssertEqual(surface.opacity?.value, 1)
+        let finalBitmap = try await fixture.capture(scale: 2)
+        if let middle {
+            let after = region(finalBitmap, height: 440)
+            XCTAssertNotEqual(middle, after, "A rapid retarget must still paint an intermediate list appearance")
+        }
         XCTAssertEqual(Set(rows.map { $0.task.id }), Set(lifeIDs))
         XCTAssertTrue(rows.allSatisfy { abs($0.frame.height - 32) <= 0.5 })
         XCTAssertEqual(selection.value.ids, [lifeIDs[0]], "Presentation ticks must not reset row selection")
         XCTAssertEqual(scroll.contentView.bounds.minY, 64, accuracy: 0.5)
         XCTAssertTrue(fixture.descendants(NSScrollView.self).contains { $0 === scroll })
-        XCTAssertTrue(fixture.window.firstResponder === editor)
-        XCTAssertEqual(editor.string, "Keep this draft")
+        if let editor {
+            XCTAssertTrue(fixture.window.firstResponder === editor)
+            XCTAssertEqual(editor.string, "Keep this draft")
+        }
         XCTAssertEqual(fixture.window.frame, window)
         XCTAssertFalse(fixture.window.isVisible)
     }

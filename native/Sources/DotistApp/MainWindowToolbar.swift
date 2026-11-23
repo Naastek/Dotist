@@ -81,7 +81,7 @@ extension MainWindow {
             }
     }
 
-    private func toolbarItem(_ item: ToolbarItem) -> some View {
+    @ViewBuilder private func toolbarItem(_ item: ToolbarItem) -> some View {
         let symbol: String = switch item {
         case .filter, .completion, .calendar: ""
         case .views: "rectangle.split.2x1"
@@ -99,7 +99,7 @@ extension MainWindow {
         case .collapse: "收起为悬浮球"
         }
         let label = model.text(labelKey)
-        return Button {
+        let control = Button {
             guard toolbarDrag == nil else { return }
             switch item {
             case .filter, .completion, .calendar: break
@@ -118,7 +118,15 @@ extension MainWindow {
                         .frame(width: 14, height: 14)
                 } else { OpticalSymbol(name: symbol, size: 14) }
             }.frame(width: 28, height: 28).contentShape(Rectangle())
-        }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted)
+        }
+        Group {
+            if item == .collapse {
+                control.buttonStyle(CollapseToolbarButtonStyle())
+            } else {
+                control.buttonStyle(.plain)
+            }
+        }
+            .modifier(DotistFocusRing()).foregroundColor(DotistDesign.muted)
             .help(label).accessibilityLabel(Text(label)).accessibilityIdentifier("toolbar:\(item.rawValue)")
             .popover(isPresented: Binding(get: { item == .color && showColorPicker }, set: { if item == .color { showColorPicker = $0 } })) { colorPicker }
             .background(GeometryReader { geometry in
@@ -359,4 +367,16 @@ extension MainWindow {
                             customRange: range ?? customDateRange, completed: completed)
     }
 
+}
+
+private struct CollapseToolbarButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background {
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(DotistDesign.accent.opacity(configuration.isPressed ? 0.22 : 0))
+                    .allowsHitTesting(false)
+            }
+            .animation(nil, value: configuration.isPressed)
+    }
 }

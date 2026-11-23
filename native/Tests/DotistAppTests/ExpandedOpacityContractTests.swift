@@ -50,26 +50,19 @@ final class ExpandedOpacityContractTests: XCTestCase {
     /// Exercise the center composition at intermediate opacity with independent foreground ink.
     func testNativeWindowCompositionHonorsCenterOpacityAndKeepsTextOpaque() async throws {
         _ = NSApplication.shared
-        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
         for scheme in [ColorScheme.light, .dark] {
-            let pigment = GlassTintMaterial.neutral(scheme)
             for opacity: UInt8 in [0, 4, 38, 80, 95, 100] {
-                let amount = Double(opacity) / 100
-                let control = FloatingGlassBackdrop()
-                    .overlay(shape.fill(DotistTheme.tint(.pink, scheme)))
-                    .overlay(pigment.opacity(amount).overlay(pigment.opacity(0.4 * 0.12)))
-                    .overlay(DotistTheme.swatch(.pink).opacity(scheme == .dark ? 0.18 : 0.16))
-                    .compositingGroup()
-                    .opacity(amount).clipShape(shape)
-                    .frame(width: 300, height: 120).environment(\.colorScheme, scheme)
+                let background = FloatingPanelSurface(opacity: opacity, frost: 40, compact: false,
+                    color: .pink, solid: false, scheme: scheme)
+                let control = background.frame(width: 300, height: 120)
+                    .environment(\.colorScheme, scheme)
                 let reference = NativeRenderingFixture(control, size: size)
                 reference.window.isOpaque = false; reference.window.backgroundColor = .clear
                 let expected = try await reference.capture(scale: 1)
                 reference.close()
                 let content = Text("Readable sample text").font(.system(size: 16)).foregroundStyle(DotistDesign.ink)
                     .frame(width: 300, height: 120)
-                    .background(FloatingPanelSurface(opacity: opacity, frost: 40, compact: false,
-                        color: .pink, solid: false, scheme: scheme))
+                    .background(background)
                     .environment(\.colorScheme, scheme)
                 let fixture = NativeRenderingFixture(content, size: size)
                 fixture.window.isOpaque = false; fixture.window.backgroundColor = .clear

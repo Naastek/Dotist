@@ -60,37 +60,47 @@ struct FloatingPanelView<Content: View>: View {
         let _ = BenchPerf.count(.floatingPanelBody)
         #endif
         GeometryReader { geometry in
+            let host = motion.transitionHost
             let fixed = motion.bubble || motion.animationInProgress
-            let width = fixed ? motion.transitionSize.width : geometry.size.width
-            let height = fixed ? motion.transitionSize.height : geometry.size.height
-            let extra = motion.animationInProgress ? 0 : motion.filterExtra
-            ZStack(alignment: .topTrailing) {
+            let expanded = host.map { $0.local($0.expanded) }
+                ?? CGRect(origin: .zero, size: fixed ? motion.transitionSize : geometry.size)
+            let restingCompact = motion.bubble ? CGRect(origin: .zero, size: geometry.size) :
+                CGRect(x: motion.bubbleOnRight ? geometry.size.width - 48 : 0, y: 0, width: 48, height: 48)
+            let compact = host.map { $0.local($0.compact) } ?? restingCompact
+            let extra = motion.filterExtra
+            ZStack(alignment: .topLeading) {
                 content
-                    .frame(width: width, height: height)
+                    .frame(width: expanded.width, height: expanded.height)
+                    .offset(x: expanded.minX, y: expanded.minY)
                     .opacity(motion.bubble ? 0 : 1)
                     .animation(reduceMotion ? nil : .easeOut(duration: motion.bubble ? 0.08 : 0.14).delay(motion.bubble ? 0 : 0.1), value: motion.bubble)
-                    .allowsHitTesting(!motion.bubble)
-                    .accessibilityHidden(motion.bubble)
-                // Keep text, font cascade and SwiftUI metadata warm before the first
-                // collapse. The circle's content never lays out at intermediate widths.
+                    .allowsHitTesting(!motion.bubble && !motion.animationInProgress)
+                    .accessibilityHidden(motion.bubble || motion.animationInProgress)
+                // Keep the compact content in its final layout throughout the morph.
                 FloatingBubble(model: model, motion: motion,
                     details: bubbleContent,
-                    groupName: groupName, contextMenu: contextMenu, width: motion.bubble && !motion.animationInProgress ? geometry.size.width : 48, reveal: hoverReveal,
+                    groupName: groupName, contextMenu: contextMenu, width: compact.width, reveal: hoverReveal,
                     extra: extra, filter: filter)
-                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: motion.animationInProgress || motion.bubbleOnRight ? .topTrailing : .topLeading)
+                    .frame(width: compact.width, height: compact.height,
+                           alignment: motion.bubbleOnRight ? .topTrailing : .topLeading)
+                    .offset(x: compact.minX, y: compact.minY)
                     .opacity(motion.bubble ? 1 : 0)
                     .allowsHitTesting(motion.bubble && !motion.animationInProgress)
-                    .accessibilityHidden(!motion.bubble)
+                    .accessibilityHidden(!motion.bubble || motion.animationInProgress)
             }
-            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topTrailing)
-            // Clip the animated content, then attach glass. Masking the combined
-            // result also cuts the system material's light at the silhouette.
-            .clipShape(FloatingPanelShape(compact: motion.bubble, transitioning: motion.animationInProgress,
-                onRight: motion.bubbleOnRight, reveal: hoverReveal, base: 48 + extra,
-                debug: glassDebug.enabled && !reduceTransparency && contrast != .increased ? glassDebug.parameters : nil))
-            .background(ObservedFloatingSurface(surface: motion.surface, opacity: model.settings.opacity, frost: model.settings.frost,
-                compact: motion.bubble, transitioning: motion.animationInProgress, onRight: motion.bubbleOnRight,
-                size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID), base: 48 + extra))
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+            .mask {
+                FloatingContentMask(surface: motion.surface, shape: FloatingPanelShape(compact: motion.bubble,
+                    transitioning: motion.animationInProgress, onRight: motion.bubbleOnRight, reveal: hoverReveal,
+                    base: 48 + extra, debug: glassDebug.enabled && !reduceTransparency && contrast != .increased
+                        ? glassDebug.parameters : nil))
+            }
+            .background(alignment: .topLeading) {
+                ObservedFloatingSurface(surface: motion.surface, opacity: model.settings.opacity, frost: model.settings.frost,
+                    compact: motion.bubble, transitioning: motion.animationInProgress, onRight: motion.bubbleOnRight,
+                    size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID),
+                    base: 48 + extra)
+            }
             .background(WindowShadowInvalidation())
         }
         .environment(\.glassDebugParameters, glassDebug.enabled ? glassDebug.parameters : nil)
@@ -121,8 +131,22 @@ struct FloatingPanelView<Content: View>: View {
     }
 }
 
+private struct FloatingContentMask: View {
+    @ObservedObject var surface: PanelSurfaceState
+    let shape: FloatingPanelShape
+
+    var body: some View {
+        GeometryReader { geometry in
+            let frame = surface.transitionFrame ?? CGRect(origin: .zero, size: geometry.size)
+            shape.fill(.white)
+                .frame(width: frame.width, height: frame.height)
+                .offset(x: frame.minX, y: frame.minY)
+        }
+    }
+}
+
 private struct ObservedFloatingSurface: View {
-    @ObservedObject var surface: PanelSurfaceInsets
+    @ObservedObject var surface: PanelSurfaceState
     let opacity: UInt8
     let frost: UInt8
     let compact: Bool
@@ -134,9 +158,11 @@ private struct ObservedFloatingSurface: View {
     let base: CGFloat
 
     var body: some View {
+        let frame = surface.transitionFrame ?? CGRect(origin: .zero, size: size)
         FloatingSurface(opacity: opacity, frost: frost, compact: compact, transitioning: transitioning,
-            onRight: onRight, size: size, reveal: reveal, color: color, base: base,
+            onRight: onRight, size: frame.size, reveal: reveal, color: color, base: base,
             frameInsets: surface.value)
+            .offset(x: frame.minX, y: frame.minY)
     }
 }
 

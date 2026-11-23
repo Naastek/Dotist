@@ -42,6 +42,11 @@ struct DotistApplication {
 final class DotistPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    // AppKit asks this private appearance query when compositing the glass.
+    // Keep it local to task panels. Key status and input ownership remain AppKit's.
+    @objc(_hasActiveAppearance)
+    func dotistHasActiveGlassAppearance() -> Bool { true }
 }
 
 final class QuickPanel: NSPanel {
@@ -322,7 +327,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     }
 
     func windowDidMove(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window === panel, !animationInProgress else { return }
+        guard let window = notification.object as? NSWindow, window === panel, !animationInProgress, motion?.preparingExpansion != true else { return }
         // Only a user's drag changes the preferred placement. Display rearrangement is temporary.
         guard NSEvent.pressedMouseButtons & 1 != 0 || userMoveInProgress else { return }
         userMoveInProgress = true
@@ -378,6 +383,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     }
 
     @objc private func screensChanged() {
+        motion?.cancelExpansionOnPress()
         guard !userMoveInProgress, !animationInProgress, let main = NSScreen.main?.visibleFrame else { return }
         moveCheck?.cancel()
         let target = Self.screenPlacement(for: preferredWindowFrame, screens: NSScreen.screens.map(\.visibleFrame), main: main)
@@ -814,8 +820,18 @@ struct BubblePointer: NSViewRepresentable {
     let hover: (Bool) -> Void
     let contextMenu: (NSEvent, NSView) -> Void
     var dragEnd: () -> Void = {}
+    var preparePress: () -> Void = {}
+    var cancelPress: () -> Void = {}
     func makeNSView(context: Context) -> BubblePointerView { BubblePointerView() }
-    func updateNSView(_ view: BubblePointerView, context: Context) { view.action = action; view.drag = drag; view.hover = hover; view.contextMenu = contextMenu; view.dragEnd = dragEnd }
+    func updateNSView(_ view: BubblePointerView, context: Context) {
+        view.action = action
+        view.drag = drag
+        view.hover = hover
+        view.contextMenu = contextMenu
+        view.dragEnd = dragEnd
+        view.preparePress = preparePress
+        view.cancelPress = cancelPress
+    }
 }
 
 final class BubblePointerView: NSView {
@@ -824,6 +840,8 @@ final class BubblePointerView: NSView {
     var hover: (Bool) -> Void = { _ in }
     var contextMenu: (NSEvent, NSView) -> Void = { _, _ in }
     var dragEnd: () -> Void = {}
+    var preparePress: () -> Void = {}
+    var cancelPress: () -> Void = {}
     private var down: (mouse: NSPoint, origin: NSPoint)?
     private var dragged = false
     private var hoverTrackingArea: NSTrackingArea?
@@ -845,13 +863,14 @@ final class BubblePointerView: NSView {
         guard let window else { return }
         down = (window.convertPoint(toScreen: event.locationInWindow), window.frame.origin)
         dragged = false
+        preparePress()
     }
     override func mouseDragged(with event: NSEvent) {
         guard let down, let window else { return }
         let point = window.convertPoint(toScreen: event.locationInWindow)
         let dx = point.x - down.mouse.x, dy = point.y - down.mouse.y
         guard dragged || hypot(dx, dy) > 4 else { return }
-        if !dragged { dragged = true; drag() }
+        if !dragged { dragged = true; cancelPress(); drag() }
         // Keep the bubble out of the system drag session that offers edge tiling.
         window.setFrameOrigin(NSPoint(x: down.origin.x + dx, y: down.origin.y + dy))
     }
@@ -861,8 +880,10 @@ final class BubblePointerView: NSView {
         defer { dragged = false }
         if dragged { dragEnd(); return }
         if bounds.contains(convert(event.locationInWindow, from: nil)) { action() }
+        else { cancelPress() }
     }
     override func rightMouseDown(with event: NSEvent) {
+        cancelPress()
         down = nil
         dragged = false
         contextMenu(event, self)

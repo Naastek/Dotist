@@ -49,7 +49,7 @@ PY
 
 mkdir -p "$cache_dir"
 if [[ -z "$qa_app" ]]; then
-  build_log="$(mktemp "$cache_dir/local-build-XXXXXXXX.log")"
+  build_log="$(mktemp "$cache_dir/local-build-XXXXXXXX")"
   bash native/scripts/build-qa.sh 2>&1 | tee "$build_log"
   qa_app="$(sed -n 's/^QA application: //p' "$build_log" | tail -n 1)"
 fi

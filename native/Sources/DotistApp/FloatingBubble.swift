@@ -125,7 +125,8 @@ struct FloatingBubble: View {
                     if motion.environment.pointerEventsEnabled { contextMenu(event, view) }
                 }, dragEnd: {
                     if motion.environment.pointerEventsEnabled { motion.finishBubbleMove() }
-                }).accessibilityHidden(true)
+                }, preparePress: motion.prepareExpansionOnPress,
+                   cancelPress: motion.cancelExpansionOnPress).accessibilityHidden(true)
             }
         }
         .accessibilityLabel(Text(groupName.map { model.text("展开分组 {name}").replacingOccurrences(of: "{name}", with: $0) } ?? (details.remaining > 0 ? model.text("还有 {n} 件，点击展开").replacingOccurrences(of: "{n}", with: "\(details.remaining)") : model.text("全部完成，点击展开"))))

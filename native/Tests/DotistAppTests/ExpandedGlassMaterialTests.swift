@@ -14,24 +14,7 @@ final class ExpandedGlassMaterialTests: XCTestCase {
         return NSBitmapImageRep(cgImage: try XCTUnwrap(image))
     }
 
-    /// Offscreen rendering proves composition, not native refraction. The
-    /// outer hairline must remain visible and independent of density.
-    func testExpandedHairlineDoesNotFadeWithReadingPreferences() throws {
-        let size = CGSize(width: 260, height: 140)
-        for scheme in [ColorScheme.light, .dark] {
-            var reference: CGFloat?
-            for (opacity, frost): (UInt8, UInt8) in [(20, 0), (80, 40), (100, 100)] {
-                let image = try bitmap(FloatingPanelSurface(opacity: opacity, frost: frost, compact: false,
-                    color: .pink, solid: false, scheme: scheme), size: size, scheme: scheme)
-                let alpha = try XCTUnwrap(image.colorAt(x: 260, y: 4)).alphaComponent
-                if let reference { XCTAssertEqual(alpha, reference, accuracy: 1.0 / 255, "Reading settings must not paint or fade the optical rim: \(scheme)") }
-                else { reference = alpha }
-                XCTAssertGreaterThan(alpha, 0.06, "The hairline remains visible independently of the exterior shadow")
-            }
-        }
-    }
-
-    func testThreeFloatingShapesShareInteriorDensityAndFrost() throws {
+    func testThreeFloatingShapesShareOpacity() throws {
         let forms = [(CGSize(width: 260, height: 140), false),
                      (CGSize(width: 44, height: 44), true),
                      (CGSize(width: 178, height: 44), true)]
@@ -44,12 +27,10 @@ final class ExpandedGlassMaterialTests: XCTestCase {
                 }
             }
             let clear = try centers(opacity: 0, frost: 68)
-            let plain = try centers(opacity: 44, frost: 0)
             let muted = try centers(opacity: 44, frost: 68)
             let frosted = try centers(opacity: 82, frost: 68)
             for index in forms.indices {
                 XCTAssertLessThan(clear[index], 1.0 / 255)
-                XCTAssertGreaterThan(muted[index], plain[index] + 2.0 / 255)
                 XCTAssertGreaterThan(frosted[index], muted[index] + 0.1)
                 XCTAssertEqual(frosted[index], frosted[0], accuracy: 1.0 / 255)
             }

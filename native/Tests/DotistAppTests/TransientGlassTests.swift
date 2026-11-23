@@ -204,7 +204,7 @@ final class TransientGlassTests: XCTestCase {
                         fixture.close()
                         let reference = NativeRenderingFixture(
                             FloatingPanelSurface(opacity: 60, frost: 40, compact: true, color: .none,
-                                solid: false, scheme: scheme, circleBlend: reveal == 0 ? 1 : 0)
+                                solid: false, scheme: scheme)
                                 .frame(width: 48, height: 48).environment(\.colorScheme, scheme),
                             size: CGSize(width: 48, height: 48))
                         let referenceImage = try await reference.capture(scale: 2)

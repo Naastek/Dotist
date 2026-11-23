@@ -72,6 +72,122 @@ final class PanelMotionLifecycleTests: XCTestCase {
         XCTAssertNil(cancelled.displayLink)
     }
 
+    func testSurfaceDriverReversesFromItsCurrentRectInsideAnUnchangedWindow() throws {
+        let panel = panel()
+        defer { panel.close() }
+        let expanded = panel.frame
+        let compact = NSRect(x: expanded.maxX - 30, y: expanded.maxY - 56, width: 90, height: 48)
+        let host = PanelMotion.TransitionHost(expanded: expanded, compact: compact)
+        panel.setFrame(host.frame, display: false)
+        let fixed = panel.frame
+        var surface = host.local(expanded)
+        var completions = 0
+        let collapse = PanelFrameAnimation(window: panel, target: host.local(compact), duration: 0.28,
+            from: surface, applyFrame: { surface = $0 }) { completions += 1 }
+        collapse.currentProgress = 0.5
+        let intermediate = surface
+        XCTAssertLessThan(intermediate.height, expanded.height)
+        XCTAssertGreaterThan(intermediate.height, compact.height)
+        XCTAssertEqual(panel.frame, fixed)
+
+        collapse.cancel()
+        let expand = PanelFrameAnimation(window: panel, target: host.local(expanded), duration: 0.34,
+            from: intermediate, applyFrame: { surface = $0 }) { completions += 1 }
+        expand.currentProgress = 0
+        XCTAssertEqual(surface, intermediate)
+        collapse.currentProgress = 1
+        XCTAssertEqual(surface, intermediate)
+        expand.currentProgress = 0.5
+        XCTAssertGreaterThan(surface.height, intermediate.height)
+        XCTAssertEqual(panel.frame, fixed)
+        expand.currentProgress = 1
+        XCTAssertEqual(surface, host.local(expanded))
+        XCTAssertEqual(panel.frame, fixed)
+        XCTAssertEqual(completions, 1)
+    }
+
+    func testVisiblePanelReversesInPlaceWithAnUnchangedWindow() async throws {
+        guard let area = NSScreen.main?.visibleFrame else { throw XCTSkip("Requires a WindowServer display") }
+        let panel = panel()
+        let expanded = NSRect(x: area.maxX - 380, y: area.maxY - 640, width: 364, height: 620)
+        panel.setFrame(expanded, display: false)
+        panel.orderBack(nil)
+        defer { panel.close() }
+        var duration: TimeInterval = 0.8
+        var environment = PanelMotion.Environment()
+        environment.frameAnimationDuration = { _ in duration }
+        let motion = PanelMotion(model: try model(), panel: panel, size: expanded.size, title: { "" },
+                                 environment: environment)
+        motion.toggleBubble(in: area)
+        XCTAssertTrue(motion.animationInProgress)
+        XCTAssertEqual(panel.frame, expanded)
+
+        try await Task.sleep(for: .milliseconds(100))
+        let intermediate = try XCTUnwrap(motion.surface.transitionFrame)
+        XCTAssertEqual(panel.frame, expanded)
+        duration = 0.08
+        motion.toggleBubble(in: area)
+        XCTAssertEqual(motion.surface.transitionFrame, intermediate)
+        XCTAssertEqual(panel.frame, expanded)
+
+        try await Task.sleep(for: .milliseconds(220))
+        XCTAssertFalse(motion.animationInProgress)
+        XCTAssertFalse(motion.bubble)
+        XCTAssertFalse(panel.ignoresMouseEvents)
+        XCTAssertEqual(panel.frame, expanded)
+
+        duration = 0
+        motion.toggleBubble(in: area)
+        XCTAssertFalse(motion.animationInProgress)
+        XCTAssertNil(motion.surface.transitionFrame)
+        XCTAssertFalse(panel.ignoresMouseEvents)
+        XCTAssertEqual(panel.frame, NSRect(x: expanded.maxX - 48, y: expanded.maxY - 48, width: 48, height: 48))
+    }
+
+    func testBubblePressPreparesTheHostWithoutExpandingUntilRelease() async throws {
+        guard let screen = NSScreen.main else { throw XCTSkip("Requires a WindowServer display") }
+        let area = screen.visibleFrame
+        let panel = panel()
+        let expanded = NSRect(x: area.maxX - 380, y: area.maxY - 640, width: 364, height: 620)
+        panel.setFrame(expanded, display: false)
+        panel.orderBack(nil)
+        var environment = PanelMotion.Environment()
+        environment.frameAnimationDuration = { _ in 0.34 }
+        let motion = PanelMotion(model: try model(), panel: panel, size: expanded.size, title: { "" },
+                                 environment: environment)
+        defer { motion.stop(); panel.close() }
+
+        motion.toggleBubble(in: area, animated: false)
+        let compact = panel.frame
+        motion.prepareExpansionOnPress()
+        XCTAssertTrue(motion.bubble)
+        XCTAssertFalse(motion.animationInProgress)
+        XCTAssertEqual(panel.frame, expanded)
+        let prepared = try XCTUnwrap(motion.surface.transitionFrame)
+        XCTAssertEqual(prepared.size, compact.size)
+        XCTAssertEqual(prepared.maxX, expanded.width)
+        XCTAssertEqual(prepared.minY, 0)
+
+        motion.cancelExpansionOnPress()
+        XCTAssertEqual(panel.frame, compact)
+        XCTAssertTrue(motion.bubble)
+        XCTAssertNil(motion.surface.transitionFrame)
+
+        motion.prepareExpansionOnPress()
+        motion.toggleBubble(in: area)
+        XCTAssertFalse(motion.bubble)
+        XCTAssertTrue(motion.animationInProgress)
+        XCTAssertEqual(panel.frame, expanded)
+        let first = try XCTUnwrap(motion.surface.transitionFrame)
+        XCTAssertGreaterThan(first.height, compact.height + 1)
+        XCTAssertEqual(first.maxX, expanded.width, accuracy: 0.001)
+        XCTAssertEqual(first.minY, 0, accuracy: 0.001)
+        try await Task.sleep(for: .milliseconds(460))
+        XCTAssertEqual(panel.frame, expanded)
+        XCTAssertFalse(motion.animationInProgress)
+        XCTAssertNil(motion.surface.transitionFrame)
+    }
+
     func testReleasingHiddenFrameDriverCancelsItsTaskWithoutRetainingAnimation() async throws {
         let panel = panel()
         defer { panel.close() }

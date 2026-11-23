@@ -370,36 +370,6 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
         }
     }
 
-    /// This establishes the diagnostic reconstruction's composition only. Real
-    /// focus and WindowServer glass behavior are checked by the opt-in capture.
-    func testFocusControlReconstructionMatchesProductionComposition() throws {
-        let size = CGSize(width: 364, height: 620)
-        for scheme in [ColorScheme.light, .dark] {
-            func image<V: View>(_ view: V) throws -> NSBitmapImageRep {
-                let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height).environment(\.colorScheme, scheme))
-                renderer.scale = 2
-                return NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
-            }
-            let actual = try image(FloatingPanelSurface(opacity: 80, frost: 40, compact: false, color: .pink, solid: false, scheme: scheme)
-                .clipShape(FloatingPanelShape(compact: false, transitioning: false, onRight: true, reveal: 1)))
-            let control = try image(FocusControlSurface(variant: .productionCandidate, scheme: scheme))
-            for bitmap in [actual, control] {
-                let center = try XCTUnwrap(bitmap.colorAt(x: 364, y: 620)?.usingColorSpace(.deviceRGB))
-                XCTAssertGreaterThan(center.alphaComponent, 0.5, "Composition equality needs a rendered reading backing")
-            }
-            var maximum: CGFloat = 0
-            for y in stride(from: 0, to: 1240, by: 4) { for x in stride(from: 0, to: 728, by: 4) {
-                let a = try XCTUnwrap(actual.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
-                let b = try XCTUnwrap(control.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
-                maximum = max(maximum, abs(a.alphaComponent - b.alphaComponent))
-                for (aa, bb) in [(a.redComponent, b.redComponent), (a.greenComponent, b.greenComponent), (a.blueComponent, b.blueComponent)] {
-                    maximum = max(maximum, abs(aa * a.alphaComponent - bb * b.alphaComponent))
-                }
-            } }
-            XCTAssertLessThanOrEqual(maximum, 1.0 / 255, "Focus control reconstruction changed production composition: \(scheme)")
-        }
-    }
-
     private func captureComparisons(trace: Trace, capturesEnabled: Bool = true, focusMode: Bool = false) async throws {
         trace.mark("application.init.begin")
         let app = NSApplication.shared

@@ -3,11 +3,12 @@ import CoreText
 import DotistCore
 import SwiftUI
 
-/// Isolates per-frame inset updates so observing `PanelMotion` does not
-/// re-evaluate `FloatingPanelView.body` on every animation frame.
+/// Only the material and silhouette observe the animation clock. The task
+/// list keeps its expanded layout inside the fixed host.
 @MainActor
-final class PanelSurfaceInsets: ObservableObject {
+final class PanelSurfaceState: ObservableObject {
     @Published var value = EdgeInsets()
+    @Published var transitionFrame: NSRect?
 }
 
 /// All task panels share one motion implementation, with independent window state.
@@ -36,7 +37,7 @@ final class PanelMotion: ObservableObject {
 
     var environment: Environment
     @Published private(set) var bubble = false
-    let surface = PanelSurfaceInsets()
+    let surface = PanelSurfaceState()
     var surfaceInsets: EdgeInsets { surface.value }
     @Published private(set) var hovering = false
     @Published var bubbleOnRight = true
@@ -53,6 +54,25 @@ final class PanelMotion: ObservableObject {
     @Published private(set) var animationInProgress = false
     var expandedSize: NSSize
     private(set) var transitionSize: NSSize
+    private(set) var transitionHost: TransitionHost?
+    private(set) var preparingExpansion = false
+
+    struct TransitionHost {
+        let expanded: NSRect
+        let compact: NSRect
+        let frame: NSRect
+
+        init(expanded: NSRect, compact: NSRect) {
+            self.expanded = expanded
+            self.compact = compact
+            frame = expanded.union(compact)
+        }
+
+        func local(_ rect: NSRect) -> NSRect {
+            NSRect(x: rect.minX - frame.minX, y: frame.maxY - rect.maxY,
+                   width: rect.width, height: rect.height)
+        }
+    }
     private(set) var hoverAnimating = false
     let panel: DotistPanel
     private let model: AppModel
@@ -100,6 +120,7 @@ final class PanelMotion: ObservableObject {
         stopped = true
         frameAnimation?.cancel(); frameAnimation = nil
         hoverClose?.cancel(); hoverClose = nil
+        clearSurfaceTransition()
         pendingHover = nil
         pendingBubbleToggle = false
         hoverAnimating = false
@@ -109,7 +130,7 @@ final class PanelMotion: ObservableObject {
     }
 
     func refreshShadow() {
-        guard !stopped else { return }
+        guard !stopped, panel.hasShadow else { return }
         panel.invalidateShadow()
         // SwiftUI may not have committed its glass/tint change until the next turn.
         DispatchQueue.main.async { [weak self] in
@@ -118,15 +139,45 @@ final class PanelMotion: ObservableObject {
         }
     }
 
+    func prepareExpansionOnPress() {
+        guard !stopped, bubble, !animationInProgress, !hoverAnimating, !hovering,
+              !bubbleMenuOpen, !preparingExpansion, environment.animateFrame == nil,
+              environment.frameAnimationDuration(false) > 0,
+              panel.isVisible, panel.screen != nil,
+              let area = environment.visibleFrame(panel) else { return }
+        let compact = panel.frame
+        let host = TransitionHost(expanded: expandedFrame(from: compact, in: area), compact: compact)
+        preparingExpansion = true
+        transitionHost = host
+        transitionSize = host.expanded.size
+        surface.transitionFrame = host.local(compact)
+        panel.setFrame(host.frame, display: false)
+    }
+
+    func cancelExpansionOnPress() {
+        guard preparingExpansion, let host = transitionHost else { return }
+        panel.setFrame(host.compact, display: false)
+        clearSurfaceTransition()
+    }
+
     func toggleBubble() {
-        guard let area = environment.visibleFrame(panel) else { return }
+        guard let area = environment.visibleFrame(panel) else { cancelExpansionOnPress(); return }
         toggleBubble(in: area)
     }
 
     // A synchronous transition also supports callers without a live display and
     // lets geometry tests exercise the real collapse/expand state changes.
     func toggleBubble(in area: NSRect, animated: Bool = true) {
-        guard !stopped, !animationInProgress else { return }
+        guard !stopped else { return }
+        if animationInProgress {
+            guard let host = transitionHost, let current = surface.transitionFrame else { return }
+            bubble.toggle()
+            prepareSurfaceTransition(compact: bubble)
+            startSurfaceAnimation(from: current, to: host.local(bubble ? host.compact : host.expanded),
+                                  endpoint: bubble ? host.compact : host.expanded,
+                                  duration: animated ? environment.frameAnimationDuration(bubble) : 0)
+            return
+        }
         if hoverAnimating {
             hoverClose?.cancel(); hoverClose = nil
             pendingHover = nil; pendingBubbleToggle = true
@@ -137,10 +188,13 @@ final class PanelMotion: ObservableObject {
             BenchPerf.begin(bubble ? "expand" : "collapse")
         }
         #endif
+        let beganAt = CACurrentMediaTime()
         hoverClose?.cancel(); hoverClose = nil
         panel.makeFirstResponder(nil)
         animationInProgress = true
-        let old = panel.frame
+        let prepared = preparingExpansion ? transitionHost : nil
+        preparingExpansion = false
+        let old = prepared?.compact ?? panel.frame
         let target: NSRect
         if !bubble {
             hoverRequiresExit = true
@@ -156,23 +210,18 @@ final class PanelMotion: ObservableObject {
             panel.styleMask.remove(.resizable)
             bubble = true
         } else {
-            let width = min(expandedSize.width, area.width)
-            let height = min(expandedSize.height, area.height)
-            let center = bubbleOnRight ? old.maxX - 24 : old.minX + 24
-            let right = min(max(center + 24, area.minX + width), area.maxX)
-            let top = min(max(old.midY + 24, area.minY + height), area.maxY)
-            target = NSRect(x: right - width, y: top - height, width: width, height: height)
+            target = expandedFrame(from: old, in: area)
             prepareSurfaceTransition(compact: false)
             transitionSize = target.size
             hovering = false
             bubble = false
         }
-        refreshShadow()
         // Hidden windows have no visible movement to animate, and AppKit can
         // withhold their frame updates/completions even inside NSApplication.run.
         // A controlled test driver explicitly bypasses visibility/display checks.
-        if !animated || (environment.animateFrame == nil && (!panel.isVisible || NSScreen.main == nil)) {
+        if !animated || (environment.animateFrame == nil && (!panel.isVisible || panel.screen == nil)) {
             panel.setFrame(target, display: true)
+            clearSurfaceTransition()
             finishBubbleTransition()
             return
         }
@@ -180,18 +229,52 @@ final class PanelMotion: ObservableObject {
         let complete: @MainActor () -> Void = { [weak self] in
             guard let self, !self.stopped else { return }
             if self.panel.frame != target { self.panel.setFrame(target, display: false) }
+            self.clearSurfaceTransition()
             self.finishBubbleTransition()
         }
         if let animate = environment.animateFrame {
             animate(panel, target, duration, complete)
             return
         }
-        let animation = PanelFrameAnimation(window: panel, target: target, duration: duration) { [weak self] in
-            self?.frameAnimation = nil
-            complete()
+        guard duration > 0 else { complete(); return }
+        let host = TransitionHost(expanded: bubble ? old : target, compact: bubble ? target : old)
+        transitionHost = host
+        surface.transitionFrame = host.local(old)
+        if panel.frame != host.frame { panel.setFrame(host.frame, display: false) }
+        let refreshPeriod = 1 / Double(max(60, panel.screen?.maximumFramesPerSecond ?? 60))
+        let lead = prepared == nil ? 0 : min(refreshPeriod, duration / 4)
+        startSurfaceAnimation(from: host.local(old), to: host.local(target), endpoint: target,
+                              duration: duration, beganAt: beganAt, initialLead: lead)
+    }
+
+    private func expandedFrame(from compact: NSRect, in area: NSRect) -> NSRect {
+        let width = min(expandedSize.width, area.width)
+        let height = min(expandedSize.height, area.height)
+        let center = bubbleOnRight ? compact.maxX - 24 : compact.minX + 24
+        let right = min(max(center + 24, area.minX + width), area.maxX)
+        let top = min(max(compact.midY + 24, area.minY + height), area.maxY)
+        return NSRect(x: right - width, y: top - height, width: width, height: height)
+    }
+
+    private func startSurfaceAnimation(from start: NSRect, to target: NSRect, endpoint: NSRect,
+                                       duration: TimeInterval, beganAt: CFTimeInterval? = nil, initialLead: TimeInterval = 0) {
+        frameAnimation?.cancel()
+        let animation = PanelFrameAnimation(window: panel, target: target, duration: duration, from: start,
+            settleBeforeResize: bubble && panel.frame != endpoint, applyFrame: { [weak self] frame in self?.surface.transitionFrame = frame }) { [weak self] in
+            guard let self, !self.stopped else { return }
+            self.frameAnimation = nil
+            if self.panel.frame != endpoint { self.panel.setFrame(endpoint, display: false) }
+            self.clearSurfaceTransition()
+            self.finishBubbleTransition()
         }
         frameAnimation = animation
-        animation.startMotion()
+        animation.startMotion(beganAt: beganAt, initialLead: initialLead)
+    }
+
+    private func clearSurfaceTransition() {
+        preparingExpansion = false
+        transitionHost = nil
+        surface.transitionFrame = nil
     }
 
     private func prepareSurfaceTransition(compact: Bool) {
@@ -223,7 +306,7 @@ final class PanelMotion: ObservableObject {
     func setHover(_ active: Bool) {
         guard !stopped, !bubbleMenuOpen else { return }
         if !active && !panel.frame.contains(environment.mouseLocation()) { hoverRequiresExit = false }
-        guard bubble, !animationInProgress, let area = environment.visibleFrame(panel) else { return }
+        guard bubble, !animationInProgress, !preparingExpansion, let area = environment.visibleFrame(panel) else { return }
         if active && hoverRequiresExit { return }
         if active && !model.settings.hoverExpand { return }
         if active && environment.pressedMouseButtons() & 1 != 0 { return }
@@ -294,7 +377,7 @@ final class PanelMotion: ObservableObject {
 
     /// The filter changed while collapsed: grow or shrink the strip, ball fixed.
     func refreshBaseWidth() {
-        guard !stopped, bubble, !animationInProgress, !hovering, !hoverAnimating else { return }
+        guard !stopped, bubble, !animationInProgress, !preparingExpansion, !hovering, !hoverAnimating else { return }
         let frame = panel.frame
         let w = baseWidth
         guard abs(frame.width - w) > 0.5 else { return }

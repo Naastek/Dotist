@@ -64,9 +64,8 @@ struct FloatingSurface: View, Animatable {
         let solid = reduceTransparency || contrast == .increased
         let radius = Self.glassCornerRadius(for: size, compact: compact, transitioning: transitioning, solid: solid)
         let width = compact && !transitioning ? base + (size.width - base) * min(1, max(0, reveal)) : size.width
-        let circleBlend = min(1, max(0, (80 - max(width, size.height)) / 32))
         let material = FloatingPanelMaterial(opacity: opacity, frost: frost, compact: compact, color: color,
-                                             cornerRadius: radius, transitioning: transitioning, circleBlend: circleBlend)
+                                             cornerRadius: radius)
             .padding(opticalInset)
             .frame(width: width, height: size.height)
             .frame(width: size.width, height: size.height, alignment: onRight ? .topTrailing : .topLeading)
@@ -108,8 +107,6 @@ struct FloatingPanelMaterial: View {
     let compact: Bool
     let color: DotistGroupColor
     var cornerRadius: CGFloat? = nil
-    var transitioning: Bool = false
-    var circleBlend: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
@@ -118,7 +115,7 @@ struct FloatingPanelMaterial: View {
     var body: some View {
         FloatingPanelSurface(opacity: opacity, frost: frost, compact: compact, color: color,
                              solid: reduceTransparency || contrast == .increased, scheme: scheme,
-                             cornerRadius: cornerRadius, transitioning: transitioning, circleBlend: circleBlend)
+                             cornerRadius: cornerRadius)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: color)
     }
 }
@@ -133,8 +130,6 @@ struct FloatingPanelSurface: View {
     let solid: Bool
     let scheme: ColorScheme
     var cornerRadius: CGFloat? = nil
-    var transitioning: Bool = false
-    var circleBlend: CGFloat = 0
 
     var body: some View {
         if solid {
@@ -145,63 +140,95 @@ struct FloatingPanelSurface: View {
         } else if compact, let glassDebug {
             GlassDebugOpticalSurface(parameters: glassDebug, color: color, scheme: scheme)
         } else {
-            // Keep the backdrop and interior stable while the window resizes.
-            // The light circle gets a narrower sheen and extra frost to offset
-            // the stronger backdrop color at its curved edge.
             let inset: CGFloat = compact ? 0 : ExpandedReadingMaterial.opticalClearance
-            let radius = cornerRadius ?? (compact ? 24 : DotistDesign.windowCornerRadius - ExpandedReadingMaterial.opticalClearance)
-            let opticalShape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+            let radius = cornerRadius ?? (compact ? 24 : DotistDesign.windowCornerRadius - inset)
             let amount = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
-            let lightCircle = scheme == .light ? Double(circleBlend) : 0
-            ZStack {
-                ZStack {
-                    FloatingGlassBackdrop()
-                        .clipShape(opticalShape.inset(by: 0.5))
-                    GlassInteriorPaint(opacity: opacity, frost: frost, color: color, scheme: scheme,
-                        shape: opticalShape.inset(by: 0.75), frostScale: GlassTintMaterial.expandedFrostScale + 0.25 * lightCircle)
-                }
+            NativeFloatingGlass(cornerRadius: radius, color: color, scheme: scheme,
+                density: amount, frost: Double(frost) / 100 * GlassTintMaterial.expandedFrostScale)
                 .opacity(amount)
                 .padding(inset)
-                FloatingGlassSheen(cornerRadius: radius, scheme: scheme, amount: amount, lightCircle: lightCircle)
-                    .padding(inset)
-                GlassEdge(cornerRadius: radius, scheme: scheme, transitioning: transitioning)
-                    .padding(inset)
-                GlassContour(cornerRadius: radius, scheme: scheme)
-                    .padding(inset)
-            }
-            .background {
-                CompactGlassLiftShadow(cornerRadius: radius, scheme: scheme)
-                    .padding(inset)
-            }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
     }
 }
 
-private struct FloatingGlassSheen: View {
+/// One system material persists through the panel's three geometries. AppKit
+/// owns refraction, the optical rim and the user's Liquid Glass appearance.
+private struct NativeFloatingGlass: NSViewRepresentable {
     let cornerRadius: CGFloat
+    let color: DotistGroupColor
     let scheme: ColorScheme
-    let amount: Double
-    let lightCircle: Double
+    let density: Double
+    let frost: Double
 
-    var body: some View {
-        GeometryReader { geometry in
-            let dark = scheme == .dark
-            let height = max(1, Double(geometry.size.height))
-            let top = min(0.5, (dark ? 18 : 20 - 10 * lightCircle) / height)
-            let bottom = min(0.5, (dark ? 15 : 16) / height)
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .inset(by: 0.5)
-                .fill(LinearGradient(stops: [
-                    .init(color: .white.opacity((dark ? 0.22 : 0.49) * amount), location: 0),
-                    .init(color: .white.opacity((dark ? 0.085 : 0.20) * amount), location: top * 0.24),
-                    .init(color: .clear, location: top),
-                    .init(color: .clear, location: 1 - bottom),
-                    .init(color: .white.opacity((dark ? 0.045 : 0.075) * amount), location: 1 - bottom * 0.30),
-                    .init(color: .white.opacity((dark ? 0.12 : 0.22) * amount), location: 1)
-                ], startPoint: UnitPoint(x: 0.49, y: 0), endPoint: UnitPoint(x: 0.51, y: 1)))
+    final class GlassView: NSGlassEffectView {
+        let interior = GlassInteriorView()
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            contentView = interior
+            style = .regular
         }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+
+        required init?(coder: NSCoder) { nil }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    // The paint follows AppKit's glass bounds during resize. There is no
+    // second SwiftUI hosting tree to lay out for each window frame.
+    final class GlassInteriorView: NSView {
+        let paper = CALayer()
+        let tint = CALayer()
+        var radius: CGFloat = 0 {
+            didSet { if radius != oldValue { needsLayout = true } }
+        }
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            wantsLayer = true
+            paper.cornerCurve = .continuous
+            tint.cornerCurve = .continuous
+            layer?.addSublayer(paper)
+            layer?.addSublayer(tint)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func layout() {
+            super.layout()
+            let rect = bounds.insetBy(dx: 0.75, dy: 0.75)
+            let rounded = max(0, min(radius - 0.75, min(rect.width, rect.height) / 2))
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            paper.frame = rect
+            tint.frame = rect
+            paper.cornerRadius = rounded
+            tint.cornerRadius = rounded
+            CATransaction.commit()
+        }
+    }
+
+    func makeNSView(context: Context) -> GlassView {
+        let view = GlassView(frame: .zero)
+        updateNSView(view, context: context)
+        return view
+    }
+
+    func updateNSView(_ view: GlassView, context: Context) {
+        if view.cornerRadius != cornerRadius { view.cornerRadius = cornerRadius }
+        view.interior.radius = cornerRadius
+        let materialTint = color == .none ? nil : NSColor(DotistTheme.tint(color, scheme))
+        if view.tintColor != materialTint { view.tintColor = materialTint }
+        let paper = NSColor(GlassTintMaterial.neutral(scheme)).withAlphaComponent(1 - (1 - density) * (1 - frost))
+        let tint = NSColor(DotistTheme.swatch(color)).withAlphaComponent(
+            color == .none ? 0 : (scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if view.interior.paper.backgroundColor != paper.cgColor { view.interior.paper.backgroundColor = paper.cgColor }
+        if view.interior.tint.backgroundColor != tint.cgColor { view.interior.tint.backgroundColor = tint.cgColor }
+        CATransaction.commit()
     }
 }
 
@@ -212,12 +239,11 @@ private struct GlassInteriorPaint<S: Shape>: View {
     let scheme: ColorScheme
     let shape: S
     var amount: Double = 1
-    var frostScale = GlassTintMaterial.expandedFrostScale
 
     var body: some View {
         let pigment = GlassTintMaterial.neutral(scheme)
         shape.fill(pigment.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false) * amount))
-            .overlay(shape.fill(pigment.opacity(Double(frost) / 100 * frostScale * amount)))
+            .overlay(shape.fill(pigment.opacity(Double(frost) / 100 * GlassTintMaterial.expandedFrostScale * amount)))
             .overlay(shape.fill(DotistTheme.swatch(color).opacity((scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint) * amount)))
             .allowsHitTesting(false)
             .accessibilityHidden(true)
