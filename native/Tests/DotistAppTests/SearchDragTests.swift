@@ -21,7 +21,7 @@ final class SearchDragTests: XCTestCase {
         let window = DotistPanel(contentRect: NSRect(origin: NSPoint(x: 200, y: 200), size: size),
             styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.isMovableByWindowBackground = true
+        window.isMovableByWindowBackground = false
         let motion = PanelMotion(model: model, panel: window, size: size, title: { model.bubbleTitle })
         defer { motion.stop(); window.close(); try? FileManager.default.removeItem(at: directory) }
         let container = NSView(frame: NSRect(origin: .zero, size: size))
@@ -39,7 +39,10 @@ final class SearchDragTests: XCTestCase {
         hosting.layoutSubtreeIfNeeded()
 
         XCTAssertFalse(motion.bubble)
+        // The expanded toolbar and task-list backdrop share the AppKit drag
+        // view. Only the warmed bubble keeps the compact 48 pt bounds.
         let pointers = descendants(container).compactMap { $0 as? BubblePointerView }
+            .filter { $0.bounds.size == NSSize(width: 48, height: 48) }
         XCTAssertEqual(pointers.count, 1, "The real bubble should remain mounted and warm")
         for pointer in pointers {
             var ancestor = pointer.superview
