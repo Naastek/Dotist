@@ -189,9 +189,11 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
             patch.alwaysOnTop = true
             model.updateSettings(patch)
 
-            let usePatternBackdrop = ProcessInfo.processInfo.environment["DOTIST_GLASS_BACKDROP"] == "pattern"
+            let backdrop = ProcessInfo.processInfo.environment["DOTIST_GLASS_BACKDROP"]
+            let usePatternBackdrop = backdrop == "pattern"
+            let useWarmBackdrop = backdrop == "warm"
             let backdropView = ZStack {
-                (scheme == .dark ? Color(red: 0.14, green: 0.16, blue: 0.20) : Color(red: 0.24, green: 0.27, blue: 0.33))
+                (useWarmBackdrop ? Color(red: 0.95, green: 0.93, blue: 0.90) : scheme == .dark ? Color(red: 0.14, green: 0.16, blue: 0.20) : Color(red: 0.24, green: 0.27, blue: 0.33))
                 if usePatternBackdrop {
                     HStack(spacing: 18) {
                         ForEach(0..<16, id: \.self) { index in
@@ -283,7 +285,7 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
                 guard active ? (app.isActive && panel.isKeyWindow) : (!app.isActive && !panel.isKeyWindow) else {
                     throw CompactGlassDesktopEvidence.Failure("Could not reach active=\(active) state (appActive=\(app.isActive), key=\(panel.isKeyWindow))")
                 }
-                host.layoutSubtreeIfNeeded()
+                panel.contentView?.layoutSubtreeIfNeeded()
                 panel.displayIfNeeded()
                 CATransaction.flush()
                 spin(0.35)
@@ -332,10 +334,12 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
                 return (0.2126 * Double(c.redComponent) + 0.7152 * Double(c.greenComponent) + 0.0722 * Double(c.blueComponent)) * 255.0
             }
 
-            func measure(_ label: String, active a: NSBitmapImageRep, inactive b: NSBitmapImageRep, marginPx: Int = 20) -> String {
+            func measure(_ label: String, active a: NSBitmapImageRep, inactive b: NSBitmapImageRep) -> String {
                 let w = a.pixelsWide, h = a.pixelsHigh
-                let x0 = marginPx, x1 = w - marginPx - 1
-                let y0 = marginPx, y1 = h - marginPx - 1
+                let scale = CGFloat(w) / (panel.frame.width + 20)
+                let opticalInset = Int((10 + FloatingSurface.compactOpticalInset) * scale + 1)
+                let x0 = opticalInset, x1 = w - opticalInset - 1
+                let y0 = opticalInset, y1 = h - opticalInset - 1
                 let mx = w / 2, my = h / 2
                 func peak(_ rep: NSBitmapImageRep, _ xs: ClosedRange<Int>, _ ys: ClosedRange<Int>) -> Double {
                     var m = 0.0
@@ -350,6 +354,12 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
                 let leftB = peak(b, x0...(x0 + 10), (my - 4)...(my + 4))
                 let rightA = peak(a, (x1 - 10)...x1, (my - 4)...(my + 4))
                 let rightB = peak(b, (x1 - 10)...x1, (my - 4)...(my + 4))
+                if usePatternBackdrop || useWarmBackdrop {
+                    for (edge, focused, unfocused) in [("top", topA, topB), ("bottom", botA, botB),
+                                                        ("left", leftA, leftB), ("right", rightA, rightB)] {
+                        XCTAssertEqual(focused, unfocused, accuracy: 1, "\(label) \(edge) reflection changed on focus switch")
+                    }
+                }
                 return String(format: "%-13@ | top %5.1f -> %5.1f (%+5.1f) | bot %5.1f -> %5.1f (%+5.1f) | left %5.1f -> %5.1f (%+5.1f) | right %5.1f -> %5.1f (%+5.1f)",
                     label, topA, topB, topB - topA, botA, botB, botB - botA, leftA, leftB, leftB - leftA, rightA, rightB, rightB - rightA)
             }
@@ -391,6 +401,62 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
             let (_, stripInactive) = try capturePanel(name: "\(schemeName)-strip-inactive")
             try stitch(active: stripActive, inactive: stripInactive, vertical: true, to: outDir.appendingPathComponent("\(schemeName)-strip-compare.png"))
             reportLines.append(measure("\(schemeName)-strip", active: stripActive, inactive: stripInactive))
+
+            if useWarmBackdrop {
+                // A small ink-free patch 8 pt left of the common screen center
+                // samples the same location in all three production forms.
+                func centerRGB(_ image: NSBitmapImageRep, formWidth: CGFloat) throws -> [CGFloat] {
+                    let scale = CGFloat(image.pixelsWide) / (formWidth + 20)
+                    let x = image.pixelsWide / 2 - Int(8 * scale), y = image.pixelsHigh / 2
+                    var sum: [CGFloat] = [0, 0, 0]
+                    for sy in (y - 1)...(y + 1) {
+                        for sx in (x - 1)...(x + 1) {
+                            let c = try XCTUnwrap(image.colorAt(x: sx, y: sy)?.usingColorSpace(.sRGB))
+                            sum[0] += c.redComponent
+                            sum[1] += c.greenComponent
+                            sum[2] += c.blueComponent
+                        }
+                    }
+                    return sum.map { $0 / 9 * 255 }
+                }
+
+                let specimens = [("card", cardSize.width, cardActive, cardInactive),
+                                 ("button", CGFloat(48), btnActive, btnInactive),
+                                 ("strip", stripSize.width, stripActive, stripInactive)]
+                let card = try centerRGB(cardActive, formWidth: cardSize.width)
+                for (name, width, focused, unfocused) in specimens {
+                    let a = try centerRGB(focused, formWidth: width)
+                    let b = try centerRGB(unfocused, formWidth: width)
+                    for index in a.indices {
+                        XCTAssertEqual(a[index], b[index], accuracy: 1, "\(schemeName) \(name) center changed with focus")
+                        XCTAssertEqual(a[index], card[index], accuracy: 3, "\(schemeName) \(name) center differs from the expanded card")
+                    }
+                    reportLines.append("\(schemeName)-\(name) center RGB \(a.map { Int($0.rounded()) })")
+                }
+            }
+
+            if ProcessInfo.processInfo.environment["DOTIST_GLASS_LAYER_PROBE"] == "1" {
+                panel.setFrame(NSRect(origin: cardOrigin, size: cardSize), display: true)
+                let radius = DotistDesign.windowCornerRadius - ExpandedReadingMaterial.opticalClearance
+                let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+                let amount = Double(model.settings.opacity) / 100
+                let reading = ExpandedReadingMaterial(opacity: model.settings.opacity, frost: model.settings.frost,
+                    color: .none, scheme: scheme, cornerRadius: radius)
+                let specimens: [(String, AnyView)] = [
+                    ("bare-material", AnyView(FloatingGlassBackdrop().clipShape(shape))),
+                    ("masked-material", AnyView(FloatingGlassBackdrop().clipShape(shape).opacity(amount))),
+                    ("reading-only", AnyView(reading.compositingGroup().opacity(amount)))
+                ]
+                for (label, specimen) in specimens {
+                    let probeHost = NSHostingView(rootView: specimen
+                        .frame(width: cardSize.width, height: cardSize.height).environment(\.colorScheme, scheme))
+                    probeHost.sizingOptions = []
+                    panel.contentView = probeHost
+                    probeHost.layoutSubtreeIfNeeded()
+                    try setFocus(active: true)
+                    _ = try capturePanel(name: "\(schemeName)-\(label)")
+                }
+            }
         }
 
         let summary = reportLines.joined(separator: "\n") + "\n"

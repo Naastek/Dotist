@@ -47,17 +47,19 @@ final class ExpandedOpacityContractTests: XCTestCase {
         }
     }
 
-    /// Same full-background reference as the existing pre-edge contract, now
-    /// exercised at intermediate opacity and with independent foreground ink.
-    func testNativeWindowCompositionMatchesLegacyCenterAndKeepsTextOpaque() async throws {
+    /// Exercise the center composition at intermediate opacity with independent foreground ink.
+    func testNativeWindowCompositionHonorsCenterOpacityAndKeepsTextOpaque() async throws {
         _ = NSApplication.shared
         let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
         for scheme in [ColorScheme.light, .dark] {
+            let pigment = GlassTintMaterial.neutral(scheme)
             for opacity: UInt8 in [0, 4, 38, 80, 95, 100] {
                 let amount = Double(opacity) / 100
-                let control = Color.clear.glassEffect(.regular.tint(DotistTheme.tint(.pink, scheme)), in: shape)
-                    .overlay(DotistDesign.paper.opacity(amount).overlay(DotistDesign.paper.opacity(0.4 * 0.12)))
+                let control = FloatingGlassBackdrop()
+                    .overlay(shape.fill(DotistTheme.tint(.pink, scheme)))
+                    .overlay(pigment.opacity(amount).overlay(pigment.opacity(0.4 * 0.12)))
                     .overlay(DotistTheme.swatch(.pink).opacity(scheme == .dark ? 0.18 : 0.16))
+                    .compositingGroup()
                     .opacity(amount).clipShape(shape)
                     .frame(width: 300, height: 120).environment(\.colorScheme, scheme)
                 let reference = NativeRenderingFixture(control, size: size)
@@ -76,10 +78,10 @@ final class ExpandedOpacityContractTests: XCTestCase {
                 for (x, y) in [(60, 25), (150, 25), (240, 95)] {
                     let a = try XCTUnwrap(actual.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
                     let b = try XCTUnwrap(expected.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
-                    XCTAssertEqual(a.alphaComponent, b.alphaComponent, accuracy: 0.015, "Legacy center alpha at \(scheme), opacity=\(opacity)")
+                    XCTAssertEqual(a.alphaComponent, b.alphaComponent, accuracy: 0.015, "Center alpha at \(scheme), opacity=\(opacity)")
                     for (aa, bb) in [(a.redComponent, b.redComponent), (a.greenComponent, b.greenComponent), (a.blueComponent, b.blueComponent)] {
                         XCTAssertEqual(aa * a.alphaComponent, bb * b.alphaComponent, accuracy: 0.015,
-                            "Legacy center pigment at \(scheme), opacity=\(opacity)")
+                            "Center pigment at \(scheme), opacity=\(opacity)")
                     }
                 }
                 var maxInk: CGFloat = 0

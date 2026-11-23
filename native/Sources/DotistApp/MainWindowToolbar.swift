@@ -28,7 +28,7 @@ extension MainWindow {
             }
             if !primary, let close { toolbarButton("xmark", label: model.text("关闭面板"), action: close) }
             toolbarItem(.collapse)
-        }.padding(.leading, 16).padding(.trailing, 10).frame(height: 44).background(WindowDragArea())
+        }.padding(.leading, 16).padding(.trailing, 10).frame(height: 44).background(FloatingWindowDragArea())
     }
 
     /// A control whose state differs from the default stays visible even when hover-only.

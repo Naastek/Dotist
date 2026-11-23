@@ -66,8 +66,8 @@ struct FloatingSurfaceClipShape: Shape {
     }
 }
 
-/// The compact surface uses native glass directly. Expanded reading surfaces
-/// retain their independently configured tint density, frost and background opacity.
+/// Compact glass has a fixed density. The expanded reading surface responds
+/// to tint, frost and background opacity settings.
 struct FloatingPanelMaterial: View {
     let opacity: UInt8
     let frost: UInt8
@@ -110,30 +110,39 @@ struct FloatingPanelSurface: View {
                 // while the optical band and reflection keep their strength.
                 let radius = DotistDesign.windowCornerRadius - ExpandedReadingMaterial.opticalClearance
                 let opticalShape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-                let bleed = GlassTintMaterial.nativeRimBleed
-                let glassShape = RoundedRectangle(cornerRadius: radius + bleed, style: .continuous)
                 let amount = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
                 ZStack {
-                    Color.clear
-                        .background {
-                            Color.clear
-                                .glassEffect(.regular.tint(DotistTheme.tint(color, scheme)), in: glassShape)
-                                .padding(-bleed)
-                        }
-                        .mask {
-                            // alpha = 1 at the rim, amount in the interior. Mask
-                            // clips the oversized native glass rim outside opticalShape.
-                            opticalShape.fill(.white).overlay {
-                                ExpandedReadingMaterial.interiorMask(cornerRadius: radius)
-                                    .opacity(1 - amount)
-                                    .blendMode(.destinationOut)
-                            }.compositingGroup()
-                        }
+                    ZStack {
+                        FloatingGlassBackdrop()
+                            .overlay(opticalShape.fill(DotistTheme.tint(color, scheme)))
+                            .clipShape(opticalShape)
+                        ExpandedReadingMaterial(opacity: opacity, frost: frost, color: color, scheme: scheme, cornerRadius: radius)
+                    }
+                    .padding(ExpandedReadingMaterial.opticalClearance)
+                    .mask {
+                        // alpha = 1 at the rim, amount in the interior. Masking the
+                        // combined backdrop + reading planes once honors the opacity
+                        // budget without double-compounding alpha in the center.
+                        Color.white.overlay {
+                            ExpandedReadingMaterial.interiorMask(cornerRadius: radius)
+                                .padding(ExpandedReadingMaterial.opticalClearance)
+                                .opacity(1 - amount)
+                                .blendMode(.destinationOut)
+                        }.compositingGroup()
+                    }
+                    LinearGradient(stops: [
+                        .init(color: .white.opacity((scheme == .dark ? 0.10 : 0.22) * amount), location: 0),
+                        .init(color: .white.opacity(0), location: 1)
+                    ], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 8)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .clipShape(opticalShape)
                         .padding(ExpandedReadingMaterial.opticalClearance)
-                    ExpandedReadingMaterial(opacity: opacity, frost: frost, color: color, scheme: scheme, cornerRadius: radius)
-                        .applyingBackgroundOpacity(amount)
-                        .padding(ExpandedReadingMaterial.opticalClearance)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                     GlassEdge(cornerRadius: radius, compact: false, scheme: scheme)
+                        .padding(ExpandedReadingMaterial.opticalClearance)
+                    GlassContour(cornerRadius: radius, scheme: scheme)
                         .padding(ExpandedReadingMaterial.opticalClearance)
                 }
             }
@@ -172,9 +181,10 @@ struct ExpandedReadingMaterial: View {
 
     private func paint(backgroundOpacity amount: Double) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let pigment = GlassTintMaterial.neutral(scheme)
         return ZStack {
-            shape.fill(DotistDesign.paper.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false) * amount))
-            shape.fill(DotistDesign.paper.opacity(Double(frost) / 100 * GlassTintMaterial.expandedFrostScale * amount))
+            shape.fill(pigment.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false) * amount))
+            shape.fill(pigment.opacity(Double(frost) / 100 * GlassTintMaterial.expandedFrostScale * amount))
             shape.fill(DotistTheme.swatch(color).opacity((scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint) * amount))
         }
         .mask {

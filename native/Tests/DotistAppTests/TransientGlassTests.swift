@@ -88,8 +88,7 @@ final class TransientGlassTests: XCTestCase {
                 let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
                 let reference = try bitmap(ZStack {
                     Color.white
-                    Color.clear.glassEffect(.regular, in: shape).environment(\.appearsActive, true)
-                    if scheme == .dark { shape.fill(Color.black.opacity(0.4)) }
+                    shape.fill(GlassTintMaterial.neutral(scheme).opacity(GlassTintMaterial.compactDensity))
                 }.frame(width: CGFloat(width), height: 48), scheme: scheme)
                 for (opacity, frost): (UInt8, UInt8) in [(8, 4), (60, 40), (100, 100)] {
                     for active in [false, true] {
@@ -102,7 +101,7 @@ final class TransientGlassTests: XCTestCase {
                         let a = try XCTUnwrap(actual.colorAt(x: width, y: 48)?.usingColorSpace(.sRGB))
                         let b = try XCTUnwrap(reference.colorAt(x: width, y: 48)?.usingColorSpace(.sRGB))
                         XCTAssertEqual(a.redComponent, b.redComponent, accuracy: 0.025,
-                            "Compact center must match the regular-glass composition; inherited active=\(active)")
+                            "Compact center must keep its calibrated tint density; inherited active=\(active)")
                     }
                 }
             }
@@ -213,8 +212,8 @@ final class TransientGlassTests: XCTestCase {
                         let image = try await fixture.capture(scale: 2)
                         fixture.close()
                         let reference = NativeRenderingFixture(ZStack {
-                            Color.clear.glassEffect(.regular, in: .rect(cornerRadius: 24)).environment(\.appearsActive, true)
-                            if scheme == .dark { RoundedRectangle(cornerRadius: 24, style: .continuous).fill(.black.opacity(0.4)) }
+                            FloatingGlassBackdrop()
+                            GlassTintMaterial.neutral(scheme).opacity(GlassTintMaterial.compactDensity)
                         }.frame(width: 260, height: 48).environment(\.colorScheme, scheme), size: CGSize(width: 260, height: 48))
                         let referenceImage = try await reference.capture(scale: 2)
                         reference.close()

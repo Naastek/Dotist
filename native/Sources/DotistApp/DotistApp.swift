@@ -58,6 +58,11 @@ final class DotistHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+struct FloatingWindowDragArea: NSViewRepresentable {
+    func makeNSView(context: Context) -> BubblePointerView { BubblePointerView() }
+    func updateNSView(_ view: BubblePointerView, context: Context) {}
+}
+
 struct WindowDragArea: View {
     var body: some View {
         Color.clear.contentShape(Rectangle()).gesture(WindowDragGesture()).allowsWindowActivationEvents()
@@ -137,7 +142,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         // .stationary keeps the panel in place when "click wallpaper to reveal desktop" slides ordinary windows aside.
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
         panel.level = model.settings.alwaysOnTop ? .floating : .normal
-        panel.isMovableByWindowBackground = true
+        panel.isMovableByWindowBackground = false
         panel.delegate = self
         if model.settings.theme == "light" { panel.appearance = NSAppearance(named: .aqua) }
         if model.settings.theme == "dark" { panel.appearance = NSAppearance(named: .darkAqua) }
@@ -321,6 +326,21 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         // Only a user's drag changes the preferred placement. Display rearrangement is temporary.
         guard NSEvent.pressedMouseButtons & 1 != 0 || userMoveInProgress else { return }
         userMoveInProgress = true
+        // Follow the pointer's display so adjoining monitors remain reachable.
+        let pointer = NSEvent.mouseLocation
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(pointer) }) ?? window.screen {
+            let area = screen.visibleFrame
+            let frame = window.frame
+            // Resting tabs are a child window to the left of the card.
+            let tabInset = motion.bubble ? 0 : SideTabGeometry.selectedWidth
+            let rightLimit = max(area.minX, area.maxX - frame.width)
+            let leftLimit = min(rightLimit, area.minX + tabInset)
+            let origin = NSPoint(
+                x: min(max(frame.minX, leftLimit), rightLimit),
+                y: min(max(frame.minY, area.minY), max(area.minY, area.maxY - frame.height))
+            )
+            if origin != frame.origin { window.setFrameOrigin(origin) }
+        }
         moveCheck?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.finishMove() }
         moveCheck = work

@@ -143,27 +143,40 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
         let variant: Variant
         let scheme: ColorScheme
         var body: some View {
-            let radius: CGFloat = 18
-            let native = Color.clear.glassEffect(.regular.tint(DotistTheme.tint(.pink, scheme)),
-                in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+            let clearance = ExpandedReadingMaterial.opticalClearance
+            let radius = DotistDesign.windowCornerRadius - clearance
+            let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+            let amount = 0.8
+            let backdrop = FloatingGlassBackdrop()
+                .overlay(shape.fill(DotistTheme.tint(.pink, scheme)))
+                .clipShape(shape)
+            let background = ZStack {
+                backdrop
+                ExpandedReadingMaterial(opacity: 80, frost: 40, color: .pink, scheme: scheme, cornerRadius: radius)
+            }.padding(clearance)
             ZStack {
                 if variant == .focusNativeOnly {
-                    native.padding(2)
+                    backdrop.padding(clearance)
                 } else {
                     if variant == .focusUniformNativeOpacity {
-                        native.opacity(0.8).padding(2)
+                        background.opacity(amount)
                     } else {
-                        native.padding(2).mask {
+                        background.mask {
                             Color.white.overlay {
                                 ExpandedReadingMaterial.interiorMask(cornerRadius: radius)
-                                    .padding(2).opacity(0.2).blendMode(.destinationOut)
+                                    .padding(clearance).opacity(1 - amount).blendMode(.destinationOut)
                             }.compositingGroup()
                         }
                     }
-                    ExpandedReadingMaterial(opacity: 80, frost: 40, color: .pink, scheme: scheme, cornerRadius: radius)
-                        .applyingBackgroundOpacity(0.8).padding(2)
                     if variant != .focusNoManualEdge {
-                        GlassEdge(cornerRadius: radius, compact: false, scheme: scheme).padding(2)
+                        LinearGradient(colors: [.white.opacity((scheme == .dark ? 0.10 : 0.22) * amount), .clear],
+                            startPoint: .top, endPoint: .bottom)
+                            .frame(height: 8)
+                            .frame(maxHeight: .infinity, alignment: .top)
+                            .clipShape(shape)
+                            .padding(clearance)
+                        GlassEdge(cornerRadius: radius, compact: false, scheme: scheme).padding(clearance)
+                        GlassContour(cornerRadius: radius, scheme: scheme).padding(clearance)
                     }
                 }
             }

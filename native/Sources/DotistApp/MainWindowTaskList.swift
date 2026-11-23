@@ -39,7 +39,7 @@ extension MainWindow {
                             // windows without letting it size the section stack.
                             .onPreferenceChange(TaskEmptyStateHeightKey.self) { emptyStateHeight = $0 }
                             .padding(.horizontal, 16)
-                            .background(WindowDragArea())
+                            .background(FloatingWindowDragArea())
                             .background(TaskReorderScrollBridge(runtime: reorderRuntime))
                     }
                 .background(TaskPickupFrameProbe(runtime: reorderRuntime, role: .viewport))
