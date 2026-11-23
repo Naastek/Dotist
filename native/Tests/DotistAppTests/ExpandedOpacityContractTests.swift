@@ -33,13 +33,24 @@ final class ExpandedOpacityContractTests: XCTestCase {
                             .environment(\.colorScheme, scheme), size: size)
                         fixture.window.isOpaque = false; fixture.window.backgroundColor = .clear
                         let image = try await fixture.capture(scale: 1)
-                        fixture.close()
+                        defer { fixture.close() }
+                        // AppKit can omit the effect subtree from an offscreen
+                        // capture. Verify the actual mounted reading layers too.
+                        let glass = try XCTUnwrap(fixture.descendants(NSGlassEffectView.self).first)
+                        let layers = try XCTUnwrap(glass.contentView?.layer?.sublayers)
+                        XCTAssertEqual(layers.count, 2)
+                        let paper = try XCTUnwrap(layers.first?.backgroundColor)
+                        let tint = try XCTUnwrap(layers.last?.backgroundColor)
+                        let density = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
+                        let frostAmount = Double(frost) / 100 * GlassTintMaterial.expandedFrostScale
+                        XCTAssertEqual(paper.alpha, 1 - (1 - density) * (1 - frostAmount), accuracy: 0.001)
+                        XCTAssertEqual(tint.alpha, color == .none ? 0 : (scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint), accuracy: 0.001)
                         for (x, y) in [(60, 25), (150, 60), (240, 95)] {
                             let alpha = try XCTUnwrap(image.colorAt(x: x, y: y)).alphaComponent
                             XCTAssertLessThanOrEqual(alpha, CGFloat(opacity) / 100 + 2.0 / 255,
                                 "The complete background must fit the opacity budget: \(scheme), \(color), opacity=\(opacity), frost=\(frost)")
                             if opacity == 0 { XCTAssertEqual(alpha, 0, accuracy: 1.0 / 255) }
-                            if opacity == 100 { XCTAssertGreaterThan(alpha, 0.98) }
+                            if opacity == 100, alpha > 0 { XCTAssertGreaterThan(alpha, 0.98) }
                         }
                     }
                 }

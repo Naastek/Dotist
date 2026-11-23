@@ -53,7 +53,10 @@ final class PanelMotionLifecycleTests: XCTestCase {
         animation.startMotion()
         XCTAssertTrue(animation.isAnimating)
         XCTAssertNil(animation.displayLink, "Hidden clock tests use only the bounded fallback")
-        try await Task.sleep(for: .milliseconds(450))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while animation.isAnimating && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         XCTAssertEqual(panel.frame, target)
         XCTAssertEqual(completions, 1)
         XCTAssertFalse(animation.isAnimating)

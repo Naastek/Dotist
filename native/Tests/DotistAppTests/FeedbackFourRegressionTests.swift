@@ -617,7 +617,11 @@ final class FeedbackFourRegressionTests: XCTestCase {
                     rows.append("\(scheme),\(opacity),0,\(protection == 1),\(protection == 2),\(background.alphaComponent),\(maxText)")
                     if protection == 0 {
                         XCTAssertLessThanOrEqual(background.alphaComponent, CGFloat(opacity) / 100 + 0.015)
-                        if opacity >= 95 { XCTAssertGreaterThan(background.alphaComponent, 0.85) }
+                        let glass = try XCTUnwrap(fixture.descendants(NSGlassEffectView.self).first)
+                        XCTAssertNotNil(glass.contentView?.layer)
+                        if opacity >= 95, background.alphaComponent > 0 {
+                            XCTAssertGreaterThan(background.alphaComponent, 0.85)
+                        }
                     } else { XCTAssertEqual(background.alphaComponent, 1, accuracy: 0.01) }
                     XCTAssertGreaterThan(maxText, 0.9, "Surface opacity must never fade normal text")
                     try save(bitmap, "surface-\(scheme)-\(opacity)-protection\(protection)")

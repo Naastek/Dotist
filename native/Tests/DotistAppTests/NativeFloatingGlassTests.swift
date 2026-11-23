@@ -12,6 +12,8 @@ final class NativeFloatingGlassTests: XCTestCase {
             FloatingSurface(opacity: 82, frost: 68, compact: compact, transitioning: transitioning,
                 onRight: true, size: size, reveal: reveal, color: .orange)
             .frame(width: size.width, height: size.height)
+            .environment(\._accessibilityReduceTransparency, false)
+            .environment(\._colorSchemeContrast, .standard)
         }
         let fixture = NativeRenderingFixture(surface(size, compact: false, reveal: 0), size: size)
         defer { fixture.close() }
