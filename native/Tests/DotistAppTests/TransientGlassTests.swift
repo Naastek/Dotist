@@ -88,7 +88,7 @@ final class TransientGlassTests: XCTestCase {
                 let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
                 let reference = try bitmap(ZStack {
                     Color.white
-                    shape.fill(GlassTintMaterial.neutral(scheme).opacity(GlassTintMaterial.compactDensity))
+                    shape.fill(GlassTintMaterial.neutral(scheme).opacity(GlassTintMaterial.compactDensity(scheme)))
                 }.frame(width: CGFloat(width), height: 48), scheme: scheme)
                 for (opacity, frost): (UInt8, UInt8) in [(8, 4), (60, 40), (100, 100)] {
                     for active in [false, true] {
@@ -213,7 +213,7 @@ final class TransientGlassTests: XCTestCase {
                         fixture.close()
                         let reference = NativeRenderingFixture(ZStack {
                             FloatingGlassBackdrop()
-                            GlassTintMaterial.neutral(scheme).opacity(GlassTintMaterial.compactDensity)
+                            GlassTintMaterial.neutral(scheme).opacity(GlassTintMaterial.compactDensity(scheme))
                         }.frame(width: 260, height: 48).environment(\.colorScheme, scheme), size: CGSize(width: 260, height: 48))
                         let referenceImage = try await reference.capture(scale: 2)
                         reference.close()

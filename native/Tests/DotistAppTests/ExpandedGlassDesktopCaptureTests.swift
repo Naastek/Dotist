@@ -169,9 +169,11 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
                         }
                     }
                     if variant != .focusNoManualEdge {
-                        LinearGradient(colors: [.white.opacity((scheme == .dark ? 0.10 : 0.22) * amount), .clear],
-                            startPoint: .top, endPoint: .bottom)
-                            .frame(height: 8)
+                        LinearGradient(stops: [
+                            .init(color: .white.opacity((scheme == .dark ? 0.14 : 0.18) * amount), location: 0),
+                            .init(color: .white.opacity(0), location: 1)
+                        ], startPoint: .top, endPoint: .bottom)
+                            .frame(height: scheme == .dark ? 10 : 8)
                             .frame(maxHeight: .infinity, alignment: .top)
                             .clipShape(shape)
                             .padding(clearance)

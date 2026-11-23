@@ -6,7 +6,6 @@ import SwiftUI
 enum GlassTintMaterial {
     static let accessibilityTint = 0.08
     static let compactTintScale = 1.0 / 3
-    static let compactDensity = 0.53
     static let expandedLightTint = 0.16
     static let expandedDarkTint = 0.18
     static let expandedFrostScale = 0.12
@@ -14,10 +13,16 @@ enum GlassTintMaterial {
     static let tabSelectedTint = 0.30
     static let tabHighContrastSelectedTint = 0.42
 
+    /// Calibrated compact glaze density so the button and hover strip match the
+    /// expanded card's interior tone over warm desktops in both appearances.
+    static func compactDensity(_ scheme: ColorScheme) -> Double {
+        scheme == .dark ? 0.53 : 0.68
+    }
+
     /// The neutral pigment is shared by the compact glaze and reading backing.
     static func neutral(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255)
-                        : Color(red: 249 / 255, green: 249 / 255, blue: 250 / 255)
+                        : .white
     }
 }
 
@@ -47,7 +52,7 @@ struct TransientGlassSurface: View {
                 FloatingGlassBackdrop()
                     .overlay(shape.fill(tint ?? .clear))
                     .overlay {
-                        shape.fill(GlassTintMaterial.neutral(scheme).opacity(GlassTintMaterial.compactDensity))
+                        shape.fill(GlassTintMaterial.neutral(scheme).opacity(GlassTintMaterial.compactDensity(scheme)))
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
                     }
@@ -155,29 +160,29 @@ struct GlassEdge: View {
     private func profile(width: CGFloat) -> Profile {
         let dark = scheme == .dark
         let ball = Profile(
-            highlight: dark ? 0.46 : 0.52, secondary: dark ? 0.08 : 0.08,
-            line: 0.75, innerLight: dark ? 0.14 : 0.18, innerWidth: 1.6, blur: 0.8,
-            rimTop: dark ? 0.62 : 0.96, rimBottom: dark ? 0.46 : 0.90,
-            rimSide: dark ? 0.06 : 0.10, rimLine: 1.0,
-            rimInnerTop: dark ? 0.62 : 0.70, rimInnerBottom: dark ? 0.14 : 0.26,
-            rimInnerWidth: 2.35, rimBlur: 1.0
+            highlight: dark ? 0.50 : 0.56, secondary: dark ? 0.08 : 0.08,
+            line: 0.75, innerLight: dark ? 0.16 : 0.14, innerWidth: dark ? 1.8 : 1.4, blur: dark ? 0.9 : 0.7,
+            rimTop: dark ? 0.72 : 1.0, rimBottom: dark ? 0.48 : 0.72,
+            rimSide: dark ? 0.06 : 0.10, rimLine: dark ? 1.25 : 1.35,
+            rimInnerTop: dark ? 0.74 : 0.42, rimInnerBottom: dark ? 0.16 : 0.10,
+            rimInnerWidth: dark ? 3.1 : 1.9, rimBlur: dark ? 1.35 : 0.75
         )
         let strip = Profile(
-            highlight: dark ? 0.44 : 0.50, secondary: dark ? 0.08 : 0.08,
-            line: 0.75, innerLight: dark ? 0.13 : 0.16, innerWidth: 1.6, blur: 0.8,
-            rimTop: dark ? 0.60 : 0.96, rimBottom: dark ? 0.44 : 0.90,
-            rimSide: dark ? 0.06 : 0.10, rimLine: 1.0,
-            rimInnerTop: dark ? 0.60 : 0.68, rimInnerBottom: dark ? 0.14 : 0.24,
-            rimInnerWidth: 2.35, rimBlur: 1.0
+            highlight: dark ? 0.48 : 0.54, secondary: dark ? 0.08 : 0.08,
+            line: 0.75, innerLight: dark ? 0.15 : 0.13, innerWidth: dark ? 1.8 : 1.4, blur: dark ? 0.9 : 0.7,
+            rimTop: dark ? 0.70 : 1.0, rimBottom: dark ? 0.46 : 0.72,
+            rimSide: dark ? 0.06 : 0.10, rimLine: dark ? 1.25 : 1.35,
+            rimInnerTop: dark ? 0.72 : 0.40, rimInnerBottom: dark ? 0.16 : 0.10,
+            rimInnerWidth: dark ? 3.1 : 1.9, rimBlur: dark ? 1.35 : 0.75
         )
         if compact { return ball.interpolated(to: strip, fraction: min(1, max(0, (width - 48) / 192))) }
         return Profile(
-            highlight: dark ? 0.40 : 0.46, secondary: dark ? 0.07 : 0.07,
-            line: 0.75, innerLight: dark ? 0.12 : 0.16, innerWidth: 1.8, blur: 0.9,
-            rimTop: dark ? 0.60 : 0.96, rimBottom: dark ? 0.46 : 0.90,
-            rimSide: dark ? 0.05 : 0.09, rimLine: 1.0,
-            rimInnerTop: dark ? 0.34 : 0.48, rimInnerBottom: dark ? 0.19 : 0.31,
-            rimInnerWidth: 2.55, rimBlur: 1.0
+            highlight: dark ? 0.44 : 0.50, secondary: dark ? 0.07 : 0.07,
+            line: 0.75, innerLight: dark ? 0.14 : 0.14, innerWidth: dark ? 2.0 : 1.6, blur: dark ? 1.0 : 0.8,
+            rimTop: dark ? 0.70 : 1.0, rimBottom: dark ? 0.48 : 0.72,
+            rimSide: dark ? 0.05 : 0.09, rimLine: dark ? 1.25 : 1.35,
+            rimInnerTop: dark ? 0.48 : 0.58, rimInnerBottom: dark ? 0.20 : 0.16,
+            rimInnerWidth: dark ? 3.2 : 2.3, rimBlur: dark ? 1.35 : 0.9
         )
     }
 
@@ -194,7 +199,7 @@ struct GlassEdge: View {
             ], startPoint: .topLeading, endPoint: .bottomTrailing)
             let innerLight = LinearGradient(stops: [
                 .init(color: .white.opacity(p.innerLight), location: 0),
-                .init(color: .clear, location: 0.45)
+                .init(color: .white.opacity(0), location: 0.45)
             ], startPoint: .topLeading, endPoint: .bottomTrailing)
             let falloff = min(0.28, max(cornerRadius * 1.1, 10) / max(1, geometry.size.height))
             let verticalRim = LinearGradient(stops: [
@@ -211,11 +216,11 @@ struct GlassEdge: View {
                 .init(color: .white.opacity(p.rimInnerBottom), location: 1)
             ], startPoint: .top, endPoint: .bottom)
             ZStack {
-                shape.inset(by: 1.2).strokeBorder(innerLight, lineWidth: p.innerWidth)
+                shape.inset(by: 0.8).strokeBorder(innerLight, lineWidth: p.innerWidth)
                     .blur(radius: p.blur)
                     .clipShape(insetShape)
                 insetShape.strokeBorder(light, lineWidth: p.line)
-                shape.inset(by: 1.2).strokeBorder(verticalInner, lineWidth: p.rimInnerWidth)
+                shape.inset(by: 0.75).strokeBorder(verticalInner, lineWidth: p.rimInnerWidth)
                     .blur(radius: p.rimBlur)
                     .clipShape(insetShape)
                 insetShape.strokeBorder(verticalRim, lineWidth: p.rimLine)
