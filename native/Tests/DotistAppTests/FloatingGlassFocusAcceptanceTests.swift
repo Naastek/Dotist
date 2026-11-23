@@ -170,7 +170,7 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
         background.isReleasedWhenClosed = false
         background.hasShadow = false
         background.hidesOnDeactivate = false
-        background.level = .floating
+        background.level = .statusBar
         background.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
         background.ignoresMouseEvents = true
         defer { background.close() }
@@ -192,8 +192,29 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
             let backdrop = ProcessInfo.processInfo.environment["DOTIST_GLASS_BACKDROP"]
             let usePatternBackdrop = backdrop == "pattern"
             let useWarmBackdrop = backdrop == "warm"
+            let useGridBackdrop = backdrop == "grid"
             let backdropView = ZStack {
-                (useWarmBackdrop ? Color(red: 0.95, green: 0.93, blue: 0.90) : scheme == .dark ? Color(red: 0.14, green: 0.16, blue: 0.20) : Color(red: 0.24, green: 0.27, blue: 0.33))
+                (useGridBackdrop ? (scheme == .dark ? Color(red: 0.14, green: 0.16, blue: 0.20) : Color.white)
+                 : useWarmBackdrop ? Color(red: 0.95, green: 0.93, blue: 0.90)
+                 : scheme == .dark ? Color(red: 0.14, green: 0.16, blue: 0.20)
+                 : Color(red: 0.24, green: 0.27, blue: 0.33))
+                if useGridBackdrop {
+                    Canvas { context, size in
+                        let lineColor = scheme == .dark
+                            ? Color.white.opacity(0.08)
+                            : Color(red: 226.0 / 255.0, green: 224.0 / 255.0, blue: 220.0 / 255.0)
+                        var path = Path()
+                        for x in stride(from: CGFloat(23), through: size.width, by: 56) {
+                            path.move(to: CGPoint(x: x, y: 0))
+                            path.addLine(to: CGPoint(x: x, y: size.height))
+                        }
+                        for y in stride(from: CGFloat(14), through: size.height, by: 19) {
+                            path.move(to: CGPoint(x: 0, y: y))
+                            path.addLine(to: CGPoint(x: size.width, y: y))
+                        }
+                        context.stroke(path, with: .color(lineColor), lineWidth: 1)
+                    }
+                }
                 if usePatternBackdrop {
                     HStack(spacing: 18) {
                         ForEach(0..<16, id: \.self) { index in
@@ -229,7 +250,7 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
             panel.hasShadow = false
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
-            panel.level = .floating
+            panel.level = .statusBar
             panel.appearance = NSAppearance(named: appearanceName)
             panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
 
@@ -354,7 +375,7 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
                 let leftB = peak(b, x0...(x0 + 10), (my - 4)...(my + 4))
                 let rightA = peak(a, (x1 - 10)...x1, (my - 4)...(my + 4))
                 let rightB = peak(b, (x1 - 10)...x1, (my - 4)...(my + 4))
-                if usePatternBackdrop || useWarmBackdrop {
+                if usePatternBackdrop || useWarmBackdrop || useGridBackdrop {
                     for (edge, focused, unfocused) in [("top", topA, topB), ("bottom", botA, botB),
                                                         ("left", leftA, leftB), ("right", rightA, rightB)] {
                         XCTAssertEqual(focused, unfocused, accuracy: 1, "\(label) \(edge) reflection changed on focus switch")

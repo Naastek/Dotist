@@ -218,14 +218,18 @@ final class BubbleLayoutTests: XCTestCase {
     private func ink(_ bitmap: NSBitmapImageRep, in rect: CGRect, threshold: CGFloat = 0.1, onSurface: Bool = false) -> CGRect? {
         let scale = CGFloat(bitmap.pixelsWide) / bitmap.size.width
         var bounds = CGRect.null
-        // The surface has a dark contour at its perimeter. Only the composite
-        // ink measurement excludes that band; the silhouette checks cover it.
         let canvas = CGRect(origin: .zero, size: bitmap.size)
         let region = onSurface ? rect.intersection(canvas.insetBy(dx: 4, dy: 4)) : rect
         guard !region.isEmpty else { return nil }
+        // The curved rim extends into the rectangular sampling region at the corners.
+        // Measure glyphs inside the rounded interior; silhouette tests cover the rim.
+        let interior = CGPath(roundedRect: canvas.insetBy(dx: 7, dy: 7),
+                              cornerWidth: 17, cornerHeight: 17, transform: nil)
         for y in max(0, Int(region.minY * scale))..<min(bitmap.pixelsHigh, Int(region.maxY * scale)) {
             for x in max(0, Int(region.minX * scale))..<min(bitmap.pixelsWide, Int(region.maxX * scale)) {
                 guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                let point = CGPoint(x: (CGFloat(x) + 0.5) / scale, y: (CGFloat(y) + 0.5) / scale)
+                if onSurface && !interior.contains(point) { continue }
                 if color.alphaComponent > threshold && (!onSurface || max(color.redComponent, color.greenComponent, color.blueComponent) < 0.65) {
                     bounds = bounds.union(CGRect(x: CGFloat(x) / scale, y: CGFloat(y) / scale, width: 1 / scale, height: 1 / scale))
                 }

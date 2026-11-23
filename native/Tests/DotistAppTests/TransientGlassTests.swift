@@ -285,4 +285,61 @@ final class TransientGlassTests: XCTestCase {
         XCTAssertFalse(panel.isVisible)
     }
 
+    func testCompactGlassGlazeHasCurvedDomeProfileAndIsFocusInvariant() throws {
+        let size = CGSize(width: 48, height: 48)
+        for scheme in [ColorScheme.light, .dark] {
+            let active = try bitmap(ZStack {
+                Color(white: scheme == .dark ? 0.14 : 0.90)
+                CompactGlassGlaze(cornerRadius: 24, scheme: scheme)
+            }.frame(width: size.width, height: size.height).environment(\.appearsActive, true), scheme: scheme)
+            let inactive = try bitmap(ZStack {
+                Color(white: scheme == .dark ? 0.14 : 0.90)
+                CompactGlassGlaze(cornerRadius: 24, scheme: scheme)
+            }.frame(width: size.width, height: size.height).environment(\.appearsActive, false), scheme: scheme)
+
+            func lum(_ img: NSBitmapImageRep, _ x: Int, _ y: Int) throws -> CGFloat {
+                let c = try XCTUnwrap(img.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                return 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
+            }
+
+            let cx = active.pixelsWide / 2
+            let h = active.pixelsHigh
+            let topCushion = try lum(active, cx, Int(Double(h) * 0.04))
+            let upperTrough = try lum(active, cx, Int(Double(h) * 0.24))
+            let lowerBelly = try lum(active, cx, Int(Double(h) * 0.72))
+            let bottomCushion = try lum(active, cx, Int(Double(h) * 0.94))
+
+            XCTAssertGreaterThan(topCushion, upperTrough + 0.015, "\(scheme) top cushion must lead upper-quarter trough")
+            XCTAssertGreaterThan(lowerBelly, upperTrough + 0.01, "\(scheme) lower belly must rise above upper-quarter trough")
+            XCTAssertGreaterThan(bottomCushion, lowerBelly + 0.005, "\(scheme) bottom cushion must lead lower belly")
+
+            for frac in [0.04, 0.24, 0.50, 0.72, 0.94] {
+                let y = Int(Double(h) * frac)
+                XCTAssertEqual(try lum(active, cx, y), try lum(inactive, cx, y), accuracy: 0.002,
+                    "\(scheme) compact dome glaze must remain focus-invariant at y=\(y)")
+            }
+        }
+    }
+
+    func testLightCompactGlassGlazeAvoidsDarkBackdropCrease() throws {
+        let size = CGSize(width: 48, height: 48)
+        let image = try bitmap(ZStack {
+            Color(white: 0.14)
+            CompactGlassGlaze(cornerRadius: 24, scheme: .light)
+        }.frame(width: size.width, height: size.height), scheme: .light)
+
+        func lum(_ x: Int, _ y: Int) throws -> CGFloat {
+            let c = try XCTUnwrap(image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+            return 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
+        }
+
+        let cx = image.pixelsWide / 2
+        let h = image.pixelsHigh
+        let upperTrough = try lum(cx, Int(Double(h) * 0.24))
+        let center = try lum(cx, Int(Double(h) * 0.50))
+        // Uniform base translucency keeps the upper-quarter dome subtle over dark
+        // backdrops instead of punching a deep horizontal opacity crease.
+        XCTAssertLessThan(center - upperTrough, 0.05, "Light compact dome must not form a deep dark crease over dark backdrops")
+    }
+
 }

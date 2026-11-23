@@ -13,10 +13,11 @@ enum GlassTintMaterial {
     static let tabSelectedTint = 0.30
     static let tabHighContrastSelectedTint = 0.42
 
-    /// Calibrated compact glaze density so the button and hover strip match the
-    /// expanded card's interior tone over warm desktops in both appearances.
+    /// Calibrated compact glaze density at the optical center so the button and
+    /// hover strip stay bright and cohesive with the expanded card while
+    /// allowing smooth curved dome modulation without dark-backdrop banding.
     static func compactDensity(_ scheme: ColorScheme) -> Double {
-        scheme == .dark ? 0.53 : 0.68
+        scheme == .dark ? 0.53 : 0.74
     }
 
     /// The neutral pigment is shared by the compact glaze and reading backing.
@@ -51,14 +52,11 @@ struct TransientGlassSurface: View {
             if compact {
                 FloatingGlassBackdrop()
                     .overlay(shape.fill(tint ?? .clear))
-                    .overlay {
-                        shape.fill(GlassTintMaterial.neutral(scheme).opacity(GlassTintMaterial.compactDensity(scheme)))
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
+                    .overlay { CompactGlassGlaze(cornerRadius: cornerRadius, scheme: scheme) }
                     .clipShape(shape)
                     .overlay { GlassEdge(cornerRadius: cornerRadius, compact: true, scheme: scheme) }
                     .overlay { GlassContour(cornerRadius: cornerRadius, scheme: scheme) }
+                    .background { CompactGlassLiftShadow(cornerRadius: cornerRadius, scheme: scheme) }
             } else {
                 Color.clear.glassEffect(Glass.regular.tint(tint).interactive(interactive), in: shape)
             }
@@ -85,8 +83,75 @@ struct FloatingGlassBackdrop: NSViewRepresentable {
     func updateNSView(_ view: Backdrop, context: Context) {}
 }
 
+/// Curved glass dome glaze for compact floating controls (button and hover strip).
+/// Models real convex glass optics: luminous top and bottom specular cushions,
+/// a subtle upper-quarter and side-bevel refraction dip, and a softly brightened
+/// center-to-lower belly, while preserving `compactDensity` at the optical center.
+struct CompactGlassGlaze: View {
+    let cornerRadius: CGFloat
+    let scheme: ColorScheme
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let dark = scheme == .dark
+        ZStack {
+            if dark {
+                shape.fill(GlassTintMaterial.neutral(.dark).opacity(GlassTintMaterial.compactDensity(.dark)))
+                shape.fill(LinearGradient(stops: [
+                    .init(color: .white.opacity(0.08), location: 0),
+                    .init(color: .white.opacity(0.03), location: 0.10),
+                    .init(color: .white.opacity(0.00), location: 0.24),
+                    .init(color: .white.opacity(0.005), location: 0.50),
+                    .init(color: .white.opacity(0.03), location: 0.78),
+                    .init(color: .white.opacity(0.065), location: 0.94),
+                    .init(color: .white.opacity(0.08), location: 1)
+                ], startPoint: .top, endPoint: .bottom))
+            } else {
+                // Uniform base translucency prevents dark/mixed desktop backgrounds
+                // from punching a horizontal crease across the upper quarter.
+                shape.fill(GlassTintMaterial.neutral(.light).opacity(GlassTintMaterial.compactDensity(.light)))
+                // Background-independent curved-dome refraction dip in the upper quarter.
+                shape.fill(LinearGradient(stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black.opacity(0.005), location: 0.10),
+                    .init(color: .black.opacity(0.018), location: 0.24),
+                    .init(color: .black.opacity(0.006), location: 0.42),
+                    .init(color: .clear, location: 0.58),
+                    .init(color: .clear, location: 1)
+                ], startPoint: .top, endPoint: .bottom))
+                // Luminous top cushion, bright center-to-lower belly, and bottom bounce cushion.
+                shape.fill(LinearGradient(stops: [
+                    .init(color: .white.opacity(0.46), location: 0),
+                    .init(color: .white.opacity(0.16), location: 0.09),
+                    .init(color: .white.opacity(0.00), location: 0.24),
+                    .init(color: .white.opacity(0.00), location: 0.50),
+                    .init(color: .white.opacity(0.18), location: 0.74),
+                    .init(color: .white.opacity(0.36), location: 0.88),
+                    .init(color: .white.opacity(0.54), location: 0.96),
+                    .init(color: .white.opacity(0.48), location: 1)
+                ], startPoint: .top, endPoint: .bottom))
+                // Gentle curved-side bevel shading (strongest along left/right arcs,
+                // clear at the top/bottom specular cushions and optical center).
+                shape.strokeBorder(Color.black.opacity(0.016), lineWidth: 6)
+                    .blur(radius: 3.5)
+                    .mask(LinearGradient(stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .clear, location: 0.14),
+                        .init(color: .white, location: 0.30),
+                        .init(color: .white, location: 0.70),
+                        .init(color: .clear, location: 0.86),
+                        .init(color: .clear, location: 1)
+                    ], startPoint: .top, endPoint: .bottom))
+                    .clipShape(shape)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 /// Crisp, focus-invariant hairline outer contour that defines the thin optical
-/// glass silhouette cleanly against warm light and dark desktops.
+/// glass silhouette cleanly against white, warm light, and dark desktops.
 struct GlassContour: View {
     let cornerRadius: CGFloat
     let scheme: ColorScheme
@@ -96,16 +161,33 @@ struct GlassContour: View {
         let dark = scheme == .dark
         let contour = LinearGradient(stops: dark ? [
             .init(color: .black.opacity(0.24), location: 0),
-            .init(color: .black.opacity(0.36), location: 0.5),
-            .init(color: .black.opacity(0.42), location: 1)
+            .init(color: .black.opacity(0.34), location: 0.5),
+            .init(color: .black.opacity(0.40), location: 1)
         ] : [
-            .init(color: .black.opacity(0.06), location: 0),
-            .init(color: .black.opacity(0.16), location: 0.22),
-            .init(color: .black.opacity(0.20), location: 0.50),
-            .init(color: .black.opacity(0.16), location: 0.82),
-            .init(color: .black.opacity(0.12), location: 1)
+            .init(color: .black.opacity(0.035), location: 0),
+            .init(color: .black.opacity(0.085), location: 0.22),
+            .init(color: .black.opacity(0.105), location: 0.50),
+            .init(color: .black.opacity(0.095), location: 0.82),
+            .init(color: .black.opacity(0.085), location: 1)
         ], startPoint: .top, endPoint: .bottom)
-        shape.strokeBorder(contour, lineWidth: 0.6)
+        shape.strokeBorder(contour, lineWidth: 0.5)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+/// Subtle, exterior-only downward lift shadow that fits cleanly within
+/// `FloatingSurface.compactOpticalInset` without darkening translucent interior glass.
+struct CompactGlassLiftShadow: View {
+    let cornerRadius: CGFloat
+    let scheme: ColorScheme
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        shape.fill(.black)
+            .shadow(color: .black.opacity(scheme == .dark ? 0.16 : 0.065), radius: 1.0, x: 0, y: 0.8)
+            .overlay { shape.fill(.black).blendMode(.destinationOut) }
+            .compositingGroup()
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
@@ -160,29 +242,29 @@ struct GlassEdge: View {
     private func profile(width: CGFloat) -> Profile {
         let dark = scheme == .dark
         let ball = Profile(
-            highlight: dark ? 0.50 : 0.56, secondary: dark ? 0.08 : 0.08,
-            line: 0.75, innerLight: dark ? 0.16 : 0.14, innerWidth: dark ? 1.8 : 1.4, blur: dark ? 0.9 : 0.7,
-            rimTop: dark ? 0.72 : 1.0, rimBottom: dark ? 0.48 : 0.72,
-            rimSide: dark ? 0.06 : 0.10, rimLine: dark ? 1.25 : 1.35,
-            rimInnerTop: dark ? 0.74 : 0.42, rimInnerBottom: dark ? 0.16 : 0.10,
-            rimInnerWidth: dark ? 3.1 : 1.9, rimBlur: dark ? 1.35 : 0.75
+            highlight: dark ? 0.50 : 0.58, secondary: dark ? 0.08 : 0.08,
+            line: 0.75, innerLight: dark ? 0.16 : 0.16, innerWidth: dark ? 1.8 : 1.5, blur: dark ? 0.9 : 0.75,
+            rimTop: dark ? 0.72 : 1.0, rimBottom: dark ? 0.52 : 0.72,
+            rimSide: dark ? 0.06 : 0.08, rimLine: dark ? 1.25 : 1.4,
+            rimInnerTop: dark ? 0.74 : 0.62, rimInnerBottom: dark ? 0.24 : 0.20,
+            rimInnerWidth: dark ? 3.2 : 2.8, rimBlur: dark ? 1.35 : 1.3
         )
         let strip = Profile(
-            highlight: dark ? 0.48 : 0.54, secondary: dark ? 0.08 : 0.08,
-            line: 0.75, innerLight: dark ? 0.15 : 0.13, innerWidth: dark ? 1.8 : 1.4, blur: dark ? 0.9 : 0.7,
-            rimTop: dark ? 0.70 : 1.0, rimBottom: dark ? 0.46 : 0.72,
-            rimSide: dark ? 0.06 : 0.10, rimLine: dark ? 1.25 : 1.35,
-            rimInnerTop: dark ? 0.72 : 0.40, rimInnerBottom: dark ? 0.16 : 0.10,
-            rimInnerWidth: dark ? 3.1 : 1.9, rimBlur: dark ? 1.35 : 0.75
+            highlight: dark ? 0.48 : 0.56, secondary: dark ? 0.08 : 0.08,
+            line: 0.75, innerLight: dark ? 0.15 : 0.15, innerWidth: dark ? 1.8 : 1.5, blur: dark ? 0.9 : 0.75,
+            rimTop: dark ? 0.70 : 1.0, rimBottom: dark ? 0.50 : 0.72,
+            rimSide: dark ? 0.06 : 0.08, rimLine: dark ? 1.25 : 1.4,
+            rimInnerTop: dark ? 0.72 : 0.60, rimInnerBottom: dark ? 0.24 : 0.20,
+            rimInnerWidth: dark ? 3.2 : 2.8, rimBlur: dark ? 1.35 : 1.3
         )
         if compact { return ball.interpolated(to: strip, fraction: min(1, max(0, (width - 48) / 192))) }
         return Profile(
             highlight: dark ? 0.44 : 0.50, secondary: dark ? 0.07 : 0.07,
             line: 0.75, innerLight: dark ? 0.14 : 0.14, innerWidth: dark ? 2.0 : 1.6, blur: dark ? 1.0 : 0.8,
-            rimTop: dark ? 0.70 : 1.0, rimBottom: dark ? 0.48 : 0.72,
-            rimSide: dark ? 0.05 : 0.09, rimLine: dark ? 1.25 : 1.35,
-            rimInnerTop: dark ? 0.48 : 0.58, rimInnerBottom: dark ? 0.20 : 0.16,
-            rimInnerWidth: dark ? 3.2 : 2.3, rimBlur: dark ? 1.35 : 0.9
+            rimTop: dark ? 0.70 : 1.0, rimBottom: dark ? 0.54 : 0.84,
+            rimSide: dark ? 0.05 : 0.08, rimLine: dark ? 1.25 : 1.45,
+            rimInnerTop: dark ? 0.48 : 0.64, rimInnerBottom: dark ? 0.26 : 0.34,
+            rimInnerWidth: dark ? 3.2 : 3.0, rimBlur: dark ? 1.35 : 1.3
         )
     }
 

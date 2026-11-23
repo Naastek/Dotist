@@ -170,11 +170,19 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
                     }
                     if variant != .focusNoManualEdge {
                         LinearGradient(stops: [
-                            .init(color: .white.opacity((scheme == .dark ? 0.14 : 0.18) * amount), location: 0),
+                            .init(color: .white.opacity((scheme == .dark ? 0.14 : 0.20) * amount), location: 0),
                             .init(color: .white.opacity(0), location: 1)
                         ], startPoint: .top, endPoint: .bottom)
                             .frame(height: scheme == .dark ? 10 : 8)
                             .frame(maxHeight: .infinity, alignment: .top)
+                            .clipShape(shape)
+                            .padding(clearance)
+                        LinearGradient(stops: [
+                            .init(color: .white.opacity(0), location: 0),
+                            .init(color: .white.opacity((scheme == .dark ? 0.09 : 0.14) * amount), location: 1)
+                        ], startPoint: .top, endPoint: .bottom)
+                            .frame(height: scheme == .dark ? 8 : 7)
+                            .frame(maxHeight: .infinity, alignment: .bottom)
                             .clipShape(shape)
                             .padding(clearance)
                         GlassEdge(cornerRadius: radius, compact: false, scheme: scheme).padding(clearance)
