@@ -224,7 +224,7 @@ extension MainWindow {
                 .allowsHitTesting(false)
             }
             .onHover { composerHovered = $0 }
-            .overlay(alignment: .top) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5) }
+            .overlay(alignment: .top) { Rectangle().fill(DotistDesign.rule.opacity(0.65)).frame(height: 0.5).padding(.horizontal, 12) }
             #if DEBUG
             .background(ComposerBarLayoutAnchor().allowsHitTesting(false).accessibilityHidden(true))
             #endif

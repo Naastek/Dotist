@@ -33,13 +33,13 @@ final class PanelFrameAnimation {
         guard completion != nil, !isAnimating else { return }
         if duration <= 0 { currentProgress = 1; return }
         guard let window else { cancel(); return }
-        began = ProcessInfo.processInfo.systemUptime
+        began = CACurrentMediaTime()
         if window.isVisible, window.screen != nil {
             guard let view = window.contentView else { currentProgress = 1; return }
             let link = view.displayLink(target: PanelFrameDisplayTarget(animation: self),
                                         selector: #selector(PanelFrameDisplayTarget.tick(_:)))
             #if DOTIST_BENCH
-            if BenchPerf.enabled { BenchPerf.begin(target.width < start.width ? "collapse" : "expand", period: link.duration) }
+            if BenchPerf.enabled { BenchPerf.driverStarted(kind: target.height < start.height ? "collapse" : "expand", period: link.duration) }
             #endif
             displayLink = link
             link.add(to: .main, forMode: .common)
@@ -51,7 +51,7 @@ final class PanelFrameAnimation {
         task = Task { [weak self] in
             while !Task.isCancelled {
                 guard let duration = self?.duration else { return }
-                let elapsed = ProcessInfo.processInfo.systemUptime - began
+                let elapsed = CACurrentMediaTime() - began
                 self?.advanceFrame()
                 if elapsed >= duration { self?.task = nil; return }
                 do { try await Task.sleep(for: .seconds(min(1.0 / 60, duration - elapsed))) }
@@ -67,9 +67,9 @@ final class PanelFrameAnimation {
         task?.cancel(); task = nil
         displayLink?.invalidate(); displayLink = nil
     }
-    fileprivate func advanceFrame() {
+    fileprivate func advanceFrame(at time: CFTimeInterval = CACurrentMediaTime()) {
         guard completion != nil, duration > 0 else { return }
-        currentProgress = Float(min(1, (ProcessInfo.processInfo.systemUptime - began) / duration))
+        currentProgress = Float(min(1, max(0, (time - began) / duration)))
     }
     var currentProgress: Float = 0 {
         didSet {
@@ -82,7 +82,9 @@ final class PanelFrameAnimation {
                 let setStart = CACurrentMediaTime()
                 BenchPerf.count(.panelSetFrame)
                 #endif
-                window.setFrame(frame, display: true)
+                // Display-link ticks can leave drawing to the next AppKit
+                // update. Flush the final size when the transition settles.
+                window.setFrame(frame, display: progress >= 1 || displayLink == nil)
                 #if DOTIST_BENCH
                 BenchPerf.recordSetFrameMs((CACurrentMediaTime() - setStart) * 1000)
                 #endif
@@ -156,7 +158,7 @@ private final class PanelFrameDisplayTarget: NSObject {
         #if DOTIST_BENCH
         if BenchPerf.enabled { BenchPerf.tickStart(linkTimestamp: link.timestamp, linkTargetTimestamp: link.targetTimestamp) }
         #endif
-        animation.advanceFrame()
+        animation.advanceFrame(at: max(CACurrentMediaTime(), link.targetTimestamp))
         #if DOTIST_BENCH
         if BenchPerf.enabled { BenchPerf.tickEnd() }
         #endif

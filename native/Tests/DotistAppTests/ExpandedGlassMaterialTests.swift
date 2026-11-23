@@ -15,8 +15,8 @@ final class ExpandedGlassMaterialTests: XCTestCase {
     }
 
     /// Offscreen rendering proves composition, not native refraction. The
-    /// existing thin reflection must remain visible and independent of density.
-    func testExpandedRimDoesNotFadeWithReadingPreferences() throws {
+    /// outer hairline must remain visible and independent of density.
+    func testExpandedHairlineDoesNotFadeWithReadingPreferences() throws {
         let size = CGSize(width: 260, height: 140)
         for scheme in [ColorScheme.light, .dark] {
             var reference: CGFloat?
@@ -26,7 +26,32 @@ final class ExpandedGlassMaterialTests: XCTestCase {
                 let alpha = try XCTUnwrap(image.colorAt(x: 260, y: 4)).alphaComponent
                 if let reference { XCTAssertEqual(alpha, reference, accuracy: 1.0 / 255, "Reading settings must not paint or fade the optical rim: \(scheme)") }
                 else { reference = alpha }
-                XCTAssertGreaterThan(alpha, 0.08, "The existing reflection must still render")
+                XCTAssertGreaterThan(alpha, 0.06, "The hairline remains visible independently of the exterior shadow")
+            }
+        }
+    }
+
+    func testThreeFloatingShapesShareInteriorDensityAndFrost() throws {
+        let forms = [(CGSize(width: 260, height: 140), false),
+                     (CGSize(width: 44, height: 44), true),
+                     (CGSize(width: 178, height: 44), true)]
+        for scheme in [ColorScheme.light, .dark] {
+            func centers(opacity: UInt8, frost: UInt8) throws -> [CGFloat] {
+                try forms.map { size, compact in
+                    let image = try bitmap(FloatingPanelSurface(opacity: opacity, frost: frost,
+                        compact: compact, color: .none, solid: false, scheme: scheme), size: size, scheme: scheme)
+                    return try XCTUnwrap(image.colorAt(x: image.pixelsWide / 2, y: image.pixelsHigh / 2)).alphaComponent
+                }
+            }
+            let clear = try centers(opacity: 0, frost: 68)
+            let plain = try centers(opacity: 44, frost: 0)
+            let muted = try centers(opacity: 44, frost: 68)
+            let frosted = try centers(opacity: 82, frost: 68)
+            for index in forms.indices {
+                XCTAssertLessThan(clear[index], 1.0 / 255)
+                XCTAssertGreaterThan(muted[index], plain[index] + 2.0 / 255)
+                XCTAssertGreaterThan(frosted[index], muted[index] + 0.1)
+                XCTAssertEqual(frosted[index], frosted[0], accuracy: 1.0 / 255)
             }
         }
     }
@@ -78,8 +103,8 @@ final class ExpandedGlassMaterialTests: XCTestCase {
 
     /// An independent plain silhouette supplies the raster allowance. Any alpha
     /// beyond its one-pixel neighborhood is a real exterior plate, not rounding.
-    private func exteriorAlpha(_ image: NSBitmapImageRep, size: CGSize, compact: Bool, scale: CGFloat) throws -> CGFloat {
-        let radius: CGFloat = compact ? 24 : 20
+    private func exteriorAlpha(_ image: NSBitmapImageRep, size: CGSize, compact: Bool, transitioning: Bool = false, scale: CGFloat) throws -> CGFloat {
+        let radius = FloatingSurface.outerCornerRadius(for: size, compact: compact, transitioning: transitioning)
         let mask = try bitmap(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.white), size: size, scale: scale)
         var maximum: CGFloat = 0
         for y in 0..<image.pixelsHigh {
@@ -102,7 +127,7 @@ final class ExpandedGlassMaterialTests: XCTestCase {
 
     private func assertNoExteriorPlate(_ image: NSBitmapImageRep, size: CGSize, compact: Bool,
                                        transitioning: Bool, scale: CGFloat, file: StaticString = #filePath, line: UInt = #line) throws {
-        XCTAssertEqual(try exteriorAlpha(image, size: size, compact: compact, scale: scale), 0,
+        XCTAssertEqual(try exteriorAlpha(image, size: size, compact: compact, transitioning: transitioning, scale: scale), 0,
             "Exterior alpha: compact=\(compact), transition=\(transitioning), size=\(size), scale=\(scale)", file: file, line: line)
     }
 

@@ -23,7 +23,9 @@ export DOTIST_SPARKLE_XCFRAMEWORK='../.cache/native-migration/deps/Sparkle-2.9.6
 # SwiftPM passes these flags to the app and source dependencies. The linker
 # otherwise embeds absolute source and object paths in its debug map, even in
 # release builds. Keep those entries out of the distributable executable.
-DOTIST_PACKAGED_BUILD=1 swift build --disable-sandbox --build-system native --triple "arm64-apple-macosx$minimum" --sdk "$sdk_path" --configuration "$profile" --package-path native --scratch-path "$scratch_dir" --disable-automatic-resolution \
+bench_flags=()
+if [[ "${DOTIST_QA_BENCH:-0}" == 1 ]]; then bench_flags=(-Xswiftc -DDOTIST_BENCH); fi
+DOTIST_PACKAGED_BUILD=1 swift build ${bench_flags[@]+"${bench_flags[@]}"} --disable-sandbox --build-system native --triple "arm64-apple-macosx$minimum" --sdk "$sdk_path" --configuration "$profile" --package-path native --scratch-path "$scratch_dir" --disable-automatic-resolution \
   -Xswiftc -debug-prefix-map -Xswiftc "$project_dir=/dotist" \
   -Xswiftc -file-prefix-map -Xswiftc "$project_dir=/dotist" \
   -Xcc "-ffile-prefix-map=$project_dir=/dotist" \

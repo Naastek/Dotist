@@ -14,10 +14,10 @@ enum GlassTintMaterial {
     static let tabHighContrastSelectedTint = 0.42
 
     /// Calibrated compact glaze density at the optical center so the button and
-    /// hover strip stay bright and cohesive with the expanded card while
-    /// allowing smooth curved dome modulation without dark-backdrop banding.
+    /// hover strip transmit warm/neutral desktops with watery liquid-glass depth
+    /// while giving crisp pure-white specular rims clear luminance contrast.
     static func compactDensity(_ scheme: ColorScheme) -> Double {
-        scheme == .dark ? 0.53 : 0.74
+        scheme == .dark ? 0.53 : 0.60
     }
 
     /// The neutral pigment is shared by the compact glaze and reading backing.
@@ -54,7 +54,7 @@ struct TransientGlassSurface: View {
                     .overlay(shape.fill(tint ?? .clear))
                     .overlay { CompactGlassGlaze(cornerRadius: cornerRadius, scheme: scheme) }
                     .clipShape(shape)
-                    .overlay { GlassEdge(cornerRadius: cornerRadius, compact: true, scheme: scheme) }
+                    .overlay { GlassEdge(cornerRadius: cornerRadius, scheme: scheme) }
                     .overlay { GlassContour(cornerRadius: cornerRadius, scheme: scheme) }
                     .background { CompactGlassLiftShadow(cornerRadius: cornerRadius, scheme: scheme) }
             } else {
@@ -98,51 +98,46 @@ struct CompactGlassGlaze: View {
             if dark {
                 shape.fill(GlassTintMaterial.neutral(.dark).opacity(GlassTintMaterial.compactDensity(.dark)))
                 shape.fill(LinearGradient(stops: [
-                    .init(color: .white.opacity(0.08), location: 0),
-                    .init(color: .white.opacity(0.03), location: 0.10),
-                    .init(color: .white.opacity(0.00), location: 0.24),
-                    .init(color: .white.opacity(0.005), location: 0.50),
-                    .init(color: .white.opacity(0.03), location: 0.78),
-                    .init(color: .white.opacity(0.065), location: 0.94),
-                    .init(color: .white.opacity(0.08), location: 1)
-                ], startPoint: .top, endPoint: .bottom))
-            } else {
-                // Uniform base translucency prevents dark/mixed desktop backgrounds
-                // from punching a horizontal crease across the upper quarter.
-                shape.fill(GlassTintMaterial.neutral(.light).opacity(GlassTintMaterial.compactDensity(.light)))
-                // Background-independent curved-dome refraction dip in the upper quarter.
-                shape.fill(LinearGradient(stops: [
                     .init(color: .clear, location: 0),
-                    .init(color: .black.opacity(0.005), location: 0.10),
-                    .init(color: .black.opacity(0.018), location: 0.24),
-                    .init(color: .black.opacity(0.006), location: 0.42),
+                    .init(color: .black.opacity(0.015), location: 0.14),
+                    .init(color: .black.opacity(0.032), location: 0.26),
+                    .init(color: .black.opacity(0.010), location: 0.44),
                     .init(color: .clear, location: 0.58),
                     .init(color: .clear, location: 1)
                 ], startPoint: .top, endPoint: .bottom))
-                // Luminous top cushion, bright center-to-lower belly, and bottom bounce cushion.
                 shape.fill(LinearGradient(stops: [
-                    .init(color: .white.opacity(0.46), location: 0),
-                    .init(color: .white.opacity(0.16), location: 0.09),
-                    .init(color: .white.opacity(0.00), location: 0.24),
-                    .init(color: .white.opacity(0.00), location: 0.50),
-                    .init(color: .white.opacity(0.18), location: 0.74),
-                    .init(color: .white.opacity(0.36), location: 0.88),
-                    .init(color: .white.opacity(0.54), location: 0.96),
-                    .init(color: .white.opacity(0.48), location: 1)
+                    .init(color: .white.opacity(0.13), location: 0),
+                    .init(color: .white.opacity(0.045), location: 0.11),
+                    .init(color: .white.opacity(0.00), location: 0.25),
+                    .init(color: .white.opacity(0.005), location: 0.50),
+                    .init(color: .white.opacity(0.04), location: 0.76),
+                    .init(color: .white.opacity(0.09), location: 0.93),
+                    .init(color: .white.opacity(0.11), location: 1)
                 ], startPoint: .top, endPoint: .bottom))
-                // Gentle curved-side bevel shading (strongest along left/right arcs,
-                // clear at the top/bottom specular cushions and optical center).
-                shape.strokeBorder(Color.black.opacity(0.016), lineWidth: 6)
-                    .blur(radius: 3.5)
-                    .mask(LinearGradient(stops: [
-                        .init(color: .clear, location: 0),
-                        .init(color: .clear, location: 0.14),
-                        .init(color: .white, location: 0.30),
-                        .init(color: .white, location: 0.70),
-                        .init(color: .clear, location: 0.86),
-                        .init(color: .clear, location: 1)
-                    ], startPoint: .top, endPoint: .bottom))
-                    .clipShape(shape)
+            } else {
+                // Uniform base translucency transmits the desktop warmly without
+                // letting dark/mixed backdrops punch a horizontal crease.
+                shape.fill(GlassTintMaterial.neutral(.light).opacity(GlassTintMaterial.compactDensity(.light)))
+                // Clean, background-independent curved-dome refraction dip in the upper quarter.
+                shape.fill(LinearGradient(stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black.opacity(0.008), location: 0.12),
+                    .init(color: .black.opacity(0.022), location: 0.26),
+                    .init(color: .black.opacity(0.008), location: 0.44),
+                    .init(color: .clear, location: 0.56),
+                    .init(color: .clear, location: 1)
+                ], startPoint: .top, endPoint: .bottom))
+                // Luminous liquid-glass top specular crown and convex lower-belly caustic bounce.
+                shape.fill(LinearGradient(stops: [
+                    .init(color: .white.opacity(0.56), location: 0),
+                    .init(color: .white.opacity(0.24), location: 0.10),
+                    .init(color: .white.opacity(0.00), location: 0.25),
+                    .init(color: .white.opacity(0.00), location: 0.48),
+                    .init(color: .white.opacity(0.14), location: 0.70),
+                    .init(color: .white.opacity(0.34), location: 0.86),
+                    .init(color: .white.opacity(0.52), location: 0.95),
+                    .init(color: .white.opacity(0.46), location: 1)
+                ], startPoint: .top, endPoint: .bottom))
             }
         }
         .allowsHitTesting(false)
@@ -160,15 +155,15 @@ struct GlassContour: View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         let dark = scheme == .dark
         let contour = LinearGradient(stops: dark ? [
-            .init(color: .black.opacity(0.24), location: 0),
-            .init(color: .black.opacity(0.34), location: 0.5),
-            .init(color: .black.opacity(0.40), location: 1)
+            .init(color: .black.opacity(0.28), location: 0),
+            .init(color: .black.opacity(0.38), location: 0.5),
+            .init(color: .black.opacity(0.46), location: 1)
         ] : [
-            .init(color: .black.opacity(0.035), location: 0),
-            .init(color: .black.opacity(0.085), location: 0.22),
-            .init(color: .black.opacity(0.105), location: 0.50),
-            .init(color: .black.opacity(0.095), location: 0.82),
-            .init(color: .black.opacity(0.085), location: 1)
+            .init(color: .black.opacity(0.07), location: 0),
+            .init(color: .black.opacity(0.12), location: 0.25),
+            .init(color: .black.opacity(0.145), location: 0.55),
+            .init(color: .black.opacity(0.16), location: 0.88),
+            .init(color: .black.opacity(0.14), location: 1)
         ], startPoint: .top, endPoint: .bottom)
         shape.strokeBorder(contour, lineWidth: 0.5)
             .allowsHitTesting(false)
@@ -176,20 +171,33 @@ struct GlassContour: View {
     }
 }
 
-/// Subtle, exterior-only downward lift shadow that fits cleanly within
-/// `FloatingSurface.compactOpticalInset` without darkening translucent interior glass.
+/// Overlapping exterior strokes give the shadow one outward falloff.
 struct CompactGlassLiftShadow: View {
     let cornerRadius: CGFloat
     let scheme: ColorScheme
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        shape.fill(.black)
-            .shadow(color: .black.opacity(scheme == .dark ? 0.16 : 0.065), radius: 1.0, x: 0, y: 0.8)
-            .overlay { shape.fill(.black).blendMode(.destinationOut) }
-            .compositingGroup()
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+        let strength = scheme == .dark ? 0.055 : 0.028
+        let shade = LinearGradient(stops: [
+            .init(color: .clear, location: 0),
+            .init(color: .clear, location: 0.32),
+            .init(color: .black.opacity(strength * 0.35), location: 0.72),
+            .init(color: .black.opacity(strength), location: 1)
+        ], startPoint: .top, endPoint: .bottom)
+        ZStack {
+            shadowBand(shade, reach: 1.75).opacity(0.35)
+            shadowBand(shade, reach: 1.15).opacity(0.65)
+            shadowBand(shade, reach: 0.65)
+        }
+        .offset(y: 0.2)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func shadowBand(_ shade: LinearGradient, reach: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius + reach, style: .continuous)
+            .strokeBorder(shade, lineWidth: reach)
+            .padding(-reach)
     }
 }
 
@@ -198,8 +206,8 @@ struct CompactGlassLiftShadow: View {
 /// center and tight inner falloff seated cleanly inside `GlassContour`.
 struct GlassEdge: View {
     let cornerRadius: CGFloat
-    let compact: Bool
     let scheme: ColorScheme
+    var transitioning: Bool = false
 
     private struct Profile {
         let highlight: Double
@@ -217,66 +225,31 @@ struct GlassEdge: View {
         let rimInnerWidth: CGFloat
         let rimBlur: CGFloat
 
-        func interpolated(to other: Profile, fraction: CGFloat) -> Profile {
-            let t = Double(fraction)
-            func mix(_ a: Double, _ b: Double) -> Double { a + (b - a) * t }
-            return Profile(
-                highlight: mix(highlight, other.highlight),
-                secondary: mix(secondary, other.secondary),
-                line: CGFloat(mix(Double(line), Double(other.line))),
-                innerLight: mix(innerLight, other.innerLight),
-                innerWidth: CGFloat(mix(Double(innerWidth), Double(other.innerWidth))),
-                blur: CGFloat(mix(Double(blur), Double(other.blur))),
-                rimTop: mix(rimTop, other.rimTop),
-                rimBottom: mix(rimBottom, other.rimBottom),
-                rimSide: mix(rimSide, other.rimSide),
-                rimLine: CGFloat(mix(Double(rimLine), Double(other.rimLine))),
-                rimInnerTop: mix(rimInnerTop, other.rimInnerTop),
-                rimInnerBottom: mix(rimInnerBottom, other.rimInnerBottom),
-                rimInnerWidth: CGFloat(mix(Double(rimInnerWidth), Double(other.rimInnerWidth))),
-                rimBlur: CGFloat(mix(Double(rimBlur), Double(other.rimBlur)))
-            )
-        }
     }
 
-    private func profile(width: CGFloat) -> Profile {
+    private var profile: Profile {
         let dark = scheme == .dark
-        let ball = Profile(
-            highlight: dark ? 0.50 : 0.58, secondary: dark ? 0.08 : 0.08,
-            line: 0.75, innerLight: dark ? 0.16 : 0.16, innerWidth: dark ? 1.8 : 1.5, blur: dark ? 0.9 : 0.75,
-            rimTop: dark ? 0.72 : 1.0, rimBottom: dark ? 0.52 : 0.72,
-            rimSide: dark ? 0.06 : 0.08, rimLine: dark ? 1.25 : 1.4,
-            rimInnerTop: dark ? 0.74 : 0.62, rimInnerBottom: dark ? 0.24 : 0.20,
-            rimInnerWidth: dark ? 3.2 : 2.8, rimBlur: dark ? 1.35 : 1.3
-        )
-        let strip = Profile(
-            highlight: dark ? 0.48 : 0.56, secondary: dark ? 0.08 : 0.08,
-            line: 0.75, innerLight: dark ? 0.15 : 0.15, innerWidth: dark ? 1.8 : 1.5, blur: dark ? 0.9 : 0.75,
-            rimTop: dark ? 0.70 : 1.0, rimBottom: dark ? 0.50 : 0.72,
-            rimSide: dark ? 0.06 : 0.08, rimLine: dark ? 1.25 : 1.4,
-            rimInnerTop: dark ? 0.72 : 0.60, rimInnerBottom: dark ? 0.24 : 0.20,
-            rimInnerWidth: dark ? 3.2 : 2.8, rimBlur: dark ? 1.35 : 1.3
-        )
-        if compact { return ball.interpolated(to: strip, fraction: min(1, max(0, (width - 48) / 192))) }
+        // Unified specular rim profile across button, hover strip, and expanded card
+        // so outer thickness, specular width, and edge-to-interior glow stay identical.
         return Profile(
-            highlight: dark ? 0.44 : 0.50, secondary: dark ? 0.07 : 0.07,
-            line: 0.75, innerLight: dark ? 0.14 : 0.14, innerWidth: dark ? 2.0 : 1.6, blur: dark ? 1.0 : 0.8,
-            rimTop: dark ? 0.70 : 1.0, rimBottom: dark ? 0.54 : 0.84,
-            rimSide: dark ? 0.05 : 0.08, rimLine: dark ? 1.25 : 1.45,
-            rimInnerTop: dark ? 0.48 : 0.64, rimInnerBottom: dark ? 0.26 : 0.34,
-            rimInnerWidth: dark ? 3.2 : 3.0, rimBlur: dark ? 1.35 : 1.3
+            highlight: dark ? 0.52 : 0.62, secondary: dark ? 0.08 : 0.08,
+            line: 0.75, innerLight: dark ? 0.16 : 0.19, innerWidth: dark ? 1.5 : 1.4, blur: dark ? 0.75 : 0.6,
+            rimTop: dark ? 0.80 : 1.0, rimBottom: dark ? 0.60 : 0.76,
+            rimSide: dark ? 0.14 : 0.26, rimLine: dark ? 1.1 : 1.15,
+            rimInnerTop: dark ? 0.58 : 0.58, rimInnerBottom: dark ? 0.24 : 0.22,
+            rimInnerWidth: dark ? 2.2 : 2.0, rimBlur: dark ? 1.0 : 0.85
         )
     }
 
     var body: some View {
         GeometryReader { geometry in
-            let p = profile(width: geometry.size.width)
+            let p = profile
             let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             let insetShape = shape.inset(by: 0.5)
             let light = LinearGradient(stops: [
                 .init(color: .white.opacity(p.highlight), location: 0),
                 .init(color: .white.opacity(p.highlight * 0.55), location: 0.20),
-                .init(color: .white.opacity(compact ? p.secondary : 0.015), location: 0.55),
+                .init(color: .white.opacity(p.secondary), location: 0.55),
                 .init(color: .white.opacity(p.secondary), location: 1)
             ], startPoint: .topLeading, endPoint: .bottomTrailing)
             let innerLight = LinearGradient(stops: [
@@ -298,13 +271,17 @@ struct GlassEdge: View {
                 .init(color: .white.opacity(p.rimInnerBottom), location: 1)
             ], startPoint: .top, endPoint: .bottom)
             ZStack {
-                shape.inset(by: 0.8).strokeBorder(innerLight, lineWidth: p.innerWidth)
-                    .blur(radius: p.blur)
-                    .clipShape(insetShape)
+                if !transitioning {
+                    shape.inset(by: 0.8).strokeBorder(innerLight, lineWidth: p.innerWidth)
+                        .blur(radius: p.blur)
+                        .clipShape(insetShape)
+                }
                 insetShape.strokeBorder(light, lineWidth: p.line)
-                shape.inset(by: 0.75).strokeBorder(verticalInner, lineWidth: p.rimInnerWidth)
-                    .blur(radius: p.rimBlur)
-                    .clipShape(insetShape)
+                if !transitioning {
+                    shape.inset(by: 0.75).strokeBorder(verticalInner, lineWidth: p.rimInnerWidth)
+                        .blur(radius: p.rimBlur)
+                        .clipShape(insetShape)
+                }
                 insetShape.strokeBorder(verticalRim, lineWidth: p.rimLine)
             }
         }

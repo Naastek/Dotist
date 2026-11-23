@@ -23,7 +23,14 @@ struct FloatingPanelShape: Shape {
             if debug.shape == .capsule { return Capsule().path(in: surface) }
             return RoundedRectangle(cornerRadius: CGFloat(debug.radius.rawValue), style: .continuous).path(in: surface)
         }
-        return RoundedRectangle(cornerRadius: compact ? 24 : DotistDesign.windowCornerRadius, style: .continuous).path(in: surface)
+        let radius: CGFloat
+        if transitioning {
+            let t = min(1, max(0, (min(surface.width, surface.height) - 48) / 80))
+            radius = 24 + (DotistDesign.windowCornerRadius - 24) * t
+        } else {
+            radius = compact ? 24 : DotistDesign.windowCornerRadius
+        }
+        return RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: surface)
     }
 }
 
@@ -61,7 +68,7 @@ struct FloatingPanelView<Content: View>: View {
                 content
                     .frame(width: width, height: height)
                     .opacity(motion.bubble ? 0 : 1)
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.14).delay(motion.bubble ? 0 : 0.1), value: motion.bubble)
+                    .animation(reduceMotion ? nil : .easeOut(duration: motion.bubble ? 0.08 : 0.14).delay(motion.bubble ? 0 : 0.1), value: motion.bubble)
                     .allowsHitTesting(!motion.bubble)
                     .accessibilityHidden(motion.bubble)
                 // Keep text, font cascade and SwiftUI metadata warm before the first

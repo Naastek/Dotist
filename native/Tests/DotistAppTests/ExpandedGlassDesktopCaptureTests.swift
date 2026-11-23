@@ -185,7 +185,7 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
                             .frame(maxHeight: .infinity, alignment: .bottom)
                             .clipShape(shape)
                             .padding(clearance)
-                        GlassEdge(cornerRadius: radius, compact: false, scheme: scheme).padding(clearance)
+                        GlassEdge(cornerRadius: radius, scheme: scheme).padding(clearance)
                         GlassContour(cornerRadius: radius, scheme: scheme).padding(clearance)
                     }
                 }
@@ -206,7 +206,7 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
                         .overlay(DotistDesign.paper.opacity(0.4 * GlassTintMaterial.expandedFrostScale))
                 }
                 .overlay(DotistTheme.swatch(.pink).opacity(scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint))
-                .overlay { GlassEdge(cornerRadius: DotistDesign.windowCornerRadius, compact: false, scheme: scheme) }
+                .overlay { GlassEdge(cornerRadius: DotistDesign.windowCornerRadius, scheme: scheme) }
                 .opacity(0.8)
                 .clipShape(shape)
                 .frame(width: 364, height: 620)
@@ -300,7 +300,7 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
                         DotistTheme.swatch(.pink).opacity(scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint)
                     }
                 }
-                .overlay { GlassEdge(cornerRadius: DotistDesign.windowCornerRadius, compact: false, scheme: scheme) }
+                .overlay { GlassEdge(cornerRadius: DotistDesign.windowCornerRadius, scheme: scheme) }
                 .opacity(variant == .noWholeOpacity ? 1 : 0.8)
             if variant.clips {
                 glass.clipShape(shape)

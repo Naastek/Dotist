@@ -376,6 +376,11 @@ final class SideTabEntranceControllerTests: XCTestCase {
         XCTAssertEqual(h.controller.renderedRows[1].opacity, 0)
         h.sample(10.84)
         XCTAssertTrue(h.controller.renderedRows.allSatisfy { $0.opacity == 1 && $0.interactive })
+
+        h.motion.toggleBubble(in: h.panelInput.area)
+        h.sample(10.84)
+        XCTAssertTrue(h.motion.animationInProgress)
+        XCTAssertTrue(h.controller.renderedRows.allSatisfy { $0.opacity == 0 && !$0.interactive })
     }
 
     func testReduceMotionAndLeftEdgeChildShareImmediateSamplesAndHitRects() async throws {

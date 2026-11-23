@@ -12,7 +12,7 @@ final class CompactGlassPerimeterTests: XCTestCase {
             for width in [CGFloat(48), 96, 144, 240, 440] {
                 for scale in [CGFloat(1), 2] {
                     let size = CGSize(width: width, height: 48)
-                    let image = try render(GlassEdge(cornerRadius: 24, compact: true, scheme: scheme)
+                    let image = try render(GlassEdge(cornerRadius: 24, scheme: scheme)
                         .frame(width: width, height: 48), size: size, scale: scale)
                     let path = RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .path(in: CGRect(origin: .zero, size: size)).cgPath

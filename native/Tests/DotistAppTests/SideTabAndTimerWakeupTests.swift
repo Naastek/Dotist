@@ -67,11 +67,12 @@ final class SideTabAndTimerWakeupTests: XCTestCase {
         XCTAssertEqual(controller.displayLink?.isPaused, true)
         XCTAssertGreaterThan(controller.renderedRows[0].rect.width, 16)
 
-        // Collapsing panel wakes displayLink for smooth retraction, then pauses when hidden.
+        // The parent collapse settles its tabs immediately and leaves their link paused.
         motion.toggleBubble(in: panelInput.area, animated: false)
         clock.time = 11.51
         controller.synchronize()
-        XCTAssertEqual(controller.displayLink?.isPaused, false)
+        XCTAssertEqual(controller.displayLink?.isPaused, true)
+        XCTAssertTrue(controller.renderedRows.allSatisfy { $0.opacity == 0 })
 
         clock.time = 12.2
         controller.synchronize()

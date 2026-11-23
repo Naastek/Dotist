@@ -39,7 +39,7 @@ final class GlassEdgePolishTests: XCTestCase {
     }
 
     private func current(_ specimen: Specimen, _ scheme: ColorScheme) -> some View {
-        GlassEdge(cornerRadius: specimen.radius, compact: specimen.compact, scheme: scheme)
+        GlassEdge(cornerRadius: specimen.radius, scheme: scheme)
             .frame(width: specimen.size.width, height: specimen.size.height)
     }
 
@@ -197,7 +197,7 @@ final class GlassEdgePolishTests: XCTestCase {
         for scheme in [ColorScheme.light, .dark] {
             for opacity in [UInt8(0), 100] {
                 let amount = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
-                let edge = GlassEdge(cornerRadius: DotistDesign.windowCornerRadius, compact: false, scheme: scheme)
+                let edge = GlassEdge(cornerRadius: DotistDesign.windowCornerRadius, scheme: scheme)
                     .frame(width: 364, height: 620).opacity(amount)
                 try logRendererMetadata(edge, label: "edge-\(scheme)-\(opacity)")
                 let image = try fixedBitmap(edge, size: CGSize(width: 364, height: 620))

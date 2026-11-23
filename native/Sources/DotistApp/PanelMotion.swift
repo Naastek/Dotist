@@ -68,8 +68,6 @@ final class PanelMotion: ObservableObject {
     private var stopped = false
     private var closeObservation: NSObjectProtocol?
     private var frameAnimation: PanelFrameAnimation?
-    private var insetTransition: PanelSurfaceTransition?
-    private var insetObservations: [NSObjectProtocol] = []
     var idleAlphaDidChange: ((CGFloat, TimeInterval) -> Void)?
     var onIdlePollingChange: (() -> Void)?
     var needsIdlePolling: Bool {
@@ -91,33 +89,16 @@ final class PanelMotion: ObservableObject {
         closeObservation = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stop() }
         }
-        for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
-            insetObservations.append(NotificationCenter.default.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self, !self.stopped, let transition = self.insetTransition else { return }
-                    // Publish even when size is unchanged: an anchor-only move
-                    // must invalidate the observed surface insets.
-                    #if DOTIST_BENCH
-                    BenchPerf.count(.surfaceInsets)
-                    #endif
-                    self.surface.value = transition.insets(at: self.panel.frame)
-                }
-            })
-        }
     }
     isolated deinit {
         frameAnimation?.cancel()
         hoverClose?.cancel()
         if let closeObservation { NotificationCenter.default.removeObserver(closeObservation) }
-        insetObservations.forEach { NotificationCenter.default.removeObserver($0) }
     }
     func stop() {
         guard !stopped else { return }
         stopped = true
         frameAnimation?.cancel(); frameAnimation = nil
-        insetTransition = nil
-        insetObservations.forEach { NotificationCenter.default.removeObserver($0) }
-        insetObservations.removeAll()
         hoverClose?.cancel(); hoverClose = nil
         pendingHover = nil
         pendingBubbleToggle = false
@@ -151,6 +132,11 @@ final class PanelMotion: ObservableObject {
             pendingHover = nil; pendingBubbleToggle = true
             return
         }
+        #if DOTIST_BENCH
+        if BenchPerf.enabled, animated, environment.animateFrame == nil, panel.isVisible, panel.screen != nil {
+            BenchPerf.begin(bubble ? "expand" : "collapse")
+        }
+        #endif
         hoverClose?.cancel(); hoverClose = nil
         panel.makeFirstResponder(nil)
         animationInProgress = true
@@ -160,12 +146,12 @@ final class PanelMotion: ObservableObject {
             hoverRequiresExit = true
             expandedSize = old.size
             transitionSize = old.size
-            let ballX = min(max(old.maxX - 46, area.minX), area.maxX - 48)
-            let y = min(max(old.maxY - 46, area.minY), area.maxY - 48)
+            let ballX = min(max(old.maxX - 48, area.minX), area.maxX - 48)
+            let y = min(max(old.maxY - 48, area.minY), area.maxY - 48)
             bubbleOnRight = ballX + 24 > area.midX
             let w = baseWidth
             target = NSRect(x: bubbleOnRight ? ballX + 48 - w : ballX, y: y, width: w, height: 48)
-            prepareSurfaceTransition(from: old, to: target, compact: true)
+            prepareSurfaceTransition(compact: true)
             panel.minSize = NSSize(width: 48, height: 48)
             panel.styleMask.remove(.resizable)
             bubble = true
@@ -173,10 +159,10 @@ final class PanelMotion: ObservableObject {
             let width = min(expandedSize.width, area.width)
             let height = min(expandedSize.height, area.height)
             let center = bubbleOnRight ? old.maxX - 24 : old.minX + 24
-            let right = min(max(center + 22, area.minX + width), area.maxX)
-            let top = min(max(old.midY + 22, area.minY + height), area.maxY)
+            let right = min(max(center + 24, area.minX + width), area.maxX)
+            let top = min(max(old.midY + 24, area.minY + height), area.maxY)
             target = NSRect(x: right - width, y: top - height, width: width, height: height)
-            prepareSurfaceTransition(from: old, to: target, compact: false)
+            prepareSurfaceTransition(compact: false)
             transitionSize = target.size
             hovering = false
             bubble = false
@@ -208,15 +194,16 @@ final class PanelMotion: ObservableObject {
         animation.startMotion()
     }
 
-    private func prepareSurfaceTransition(from frame: NSRect, to target: NSRect, compact: Bool) {
-        let end = FloatingSurface.opticalInsets(compact: compact, reduceTransparency: false, increasedContrast: false)
-        let transition = PanelSurfaceTransition(start: frame, target: target, from: surfaceInsets, to: end, onRight: bubbleOnRight)
-        insetTransition = transition
-        surface.value = transition.insets(at: frame)
+    private func prepareSurfaceTransition(compact: Bool) {
+        // Both compact (FloatingSurface outer padding) and expanded
+        // (ExpandedReadingMaterial.opticalClearance) share the same 2pt optical
+        // clearance in normal mode and 0pt in accessibility solid mode. Switch
+        // surfaceInsets immediately with `compact` so total visible clearance
+        // never double-pads (4pt) on expand or drops to 0pt on collapse.
+        surface.value = FloatingSurface.opticalInsets(compact: compact, reduceTransparency: false, increasedContrast: false)
     }
 
     private func finishBubbleTransition() {
-        insetTransition = nil
         surface.value = FloatingSurface.opticalInsets(compact: bubble, reduceTransparency: false, increasedContrast: false)
         animationInProgress = false
         refreshShadow()
@@ -338,8 +325,8 @@ final class PanelMotion: ObservableObject {
         let width = min(expandedSize.width, area.width)
         let height = min(expandedSize.height, area.height)
         let center = bubbleOnRight ? x + frame.width - 24 : x + 24
-        let right = min(max(center + 22, area.minX + width), area.maxX)
-        let top = min(max(y + 46, area.minY + height), area.maxY)
+        let right = min(max(center + 24, area.minX + width), area.maxX)
+        let top = min(max(y + 48, area.minY + height), area.maxY)
         let expanded = NSRect(x: right - width, y: top - height, width: width, height: height)
         rememberFrame(expanded)
         refreshShadow()

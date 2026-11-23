@@ -79,30 +79,21 @@ final class TransientGlassTests: XCTestCase {
         }
     }
 
-    /// Compact contrast treatment must remain independent of expanded-panel presets.
-    /// Environment toggles compare composition with a matched reference; they do
-    /// not reproduce real native glass deactivation in WindowServer.
-    func testCompactGlassContrastBackingAndPresetIndependence() throws {
+    func testCompactGlassInteriorRespondsToPresetsWithoutChangingWithFocus() throws {
         for scheme in [ColorScheme.light, .dark] {
             for width in [48, 240] {
-                let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
-                let reference = try bitmap(ZStack {
-                    Color.white
-                    shape.fill(GlassTintMaterial.neutral(scheme).opacity(GlassTintMaterial.compactDensity(scheme)))
-                }.frame(width: CGFloat(width), height: 48), scheme: scheme)
+                var previousAlpha: CGFloat = 0
                 for (opacity, frost): (UInt8, UInt8) in [(8, 4), (60, 40), (100, 100)] {
-                    for active in [false, true] {
-                        let actual = try bitmap(ZStack {
-                            Color.white
-                            FloatingPanelSurface(opacity: opacity, frost: frost, compact: true,
-                                color: .none, solid: false, scheme: scheme)
-                                .environment(\.appearsActive, active)
-                        }.frame(width: CGFloat(width), height: 48), scheme: scheme)
-                        let a = try XCTUnwrap(actual.colorAt(x: width, y: 48)?.usingColorSpace(.sRGB))
-                        let b = try XCTUnwrap(reference.colorAt(x: width, y: 48)?.usingColorSpace(.sRGB))
-                        XCTAssertEqual(a.redComponent, b.redComponent, accuracy: 0.025,
-                            "Compact center must keep its calibrated tint density; inherited active=\(active)")
+                    let centers = try [false, true].map { active in
+                        let image = try bitmap(FloatingPanelSurface(opacity: opacity, frost: frost, compact: true,
+                            color: .none, solid: false, scheme: scheme)
+                            .environment(\.appearsActive, active)
+                            .frame(width: CGFloat(width), height: 48), scheme: scheme)
+                        return try XCTUnwrap(image.colorAt(x: width, y: 48)).alphaComponent
                     }
+                    XCTAssertEqual(centers[0], centers[1], accuracy: 1.0 / 255)
+                    XCTAssertGreaterThan(centers[0], previousAlpha)
+                    previousAlpha = centers[0]
                 }
             }
         }
@@ -125,7 +116,7 @@ final class TransientGlassTests: XCTestCase {
     func testCompactHighlightsAreDirectionalAndLeaveInteriorClear() throws {
         for scheme in [ColorScheme.light, .dark] {
             for width in [48, 240] {
-                let image = try bitmap(GlassEdge(cornerRadius: 24, compact: true, scheme: scheme)
+                let image = try bitmap(GlassEdge(cornerRadius: 24, scheme: scheme)
                     .frame(width: CGFloat(width), height: 48), scheme: scheme)
                 func light(_ x: Int, _ y: Int) throws -> CGFloat {
                     let c = try XCTUnwrap(image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
@@ -211,16 +202,17 @@ final class TransientGlassTests: XCTestCase {
                         let fixture = NativeRenderingFixture(surface, size: CGSize(width: 260, height: 48))
                         let image = try await fixture.capture(scale: 2)
                         fixture.close()
-                        let reference = NativeRenderingFixture(ZStack {
-                            FloatingGlassBackdrop()
-                            GlassTintMaterial.neutral(scheme).opacity(GlassTintMaterial.compactDensity(scheme))
-                        }.frame(width: 260, height: 48).environment(\.colorScheme, scheme), size: CGSize(width: 260, height: 48))
+                        let reference = NativeRenderingFixture(
+                            FloatingPanelSurface(opacity: 60, frost: 40, compact: true, color: .none,
+                                solid: false, scheme: scheme, circleBlend: reveal == 0 ? 1 : 0)
+                                .frame(width: 48, height: 48).environment(\.colorScheme, scheme),
+                            size: CGSize(width: 48, height: 48))
                         let referenceImage = try await reference.capture(scale: 2)
                         reference.close()
                         let width = 48 + 212 * reveal
                         let centerX = onRight ? 260 - width / 2 : width / 2
                         let alpha = try XCTUnwrap(image.colorAt(x: Int(centerX * 2), y: 48)).alphaComponent
-                        let referenceAlpha = try XCTUnwrap(referenceImage.colorAt(x: 260, y: 48)).alphaComponent
+                        let referenceAlpha = try XCTUnwrap(referenceImage.colorAt(x: 48, y: 48)).alphaComponent
                         XCTAssertEqual(alpha, protection == 0 ? referenceAlpha : 1, accuracy: 0.01)
                         let name = "\(scheme)-protection\(protection)-reveal\(reveal)-right\(onRight)"
                         try XCTUnwrap(image.representation(using: .png, properties: [:])).write(to: evidence.appendingPathComponent(name + "-surface.png"))

@@ -754,10 +754,13 @@ final class SideTabsController: NSObject {
             canSwitch: press == nil)
         let inward = placement.inward
         let visible = hostVisible && !motion.bubble && !motion.animationInProgress
-        let reduceMotion = environment.reduceMotion()
+        // A shrinking parent and retracting tabs otherwise resize two windows
+        // per display tick. Settle the tabs once during the parent transition;
+        // the staggered entrance still starts after the parent finishes.
+        let settleTabs = environment.reduceMotion() || !hostVisible || motion.animationInProgress
         let selectedIndex = items.firstIndex { $0.groupID == state.groupID }
         let itemIDs = items.map(\.id)
-        entrance.update(ids: itemIDs, visible: visible, at: now, reduceMotion: reduceMotion || !hostVisible)
+        entrance.update(ids: itemIDs, visible: visible, at: now, reduceMotion: settleTabs)
         let arrivals = entrance.values(ids: itemIDs, at: now)
         let expansionProgressBefore = expansion.progress(at: now)
         let current = SideTabGeometry.snapshot(panel: frame, fullWidths: widths,
@@ -788,7 +791,7 @@ final class SideTabsController: NSObject {
             collapseWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + SideTabGeometry.collapseDelay, execute: work)
         }
-        expansion.setExpanded(expanded, at: now, reduceMotion: reduceMotion || !hostVisible)
+        expansion.setExpanded(expanded, at: now, reduceMotion: settleTabs)
         let expansionProgressAfter = expansion.progress(at: now)
         let sample = expansionProgressAfter == expansionProgressBefore ? current : SideTabGeometry.snapshot(
             panel: frame, fullWidths: widths, progress: expansionProgressAfter,

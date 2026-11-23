@@ -27,7 +27,7 @@ final class PanelFrameQuantizationTests: XCTestCase {
     }
 
     private func productionSurfaceBounds(_ motion: PanelMotion, transparent: Bool = true, contrast: Bool = false) -> NSRect {
-        surfaceBounds(frame: motion.panel.frame, inset: FloatingSurface.opticalInsets(compact: motion.bubble,
+        surfaceBounds(frame: motion.panel.frame, inset: FloatingSurface.visibleGlassInsets(compact: motion.bubble,
             reduceTransparency: !transparent, increasedContrast: contrast, frameInsets: motion.surfaceInsets))
     }
 
@@ -77,7 +77,7 @@ final class PanelFrameQuantizationTests: XCTestCase {
                 motion.toggleBubble(in: area)
                 let target = try XCTUnwrap(requested)
                 XCTAssertEqual(panel.frame, start); XCTAssertEqual(productionSurfaceBounds(motion), before)
-                let endInsets = FloatingSurface.opticalInsets(compact: motion.bubble, reduceTransparency: false, increasedContrast: false)
+                let endInsets = FloatingSurface.visibleGlassInsets(compact: motion.bubble, reduceTransparency: false, increasedContrast: false)
                 let end = surfaceBounds(frame: target, inset: endInsets), right = motion.bubbleOnRight
                 let fromX = right ? before.maxX : before.minX, toX = right ? end.maxX : end.minX
                 var lastX = fromX, lastY = before.maxY
@@ -104,30 +104,25 @@ final class PanelFrameQuantizationTests: XCTestCase {
         }
     }
 
-    func testProductionInsetPublishesOriginOnlyFramesAndStopsPublishingAfterStop() async throws {
+    func testProductionInsetStaysConstantAcrossExpandAndCollapseWithoutFrameZeroJump() async throws {
         let (motion, panel, input) = try productionInsetFixture()
         defer { motion.stop(); panel.close() }
-        motion.toggleBubble(in: input.area, animated: false); motion.setHover(true, in: input.area)
-        panel.setFrame(NSRect(x: 1425, y: 874, width: 250, height: 48), display: false); motion.finishHover(true)
+        // Expanded -> Collapse: visible glass silhouette must not jump outward on Frame 0.
+        let expandedVisible = productionSurfaceBounds(motion)
         motion.toggleBubble(in: input.area)
-        var updates = 0
-        let observation = motion.surface.$value.dropFirst().sink { _ in updates += 1 }
-        defer { observation.cancel() }
-        panel.setFrame(NSRect(x: 1374, y: 744, width: 301, height: 178), display: false)
-        try await Task.sleep(for: .milliseconds(5))
-        let count = updates, size = panel.frame.size
-        panel.setFrameOrigin(NSPoint(x: 1373, y: 743))
-        try await Task.sleep(for: .milliseconds(5))
-        XCTAssertEqual(panel.frame.size, size); XCTAssertGreaterThan(updates, count)
-        XCTAssertEqual(motion.surfaceInsets.top, 1); XCTAssertEqual(motion.surfaceInsets.trailing, 1)
-        let frozen = motion.surfaceInsets
-        motion.stop()
-        let stoppedCount = updates
-        panel.setFrameOrigin(NSPoint(x: 1370, y: 740))
-        try await Task.sleep(for: .milliseconds(5))
-        XCTAssertEqual(motion.surfaceInsets, frozen); XCTAssertEqual(updates, stoppedCount)
+        XCTAssertTrue(motion.bubble)
+        XCTAssertEqual(productionSurfaceBounds(motion), expandedVisible, "Collapse Frame 0 must preserve exact visible glass bounds")
         try input.completeFrameAnimation(for: panel)
-        XCTAssertEqual(motion.surfaceInsets, frozen)
+        let bubbleVisible = productionSurfaceBounds(motion)
+        XCTAssertEqual(bubbleVisible.maxX, expandedVisible.maxX, "Collapsed bubble right glass edge must align with expanded panel")
+        XCTAssertEqual(bubbleVisible.maxY, expandedVisible.maxY, "Collapsed bubble top glass edge must align with expanded panel")
+
+        // Collapse -> Expand: visible glass silhouette must not double-inset inward on Frame 0.
+        motion.toggleBubble(in: input.area)
+        XCTAssertFalse(motion.bubble)
+        XCTAssertEqual(productionSurfaceBounds(motion), bubbleVisible, "Expand Frame 0 must preserve exact visible glass bounds")
+        try input.completeFrameAnimation(for: panel)
+        XCTAssertEqual(productionSurfaceBounds(motion), expandedVisible, "Expanded panel must return to exact original visible glass bounds")
     }
 
     func testProductionInsetZeroDurationAndGeometricDegeneracy() throws {

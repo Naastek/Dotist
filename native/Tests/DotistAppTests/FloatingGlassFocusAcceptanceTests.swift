@@ -54,13 +54,13 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
         for scheme in [ColorScheme.light, .dark] {
             for form in forms {
                 let active = try fixedBitmap(
-                    GlassEdge(cornerRadius: form.radius, compact: form.compact, scheme: scheme)
+                    GlassEdge(cornerRadius: form.radius, scheme: scheme)
                         .frame(width: form.size.width, height: form.size.height)
                         .environment(\.appearsActive, true),
                     size: form.size
                 )
                 let inactive = try fixedBitmap(
-                    GlassEdge(cornerRadius: form.radius, compact: form.compact, scheme: scheme)
+                    GlassEdge(cornerRadius: form.radius, scheme: scheme)
                         .frame(width: form.size.width, height: form.size.height)
                         .environment(\.appearsActive, false),
                     size: form.size
@@ -119,6 +119,7 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
         guard let screen = NSScreen.screens.first, let primary = NSScreen.screens.first else {
             throw CompactGlassDesktopEvidence.Failure("No display available")
         }
+        let settledOnly = ProcessInfo.processInfo.environment["DOTIST_GLASS_SETTLED_ONLY"] == "1"
         let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first
         let previousFrontmost = NSWorkspace.shared.frontmostApplication
         let originalPolicy = app.activationPolicy()
@@ -184,8 +185,8 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
         for (schemeName, scheme, appearanceName) in schemes {
             var patch = DotistSettingsPatch()
             patch.theme = schemeName
-            patch.opacity = 80
-            patch.frost = 40
+            patch.opacity = ProcessInfo.processInfo.environment["DOTIST_CAPTURE_OPACITY"].flatMap(UInt8.init) ?? 80
+            patch.frost = ProcessInfo.processInfo.environment["DOTIST_CAPTURE_FROST"].flatMap(UInt8.init) ?? 40
             patch.alwaysOnTop = true
             model.updateSettings(patch)
 
@@ -385,45 +386,43 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
                     label, topA, topB, topB - topA, botA, botB, botB - botA, leftA, leftB, leftB - leftA, rightA, rightB, rightB - rightA)
             }
 
-            // 1. Expanded task card
-            try setFocus(active: true)
-            let (_, cardActive) = try capturePanel(name: "\(schemeName)-card-active")
-            try setFocus(active: false)
-            let (_, cardInactive) = try capturePanel(name: "\(schemeName)-card-inactive")
-            try stitch(active: cardActive, inactive: cardInactive, vertical: false, to: outDir.appendingPathComponent("\(schemeName)-card-compare.png"))
-            reportLines.append(measure("\(schemeName)-card", active: cardActive, inactive: cardInactive))
+            func captureForm(_ form: String, compareVertically: Bool = false) throws -> (NSBitmapImageRep, NSBitmapImageRep?) {
+                let label = "\(schemeName)-\(form)"
+                if settledOnly {
+                    panel.orderFrontRegardless()
+                    panel.contentView?.layoutSubtreeIfNeeded()
+                    panel.displayIfNeeded()
+                    CATransaction.flush()
+                    spin(0.35)
+                    let (_, image) = try capturePanel(name: label)
+                    return (image, nil)
+                }
+                try setFocus(active: true)
+                let (_, active) = try capturePanel(name: label + "-active")
+                try setFocus(active: false)
+                let (_, inactive) = try capturePanel(name: label + "-inactive")
+                try stitch(active: active, inactive: inactive, vertical: compareVertically,
+                    to: outDir.appendingPathComponent(label + "-compare.png"))
+                reportLines.append(measure(label, active: active, inactive: inactive))
+                return (active, inactive)
+            }
 
-            // 2. Floating button (collapsed)
+            let (cardActive, cardInactive) = try captureForm("card")
             motion.toggleBubble(in: backdropFrame, animated: false)
-            // Center button inside backdrop
             let buttonOrigin = NSPoint(x: (backdropFrame.midX - 24).rounded(.down), y: (backdropFrame.midY - 24).rounded(.down))
             panel.setFrame(NSRect(origin: buttonOrigin, size: NSSize(width: 48, height: 48)), display: true)
-            spin(0.25)
+            let (btnActive, btnInactive) = try captureForm("button")
 
-            try setFocus(active: true)
-            let (_, btnActive) = try capturePanel(name: "\(schemeName)-button-active")
-            try setFocus(active: false)
-            let (_, btnInactive) = try capturePanel(name: "\(schemeName)-button-inactive")
-            try stitch(active: btnActive, inactive: btnInactive, vertical: false, to: outDir.appendingPathComponent("\(schemeName)-button-compare.png"))
-            reportLines.append(measure("\(schemeName)-button", active: btnActive, inactive: btnInactive))
-
-            // 3. Floating hover strip
             motion.setHover(true, in: backdropFrame)
             spin(0.50)
-            // Center strip inside backdrop
             let stripSize = panel.frame.size
-            let stripOrigin = NSPoint(x: (backdropFrame.midX - stripSize.width / 2).rounded(.down), y: (backdropFrame.midY - stripSize.height / 2).rounded(.down))
+            XCTAssertGreaterThan(stripSize.width, 48, "The hover strip must open before capture")
+            let stripOrigin = NSPoint(x: (backdropFrame.midX - stripSize.width / 2).rounded(.down),
+                                      y: (backdropFrame.midY - stripSize.height / 2).rounded(.down))
             panel.setFrame(NSRect(origin: stripOrigin, size: stripSize), display: true)
-            spin(0.20)
+            let (stripActive, stripInactive) = try captureForm("strip", compareVertically: true)
 
-            try setFocus(active: true)
-            let (_, stripActive) = try capturePanel(name: "\(schemeName)-strip-active")
-            try setFocus(active: false)
-            let (_, stripInactive) = try capturePanel(name: "\(schemeName)-strip-inactive")
-            try stitch(active: stripActive, inactive: stripInactive, vertical: true, to: outDir.appendingPathComponent("\(schemeName)-strip-compare.png"))
-            reportLines.append(measure("\(schemeName)-strip", active: stripActive, inactive: stripInactive))
-
-            if useWarmBackdrop {
+            if useWarmBackdrop, let cardInactive, let btnInactive, let stripInactive {
                 // A small ink-free patch 8 pt left of the common screen center
                 // samples the same location in all three production forms.
                 func centerRGB(_ image: NSBitmapImageRep, formWidth: CGFloat) throws -> [CGFloat] {
@@ -483,5 +482,245 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
         let summary = reportLines.joined(separator: "\n") + "\n"
         try summary.write(to: outDir.appendingPathComponent("measurements.txt"), atomically: true, encoding: .utf8)
         print("GLASS_FOCUS_ACCEPTANCE output=\(outDir.path)\n\(summary)")
+    }
+
+    /// Opt-in real-screen consecutive frame capture of the visible glass silhouette
+    /// during collapse and expand transitions (pre, Frame 0, intermediate frames, end),
+    /// measuring the rendered contour pixels rather than NSWindow.frame geometry alone.
+    func testDesktopConsecutiveToggleSilhouetteCapture() throws {
+        guard ProcessInfo.processInfo.environment["DOTIST_TOGGLE_SILHOUETTE_CAPTURE"] == "1" else {
+            throw XCTSkip("Set DOTIST_TOGGLE_SILHOUETTE_CAPTURE=1 on a desktop host with Screen Recording permission")
+        }
+        let app = NSApplication.shared
+        guard CGPreflightScreenCaptureAccess() else {
+            throw CompactGlassDesktopEvidence.Failure("Screen Recording permission unavailable")
+        }
+        guard let screen = NSScreen.screens.first else {
+            throw CompactGlassDesktopEvidence.Failure("No display available")
+        }
+        let previousFrontmost = NSWorkspace.shared.frontmostApplication
+        let originalPolicy = app.activationPolicy()
+        app.setActivationPolicy(.regular)
+        app.finishLaunching()
+        func spin(_ seconds: TimeInterval) {
+            let deadline = Date().addingTimeInterval(seconds)
+            while Date() < deadline {
+                if let event = app.nextEvent(matching: .any, until: deadline, inMode: .default, dequeue: true) {
+                    app.sendEvent(event)
+                }
+            }
+        }
+        defer {
+            app.setActivationPolicy(originalPolicy)
+            previousFrontmost?.activate(options: [])
+        }
+
+        let outPath = ProcessInfo.processInfo.environment["DOTIST_TOGGLE_SILHOUETTE_OUT"]
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("dotist-toggle-silhouette-\(UUID().uuidString)").path
+        let outDir = URL(fileURLWithPath: outPath)
+        try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+
+        let dbDir = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-toggle-db-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dbDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dbDir) }
+
+        let store = try TaskStore(databasePath: dbDir.appendingPathComponent("tasks.sqlite").path)
+        _ = try store.addTask(title: "检查开合首帧与连续轮廓")
+        _ = try store.addTask(title: "对照 Codex Mini 水光玻璃与薄边")
+        let model = try AppModel(store: store)
+        var patch = DotistSettingsPatch()
+        patch.theme = "light"
+        patch.opacity = UInt8(ProcessInfo.processInfo.environment["DOTIST_CAPTURE_OPACITY"].flatMap(Int.init) ?? 100)
+        patch.frost = UInt8(ProcessInfo.processInfo.environment["DOTIST_CAPTURE_FROST"].flatMap(Int.init) ?? 31)
+        patch.alwaysOnTop = true
+        model.updateSettings(patch)
+        DotistDesign.registerFonts()
+
+        let backdropSize = NSSize(width: 560, height: 680)
+        let backdropFrame = NSRect(
+            x: (screen.visibleFrame.midX - backdropSize.width / 2).rounded(.down),
+            y: (screen.visibleFrame.midY - backdropSize.height / 2).rounded(.down),
+            width: backdropSize.width,
+            height: backdropSize.height
+        )
+        let background = NSPanel(contentRect: backdropFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        background.isReleasedWhenClosed = false
+        background.hasShadow = false
+        background.hidesOnDeactivate = false
+        background.level = .statusBar
+        background.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
+        background.ignoresMouseEvents = true
+        defer { background.close() }
+
+        let warmColor = Color(red: 0.90, green: 0.88, blue: 0.83)
+        let bgHost = NSHostingView(rootView: warmColor.frame(width: backdropSize.width, height: backdropSize.height))
+        bgHost.sizingOptions = []
+        bgHost.frame = NSRect(origin: .zero, size: backdropSize)
+        background.contentView = bgHost
+        background.setFrame(backdropFrame, display: true)
+        background.orderFrontRegardless()
+
+        let cardSize = NSSize(width: 454, height: 568)
+        let cardOrigin = NSPoint(
+            x: (backdropFrame.midX - cardSize.width / 2).rounded(.down),
+            y: (backdropFrame.midY - cardSize.height / 2).rounded(.down)
+        )
+        let panel = DotistPanel(
+            contentRect: NSRect(origin: cardOrigin, size: cardSize),
+            styleMask: [.borderless, .resizable, .nonactivatingPanel],
+            backing: .buffered, defer: false
+        )
+        panel.minSize = NSSize(width: 320, height: 440)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        panel.level = .statusBar
+        panel.appearance = NSAppearance(named: .aqua)
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
+        defer { panel.close() }
+
+        let panelState = TaskPanelState()
+        var pendingDriver: (target: NSRect, completion: @MainActor () -> Void)?
+        var env = PanelMotion.Environment()
+        env.pointerEventsEnabled = false
+        env.visibleFrame = { _ in backdropFrame }
+        env.mouseLocation = { NSPoint(x: -10_000, y: -10_000) }
+        env.animateFrame = { _, target, _, completion in
+            pendingDriver = (target, completion)
+        }
+        let motion = PanelMotion(model: model, panel: panel, size: cardSize, title: { "Dotist" }, environment: env)
+        defer { motion.stop() }
+
+        let root = FloatingPanelView(
+            model: model, motion: motion, colorState: panelState,
+            title: "Dotist", remaining: 2, total: 2, groupName: nil,
+            contextMenu: { _, _ in },
+            content: MainWindow(
+                model: model, state: panelState,
+                showViews: {}, showSearch: {}, showSettings: {},
+                showGroupPanel: { _ in }, collapse: { motion.toggleBubble() }
+            )
+        )
+        let host = DotistHostingView(rootView: root)
+        host.sizingOptions = []
+        host.frame = NSRect(origin: .zero, size: cardSize)
+        host.autoresizingMask = [.width, .height]
+        let container = NSView(frame: host.frame)
+        container.addSubview(host)
+        panel.contentView = container
+        panel.setFrame(NSRect(origin: cardOrigin, size: cardSize), display: true)
+        app.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        spin(0.35)
+
+        // Fixed anchor crop around the top-right corner of the card/bubble (110x110 pt).
+        let anchorRect = NSRect(x: panel.frame.maxX - 96, y: panel.frame.maxY - 96, width: 110, height: 110)
+        let screenAnchor = CompactGlassDesktopEvidence.screenRect(anchorRect, primaryFrame: screen.frame)
+
+        func captureAnchor(tag: String) throws -> NSBitmapImageRep {
+            panel.contentView?.layoutSubtreeIfNeeded()
+            panel.displayIfNeeded()
+            CATransaction.flush()
+            spin(0.08)
+            let tmp = outDir.appendingPathComponent("tmp-\(tag).png")
+            defer { try? FileManager.default.removeItem(at: tmp) }
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            proc.arguments = ["-x", "-R\(Int(screenAnchor.minX)),\(Int(screenAnchor.minY)),\(Int(screenAnchor.width)),\(Int(screenAnchor.height))", tmp.path]
+            try proc.run()
+            proc.waitUntilExit()
+            guard proc.terminationStatus == 0 else {
+                throw CompactGlassDesktopEvidence.Failure("screencapture failed for \(tag)")
+            }
+            return try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: tmp)))
+        }
+
+        // Measure the visible glass contour (brighter than warm backdrop) in pixel coords
+        // along the top-right anchor crop (top edge at x = center of bubble, right edge at y = center of bubble).
+        func measureVisibleContour(_ img: NSBitmapImageRep) throws -> (topPx: Int, rightPx: Int) {
+            let bg = try XCTUnwrap(img.colorAt(x: img.pixelsWide - 4, y: 4)?.usingColorSpace(.sRGB))
+            func isGlass(_ x: Int, _ y: Int) -> Bool {
+                guard let c = img.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return false }
+                let lum = 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
+                let bgLum = 0.2126 * bg.redComponent + 0.7152 * bg.greenComponent + 0.0722 * bg.blueComponent
+                return lum > bgLum + 0.03
+            }
+            // Bubble center is ~24pt left of right edge and ~24pt below top edge.
+            // In our 110x110 crop (anchorRect = maxX - 96 ... maxX + 14), panel.maxX is at x = 96pt = 192px (2x),
+            // and panel.maxY is at y = 14pt = 28px (2x) from the top of the crop.
+            let sampleX = Int(72 * 2) // 24pt left of panel.maxX
+            let sampleY = Int(38 * 2) // 24pt below panel.maxY
+            var topPx = -1
+            for y in 0..<img.pixelsHigh where isGlass(sampleX, y) { topPx = y; break }
+            var rightPx = -1
+            for x in stride(from: img.pixelsWide - 1, through: 0, by: -1) where isGlass(x, sampleY) { rightPx = x; break }
+            return (topPx, rightPx)
+        }
+
+        func stitchStrip(_ frames: [(String, NSBitmapImageRep)], to url: URL) throws {
+            let gap = 8
+            let w = frames.reduce(0) { $0 + $1.1.pixelsWide } + gap * max(0, frames.count - 1)
+            let h = frames.map(\.1.pixelsHigh).max() ?? 1
+            let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+            let info = CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
+            let ctx = try XCTUnwrap(CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: space, bitmapInfo: info))
+            ctx.setFillColor(red: 0.14, green: 0.16, blue: 0.20, alpha: 1)
+            ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+            var x = 0
+            for (_, rep) in frames {
+                if let cg = rep.cgImage {
+                    ctx.draw(cg, in: CGRect(x: x, y: 0, width: rep.pixelsWide, height: rep.pixelsHigh))
+                }
+                x += rep.pixelsWide + gap
+            }
+            let out = NSBitmapImageRep(cgImage: try XCTUnwrap(ctx.makeImage()))
+            try XCTUnwrap(out.representation(using: .png, properties: [:])).write(to: url)
+        }
+
+        var lines: [String] = []
+        for phase in ["collapse", "expand"] {
+            var captures: [(String, NSBitmapImageRep)] = []
+            let pre = try captureAnchor(tag: "\(phase)-pre")
+            let preM = try measureVisibleContour(pre)
+            captures.append(("pre", pre))
+            lines.append("\(phase) pre | win=\(panel.frame) | visibleTopPx=\(preM.topPx) visibleRightPx=\(preM.rightPx)")
+
+            pendingDriver = nil
+            motion.toggleBubble(in: backdropFrame)
+            let driver = try XCTUnwrap(pendingDriver)
+            let f0 = try captureAnchor(tag: "\(phase)-f0")
+            let f0M = try measureVisibleContour(f0)
+            captures.append(("f0", f0))
+            lines.append("\(phase) frame0 | win=\(panel.frame) | visibleTopPx=\(f0M.topPx) visibleRightPx=\(f0M.rightPx)")
+            XCTAssertLessThanOrEqual(abs(f0M.topPx - preM.topPx), 1, "\(phase) Frame 0 visible top silhouette must not jump")
+            XCTAssertLessThanOrEqual(abs(f0M.rightPx - preM.rightPx), 1, "\(phase) Frame 0 visible right silhouette must not jump")
+
+            let animator = PanelFrameAnimation(window: panel, target: driver.target, duration: 0.34) {}
+            for p: Float in [0.2, 0.4, 0.6, 0.8] {
+                animator.currentProgress = p
+                let img = try captureAnchor(tag: "\(phase)-p\(Int(p * 100))")
+                let m = try measureVisibleContour(img)
+                captures.append(("p\(Int(p * 100))", img))
+                lines.append("\(phase) p=\(Int(p * 100))% | win=\(panel.frame) | visibleTopPx=\(m.topPx) visibleRightPx=\(m.rightPx)")
+                XCTAssertLessThanOrEqual(abs(m.topPx - preM.topPx), 1, "\(phase) p=\(p) visible top silhouette must stay anchored")
+                XCTAssertLessThanOrEqual(abs(m.rightPx - preM.rightPx), 1, "\(phase) p=\(p) visible right silhouette must stay anchored")
+            }
+            animator.currentProgress = 1.0
+            driver.completion()
+            let end = try captureAnchor(tag: "\(phase)-end")
+            let endM = try measureVisibleContour(end)
+            captures.append(("end", end))
+            lines.append("\(phase) end | win=\(panel.frame) | visibleTopPx=\(endM.topPx) visibleRightPx=\(endM.rightPx)")
+            XCTAssertLessThanOrEqual(abs(endM.topPx - preM.topPx), 1, "\(phase) settled top silhouette must stay anchored")
+            XCTAssertLessThanOrEqual(abs(endM.rightPx - preM.rightPx), 1, "\(phase) settled right silhouette must stay anchored")
+
+            try stitchStrip(captures, to: outDir.appendingPathComponent("\(phase)-frames.png"))
+        }
+
+        let reportText = lines.joined(separator: "\n") + "\n"
+        try reportText.write(to: outDir.appendingPathComponent("silhouette-frames.txt"), atomically: true, encoding: .utf8)
+        print("TOGGLE_SILHOUETTE_CAPTURE output=\(outDir.path)\n\(reportText)")
     }
 }

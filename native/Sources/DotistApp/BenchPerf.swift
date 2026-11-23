@@ -38,6 +38,7 @@ enum BenchPerf {
         var period: Double
         var baseline: [Counter: Int]
         var frames: [FrameSample] = []
+        var driverReady: Double?
         var inTick = false
         var ending = false
     }
@@ -78,6 +79,13 @@ enum BenchPerf {
         guard enabled else { return }
         ensureRunLoopObserver()
         span = Span(kind: kind, start: CACurrentMediaTime(), period: period, baseline: counters)
+    }
+
+    static func driverStarted(kind: String, period: Double) {
+        guard enabled else { return }
+        if span?.kind != kind { begin(kind, period: period) }
+        span?.period = period
+        span?.driverReady = CACurrentMediaTime()
     }
 
     static func tickStart(linkTimestamp: Double = 0, linkTargetTimestamp: Double = 0) {
@@ -168,6 +176,17 @@ enum BenchPerf {
 
             line["total_ms"] = durationMs
             line["frames"] = s.frames.count
+            line["trace_start_host_s"] = s.start
+            line["prepare_ms"] = val(s.driverReady.map { ($0 - s.start) * 1000 })
+            line["trace_frames"] = s.frames.map { frame -> [String: Any] in
+                [
+                    "start_ms": round3((frame.wallStart - s.start) * 1000),
+                    "end_ms": round3((frame.wallEnd - s.start) * 1000),
+                    "resize_ms": round3(frame.setFrameMs),
+                    "sleep_ms": val(frame.beforeWaiting.map { ($0 - s.start) * 1000 }),
+                    "target_ms": val(frame.linkTargetTimestamp > 0 ? (frame.linkTargetTimestamp - s.start) * 1000 : nil),
+                ]
+            }
             line["toggle_to_first_tick_ms"] = val(s.frames.first.map { ($0.wallStart - s.start) * 1000 })
             line["refresh_period_ms"] = val(s.period > 0 ? s.period * 1000 : nil)
             line["interval_ms"] = stats(wallIntervals)
