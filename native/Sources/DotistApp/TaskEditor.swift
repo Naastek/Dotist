@@ -6,6 +6,8 @@ struct TaskEditor: NSViewRepresentable {
     @Binding var height: CGFloat
     let font: NSFont
     let label: String
+    var minRowHeight: CGFloat = 32
+    var initialClickWindowPoint: CGPoint? = nil
     let commit: () -> Void
     let cancel: () -> Void
     let indent: (Bool) -> Void
@@ -17,7 +19,8 @@ struct TaskEditor: NSViewRepresentable {
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         scroll.hasVerticalScroller = false
-        let editor = TaskTextView(frame: NSRect(x: 0, y: 0, width: 120, height: 20))
+        let initialInset = max(0, (minRowHeight - 20) / 2)
+        let editor = TaskTextView(frame: NSRect(x: 0, y: 0, width: 120, height: minRowHeight))
         editor.delegate = context.coordinator
         editor.layoutManager?.delegate = context.coordinator
         editor.drawsBackground = false
@@ -25,7 +28,7 @@ struct TaskEditor: NSViewRepresentable {
         editor.importsGraphics = false
         editor.isVerticallyResizable = true
         editor.isHorizontallyResizable = false
-        editor.textContainerInset = .zero
+        editor.textContainerInset = NSSize(width: 0, height: initialInset)
         editor.textContainer?.lineFragmentPadding = 0
         editor.textContainer?.widthTracksTextView = true
         editor.font = font
@@ -44,7 +47,19 @@ struct TaskEditor: NSViewRepresentable {
         editor.blur = blur
         editor.setAccessibilityLabel(label)
         scroll.documentView = editor
-        DispatchQueue.main.async { editor.window?.makeFirstResponder(editor); context.coordinator.measure(editor) }
+        let clickPoint = initialClickWindowPoint
+        DispatchQueue.main.async {
+            scroll.layoutSubtreeIfNeeded()
+            editor.window?.makeFirstResponder(editor)
+            context.coordinator.measure(editor)
+            if let clickPoint, editor.window != nil {
+                let local = editor.convert(clickPoint, from: nil)
+                if editor.bounds.insetBy(dx: -4, dy: -4).contains(local) {
+                    let index = editor.characterIndexForInsertion(at: local)
+                    editor.setSelectedRange(NSRange(location: index, length: 0))
+                }
+            }
+        }
         return scroll
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) {
@@ -83,7 +98,12 @@ struct TaskEditor: NSViewRepresentable {
         func measure(_ editor: NSTextView) {
             guard let layout = editor.layoutManager, let container = editor.textContainer else { return }
             layout.ensureLayout(for: container)
-            let measured = max(20, ceil(layout.usedRect(for: container).height))
+            let contentHeight = max(20, ceil(layout.usedRect(for: container).height))
+            let inset = max(0, (parent.minRowHeight - contentHeight) / 2)
+            if abs(editor.textContainerInset.height - inset) > 0.5 {
+                editor.textContainerInset = NSSize(width: 0, height: inset)
+            }
+            let measured = max(parent.minRowHeight, contentHeight)
             if abs(parent.height - measured) > 0.5 { DispatchQueue.main.async { self.parent.height = measured } }
         }
     }

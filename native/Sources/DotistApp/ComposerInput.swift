@@ -368,6 +368,7 @@ struct ComposerInput: NSViewRepresentable {
     let commit: () -> Void
     let navigate: (Int) -> Bool
     let complete: (Bool) -> Bool
+    var cancel: () -> Bool = { false }
     var composing: Binding<Bool> = .constant(false)
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSTextField {
@@ -457,6 +458,13 @@ struct ComposerInput: NSViewRepresentable {
             if selector == #selector(NSResponder.moveDown(_:)) { return parent.navigate(1) }
             if selector == #selector(NSResponder.moveUp(_:)) { return parent.navigate(-1) }
             if selector == #selector(NSResponder.insertTab(_:)) { return parent.complete(true) }
+            if selector == #selector(NSResponder.cancelOperation(_:)) {
+                if !parent.cancel() {
+                    control.window?.makeFirstResponder(nil)
+                    parent.focused = false
+                }
+                return true
+            }
             if selector == #selector(NSResponder.insertNewline(_:)) {
                 if !parent.complete(false) { parent.commit() }
                 return true

@@ -47,6 +47,11 @@ final class TaskReorderRuntime: ObservableObject {
         return panel.convert(view.bounds, from: view)
     }
     var pickupViewportFrame: CGRect? { pickupFrame(pickupViewport) }
+    func screenPoint(forListPoint point: CGPoint) -> CGPoint? {
+        guard let panel = pickupPanel, let window = panel.window else { return nil }
+        let windowPoint = panel.convert(point, to: nil)
+        return window.convertPoint(toScreen: windowPoint)
+    }
     func pickupFrames(_ cached: [TaskListRowFrame]) -> [TaskListRowFrame] {
         let cached = cached.filter { TaskRowVisibility.hasUsableFrame($0.frame) }
         guard pickupPanel != nil else { return cached }

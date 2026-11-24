@@ -15,7 +15,7 @@ struct RangeCalendar: View {
     @State private var keyboardDate: String?
     private var calendar: Calendar {
         var value = Calendar(identifier: .gregorian)
-        value.firstWeekday = model.language == "en" ? 1 : 2
+        value.firstWeekday = Calendar.current.firstWeekday
         return value
     }
     private var first: Date { calendar.date(from: calendar.dateComponents([.year, .month], from: month))! }
@@ -31,9 +31,10 @@ struct RangeCalendar: View {
         let today = calendar.startOfDay(for: Date())
         let weekday = calendar.component(.weekday, from: today)
         let monday = calendar.date(byAdding: .day, value: -((weekday + 5) % 7), to: today)!
+        let weekStart = calendar.date(byAdding: .day, value: -((weekday - calendar.firstWeekday + 7) % 7), to: today)!
         func add(_ date: Date, _ n: Int) -> String { calendar.date(byAdding: .day, value: n, to: date)!.dotistDay }
         if single { return [("今天", today.dotistDay, today.dotistDay), ("明天", add(today, 1), add(today, 1)), ("下周一", add(monday, 7), add(monday, 7))] }
-        return [("今天", today.dotistDay, today.dotistDay), ("明天", add(today, 1), add(today, 1)), ("本周", monday.dotistDay, add(monday, 6)), ("下周", add(monday, 7), add(monday, 13)), ("未来 7 天", today.dotistDay, add(today, 6))]
+        return [("今天", today.dotistDay, today.dotistDay), ("明天", add(today, 1), add(today, 1)), ("本周", weekStart.dotistDay, add(weekStart, 6)), ("下周", add(weekStart, 7), add(weekStart, 13)), ("未来 7 天", today.dotistDay, add(today, 6))]
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -71,7 +72,7 @@ struct RangeCalendar: View {
                             let chosen = NSApp.currentEvent?.type == .keyDown ? keyboardDate ?? iso : iso
                             keyboardDate = chosen
                             if single { choose(chosen, chosen); return }
-                            let from = anchor ?? (NSEvent.modifierFlags.contains(.shift) ? start : nil)
+                            let from = anchor ?? (NSEvent.modifierFlags.contains(.shift) && !start.isEmpty ? start : nil)
                             if let from { choose(min(from, chosen), max(from, chosen)); anchor = nil; hover = nil }
                             else { anchor = chosen; choose(chosen, chosen) }
                         } label: {

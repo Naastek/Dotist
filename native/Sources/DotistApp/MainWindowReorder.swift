@@ -32,7 +32,7 @@ extension MainWindow {
     }
 
     @ViewBuilder var ghostConnector: some View {
-        if let drag, let target = drag.target, target.level > 0, shelfTarget == nil,
+        if let drag, let target = drag.target, target.level > 0, shelfTarget == nil, sideTabTarget == nil,
            let parent = rowFrames.first(where: { $0.task.id == target.parentID && $0.task.category == target.groupID && $0.region == drag.destination?.region }),
            !drag.visibleBlock.isEmpty {
             let frame = showsInsertionGhost ? ghostFrame : drag.startFrame
@@ -116,13 +116,19 @@ extension MainWindow {
         switch input {
         case .begin(let id, let point):
             traceReorder("input.begin", taskID: id, point: point)
-            guard !dragCancelled, editing == nil, draftAfter == nil, drag == nil,
+            guard !dragCancelled, editing != id, drag == nil,
                   let task = model.tasks.first(where: { $0.id == id }) else { traceReorder("input.begin-rejected", taskID: id); return }
+            if editing != nil || draftAfter != nil || addingToGroup != nil {
+                flushInputsOptimistically()
+                if NSApp.keyWindow?.firstResponder is TaskTextView {
+                    NSApp.keyWindow?.makeFirstResponder(nil)
+                }
+            }
             beginReorder(task, at: point)
         case .move(let id, let point), .end(let id, let point):
             if case .move = input { traceReorder("input.move", taskID: id, point: point) }
             else { traceReorder("input.end", taskID: id, point: point) }
-            if case .move = input { guard editing == nil, draftAfter == nil else { traceReorder("input.move-rejected-editor", taskID: id); return } }
+            if case .move = input { guard editing != id else { traceReorder("input.move-rejected-editor", taskID: id); return } }
             guard !dragCancelled, drag?.taskID == id, drag?.committing == false else { traceReorder("input.move-or-end-rejected", taskID: id); return }
             dragMotion.location = point
             // Mouse-up commits the last presented slot, as Tic does. Resolving
@@ -165,7 +171,7 @@ extension MainWindow {
             parentID: roots.first?.parentId, beforeID: members.dropFirst(slot).first?.task.id)
         let anchor: TaskInsertionSlot = slot < members.count ? .before(members[slot].task.id, region: head.region)
             : members.last.map { .after($0.task.id, region: head.region) } ?? .empty(head.region)
-        next.destination = .init(target: target, region: head.region, slot: anchor, frame: head.frame, date: head.date)
+        next.destination = .init(target: target, region: head.region, slot: anchor, frame: head.frame, date: nil)
         withAnimation(reorderAnimation()) { drag = next }
         ghostFrame = next.startFrame
         model.beginDrag(task.id, scope: "list:\(state.scope)")
@@ -175,7 +181,10 @@ extension MainWindow {
     private func retargetReorder() {
         guard var next = drag, !next.committing else { return }
         let location = dragMotion.location
-        let shelf = shelfFrames.first(where: { $0.value.contains(location) })?.key
+        let screenPoint = reorderRuntime.screenPoint(forListPoint: location)
+        let sideTab = screenPoint.flatMap { sideTabDropTarget?($0) }
+        sideTabTarget = sideTab
+        let shelf = sideTab == nil ? shelfFrames.first(where: { $0.value.contains(location) })?.key : nil
         shelfTarget = shelf
         let entries = reorderRestEntries(listEntries, session: next)
         let rows = reorderRuntime.pickupFrames(rowFrames)
@@ -188,24 +197,49 @@ extension MainWindow {
             guard let bounds = frame(entry) else { return false }
             return entry.row == nil || (entry.expanded && TaskRowVisibility.hasUsableFrame(bounds))
         }
+        if let dropGroup = sideTab ?? shelf {
+            let target = TaskReorderEngine.Target(groupID: dropGroup, slot: 0, level: 0, parentID: nil, beforeID: nil)
+            let region = content.first { $0.group?.id == dropGroup }?.group?.region ?? dropGroup
+            let destination = TaskDropDestination(target: target, region: region, slot: .empty(region), frame: .zero, date: nil)
+            if destination.target != next.destination?.target || destination.slot != next.destination?.slot || destination.date != next.destination?.date {
+                next.destination = destination
+                withAnimation(reorderAnimation()) { drag = next }
+            }
+            return
+        }
         let center = location.y - min(max(next.startLocation.y - next.startFrame.minY, 0), 32) + 16
         // Exactly Tic's count, with the gap open. Headings occupy the same
         // content stream and therefore move with the very same transaction.
-        let slot = content.filter { (frame($0)?.midY ?? .greatestFiniteMagnitude) < center }.count
+        let slot = content.filter { entry in
+            guard let bounds = frame(entry) else { return false }
+            if entry.group?.region.hasPrefix("today-drop:") == true {
+                return bounds.minY <= center
+            }
+            return bounds.midY < center
+        }.count
         let preceding = Array(content.prefix(slot))
-        let owner = shelf.flatMap { id in content.first { $0.group?.id == id }?.group }
-            ?? preceding.last.flatMap { entry -> TaskListGroupFrame? in
+        let owner = preceding.last.flatMap { entry -> TaskListGroupFrame? in
                 let region = entry.row?.region ?? entry.group?.region
                 return content.first { $0.group?.region == region }?.group
             } ?? content.first?.group
         guard let group = owner else { return }
-        if let date = group.date, !model.tasks.contains(where: { next.blockIDs.contains($0.id) && $0.dueDate == date }) { return }
+        let rootIDSet = Set(next.rootIDs)
+        let rootRegions = next.visibleBlock.filter { rootIDSet.contains($0.task.id) }.map(\.region)
+        let sourceRegions = rootRegions.isEmpty ? Array(next.visibleBlock.prefix(1).map(\.region)) : rootRegions
+        let resolvedSection = TaskDropSection.resolve(sourceRegions: sourceRegions, destinationRegion: group.region, destinationDate: group.date)
+        guard resolvedSection.allowed else {
+            if next.destination != nil {
+                next.destination = nil
+                withAnimation(reorderAnimation()) { drag = next }
+            }
+            return
+        }
         if state.collapsedGroups.contains(group.id) {
             next.expandedDropGroup = group.id
             withAnimation(reorderAnimation()) { state.setGroupCollapsed(false, id: group.id) }
         }
         let members = content.compactMap(\.row).filter { $0.region == group.region }
-        let rawSlot = shelf != nil ? members.count : preceding.compactMap(\.row).filter { $0.region == group.region }.count
+        let rawSlot = preceding.compactMap(\.row).filter { $0.region == group.region }.count
         let engineRows = next.rootIDs.compactMap { id in model.tasks.first { $0.id == id } }.map {
             TaskReorderEngine.Row(id: $0.id, depth: model.depth(of: $0), groupID: $0.category, parentID: $0.parentId, midY: -1)
         } + members.enumerated().map { index, row in
@@ -219,26 +253,27 @@ extension MainWindow {
         // The engine can advance across descendants to preserve subtree order.
         let anchor: TaskInsertionSlot = target.slot < members.count ? .before(members[target.slot].task.id, region: group.region)
             : members.last.map { .after($0.task.id, region: group.region) } ?? .empty(group.region)
-        let destination = TaskDropDestination(target: target, region: group.region, slot: anchor, frame: .zero, date: group.date)
-        guard destination.target != next.destination?.target || destination.slot != next.destination?.slot || next.expandedDropGroup != drag?.expandedDropGroup else { return }
+        let destination = TaskDropDestination(target: target, region: group.region, slot: anchor, frame: .zero, date: resolvedSection.dueDate)
+        guard destination.target != next.destination?.target || destination.slot != next.destination?.slot || destination.date != next.destination?.date || next.expandedDropGroup != drag?.expandedDropGroup else { return }
         next.destination = destination
         withAnimation(reorderAnimation()) { drag = next }
     }
 
     private func finishReorder() {
         guard let drag, !drag.committing else { return }
-        guard let target = drag.target, listViewport.contains(dragMotion.location) || shelfTarget != nil else { cancelReorder(); return }
+        guard let target = drag.target, listViewport.contains(dragMotion.location) || shelfTarget != nil || sideTabTarget != nil else { cancelReorder(); return }
         self.drag?.committing = true
+        let targetDate = drag.destination?.date
         let complete = {
             // Publish the committed snapshot and retire the placeholder in one
             // transaction. There is no measured second landing or release clock.
             withAnimation(reorderAnimation(0.18)) { clearReorder() }
         }
         if drag.rootIDs.count == 1 {
-            model.commitReorder(taskID: drag.rootIDs[0], to: target, completed: complete, failed: { clearReorder() })
+            model.commitReorder(taskID: drag.rootIDs[0], to: target, dueDate: targetDate, completed: complete, failed: { clearReorder() })
         } else {
             model.change(completed: complete, failed: { clearReorder() }) { store in
-                try TaskDragBatch.commit(ids: drag.rootIDs, target: target, store: store)
+                try TaskDragBatch.commit(ids: drag.rootIDs, target: target, dueDate: targetDate, store: store)
             }
         }
     }
@@ -253,11 +288,13 @@ extension MainWindow {
         drag = nil
         ghostFrame = .zero
         shelfTarget = nil
+        sideTabTarget = nil
+        endSideTabDrop?()
         model.endDrag()
     }
 
     func autoScrollReorder() {
-        guard let drag, !drag.committing, shelfTarget == nil,
+        guard let drag, !drag.committing, shelfTarget == nil, sideTabTarget == nil,
               dragMotion.location.x >= listViewport.minX, dragMotion.location.x <= listViewport.maxX else { return }
         let y = dragMotion.location.y
         let delta: CGFloat

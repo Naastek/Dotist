@@ -90,7 +90,7 @@ final class MenuBarController: NSObject {
         menu.addItem(.separator())
         let groupHeader = NSMenuItem(title: model.text("分组"), action: nil, keyEquivalent: ""); groupHeader.isEnabled = false; menu.addItem(groupHeader)
         add("全部分组", "group:all", key: "0", indented: true)
-        for (index, group) in model.groups.enumerated() {
+        for (index, group) in model.visibleGroups.enumerated() {
             add(group.name, "group:" + group.id, translate: false, key: index < 9 ? "\(index + 1)" : "", indented: true)
         }
         menu.addItem(.separator())
@@ -120,7 +120,7 @@ final class MenuBarController: NSObject {
     }
     private func selectedGroup() -> String {
         let group = model.settings.trayGroup
-        return group == "all" || model.groups.contains(where: { $0.id == group }) ? group : "all"
+        return group == "all" || model.visibleGroups.contains(where: { $0.id == group }) ? group : "all"
     }
 
     private func statusTitles() -> [String] {

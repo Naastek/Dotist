@@ -28,7 +28,7 @@ extension MainWindow {
             }
             if !primary, let close { toolbarButton("xmark", label: model.text("关闭面板"), action: close) }
             toolbarItem(.collapse)
-        }.padding(.leading, 16).padding(.trailing, 10).frame(height: 44).background(FloatingWindowDragArea())
+        }.padding(.leading, 16).padding(.trailing, 10).frame(height: 44).background(FloatingWindowDragArea(onClick: dismissActiveFocus))
     }
 
     /// A control whose state differs from the default stays visible even when hover-only.
@@ -94,7 +94,7 @@ extension MainWindow {
         case .filter, .completion, .calendar: ""
         case .views: "任务视图"
         case .pin: "置顶窗口"
-        case .lock: "固定窗口"
+        case .lock: "保持展开"
         case .color: "颜色"
         case .collapse: "收起为悬浮球"
         }
@@ -284,11 +284,14 @@ extension MainWindow {
             .foregroundColor(customStart == nil ? DotistDesign.muted : DotistDesign.accent)
             .help(model.text("日历")).accessibilityLabel(Text(model.text("日历")))
             .popover(isPresented: $showCalendar) {
-                RangeCalendar(model: model, start: customStart ?? Date().dotistDay, end: customEnd ?? Date().dotistDay, choose: { start, end in
-                    state.scope = "today"
+                RangeCalendar(model: model, start: customStart ?? "", end: customEnd ?? "", choose: { start, end in
                     customStart = start
                     customEnd = end
-                }, close: { showCalendar = false })
+                }, close: { showCalendar = false }, clear: {
+                    customStart = nil
+                    customEnd = nil
+                    showCalendar = false
+                })
             }
     }
 

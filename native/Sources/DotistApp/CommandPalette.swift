@@ -13,7 +13,7 @@ enum CommandPaletteVisibility {
 enum PaletteMetrics {
     static let width: CGFloat = 640
     static let searchRow: CGFloat = 52
-    static let footer: CGFloat = 32
+    static let footer: CGFloat = 0
     static let row: CGFloat = 38
     static let headerTop: CGFloat = 18
     static let headerLine: CGFloat = 14
@@ -73,7 +73,7 @@ struct CommandPalette: View {
     @FocusState private var focused: Bool
 
     private var sections: [CommandPaletteSections] {
-        CommandPaletteSections.build(query: query, tasks: model.ordered(model.tasks), groups: model.groups, viewsTitle: model.text("任务视图"))
+        CommandPaletteSections.build(query: query, tasks: model.ordered(model.tasks), groups: model.visibleGroups, viewsTitle: model.text("任务视图"))
     }
     private var results: [PaletteItem] { sections.flatMap(\.items) }
     private var metricsHeight: CGFloat { PaletteMetrics.height(sectionCounts: sections.map(\.items.count)) }
@@ -113,10 +113,6 @@ struct CommandPalette: View {
                 }.onChange(of: scrollRequest) { id in if let id { proxy.scrollTo(id) } }
             }
             }
-            Text(model.text("↑↓ 选择　↵ 打开　esc 关闭"))
-                .font(DotistDesign.font(11, language: model.language)).foregroundColor(DotistDesign.muted)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).frame(height: PaletteMetrics.footer)
-                .overlay(alignment: .top) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5) }
         }
         .accessibilityIdentifier("search-drag-handle")
         .foregroundColor(DotistDesign.ink)

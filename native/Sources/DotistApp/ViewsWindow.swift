@@ -23,7 +23,7 @@ struct ViewsWindow: View {
     }
     private var calendar: Calendar {
         var value = Calendar(identifier: .gregorian)
-        value.firstWeekday = model.language == "en" ? 1 : 2
+        value.firstWeekday = Calendar.current.firstWeekday
         return value
     }
     private func startOfWeek(_ date: Date) -> Date {
@@ -56,12 +56,12 @@ struct ViewsWindow: View {
                     if view == "calendar" { calendarView(narrow: narrow, wrapNavigation: geometry.size.width <= 700, height: max(340, geometry.size.height - 206)) }
                     if view == "board" { boardView(narrow: narrow) }
                     if view == "gantt" { ganttView(narrow: geometry.size.width <= 760) }
-                }.padding(.horizontal, narrow ? 16 : 24).padding(.top, 12).padding(.bottom, 20).frame(minWidth: 632, maxWidth: .infinity, alignment: .topLeading).background(WindowDragArea())
+                }.padding(.horizontal, narrow ? 16 : 24).padding(.top, 12).padding(.bottom, 20).frame(minWidth: 632, maxWidth: .infinity, alignment: .topLeading)
             }
         }
         .foregroundColor(DotistDesign.ink)
         .modifier(DotistControlTint())
-        .background(DotistDesign.paper)
+        .background(WindowMaterial(opacity: 78, frost: model.settings.frost))
         .modifier(DotistTheme(theme: model.settings.theme))
         }
     }
@@ -416,6 +416,7 @@ private struct ViewTaskCard: View {
     @State private var open = false
     @State private var hovered = false
     @State private var height: CGFloat = 64
+    @State private var editedTitle = ""
 
     private func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> Font { DotistDesign.textFont(size, weight: weight, language: model.language) }
     private var groupColor: Color { DotistDesign.muted }
@@ -488,6 +489,12 @@ private struct ViewTaskCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(compact ? Color.clear : calendarColumn ? groupColor.opacity(0.07) : DotistDesign.surface)
         .cornerRadius(calendarColumn ? 6 : 8)
+        .overlay(alignment: dropAfter ? .bottom : .top) {
+            if dropTarget == task.id {
+                Rectangle().fill(DotistDesign.accent).frame(height: 2).padding(.horizontal, 4)
+                    .allowsHitTesting(false)
+            }
+        }
         .background(GeometryReader { geometry in
             Color.clear.onAppear { height = geometry.size.height }.onChange(of: geometry.size.height) { height = $0 }
         })
@@ -507,9 +514,23 @@ private struct ViewTaskCard: View {
         .popover(isPresented: $open, arrowEdge: .trailing) { adjustments }
     }
 
+    private func commitEditedTitle() {
+        let trimmed = editedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != task.title else { return }
+        model.change { _ = try $0.patchTask(id: task.id, title: trimmed) }
+    }
+
     private var adjustments: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(task.title).font(font(14, .medium)).fixedSize(horizontal: false, vertical: true)
+            TextField(model.text("任务内容"), text: $editedTitle, onCommit: commitEditedTitle)
+                .textFieldStyle(.plain)
+                .font(font(14, .medium))
+                .padding(.horizontal, 8).padding(.vertical, 6)
+                .background(DotistDesign.surface)
+                .cornerRadius(6)
+                .modifier(DotistFocusRing())
+                .onAppear { editedTitle = task.title }
+                .onChange(of: task.title) { _, newValue in editedTitle = newValue }
             Picker(model.text("状态"), selection: Binding(get: { task.status.rawValue }, set: { value in
                 guard let status = TaskStatus(rawValue: value) else { return }
                 model.change { _ = try $0.patchTask(id: task.id, status: status) }
@@ -526,9 +547,10 @@ private struct ViewTaskCard: View {
                 Button(model.text("下移")) { if let next { model.reorder(task.id, relativeTo: next, after: true, allTasks: true) } }
                     .disabled(next == nil).buttonStyle(DotistActionStyle()).modifier(DotistFocusRing())
                 Spacer(minLength: 0)
-                Button(model.text("完成")) { open = false }.buttonStyle(DotistActionStyle()).modifier(DotistFocusRing())
+                Button(model.text("完成")) { commitEditedTitle(); open = false }.buttonStyle(DotistActionStyle()).modifier(DotistFocusRing())
             }
         }.font(font(12)).modifier(DotistControlTint()).foregroundColor(DotistDesign.ink).padding(16).frame(width: 280)
+            .onDisappear { commitEditedTitle() }
     }
 }
 

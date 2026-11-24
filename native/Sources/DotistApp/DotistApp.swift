@@ -64,8 +64,11 @@ final class DotistHostingView<Content: View>: NSHostingView<Content> {
 }
 
 struct FloatingWindowDragArea: NSViewRepresentable {
+    var onClick: () -> Void = {}
     func makeNSView(context: Context) -> BubblePointerView { BubblePointerView() }
-    func updateNSView(_ view: BubblePointerView, context: Context) {}
+    func updateNSView(_ view: BubblePointerView, context: Context) {
+        view.action = onClick
+    }
 }
 
 struct WindowDragArea: View {
@@ -93,7 +96,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     private var model: AppModel!
     private var updater: NativeUpdater!
     private var panel: DotistPanel!
-    private var sideTabs: SideTabsController?
+    var sideTabs: SideTabsController?
     private var viewsWindow: NSWindow?
     private var viewsShadow: ViewsWindowShadow?
     private var settingsWindow: NSWindow?
@@ -593,7 +596,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         add("任务视图", "views")
         menu.addItem(.separator())
         add(model.settings.alwaysOnTop ? "取消置顶" : "置顶窗口", "top", checked: model.settings.alwaysOnTop)
-        add(model.settings.locked ? "取消固定" : "固定窗口", "locked", checked: model.settings.locked)
+        add(model.settings.locked ? "取消保持展开" : "保持展开", "locked", checked: model.settings.locked)
         menu.addItem(.separator())
         add("设置…", "settings")
         add("退出 Dotist", "quit")
@@ -712,6 +715,7 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
             window.backgroundColor = .clear
             window.hasShadow = true
             window.level = .floating
+            window.isMovableByWindowBackground = true
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             window.appearance = panel.appearance
             window.delegate = self
@@ -776,10 +780,12 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
 
     private func revealTask(_ task: DotistTask) {
         performMenuAction("show")
-        mainState.groupID = task.category
+        mainState.groupID = task.category == DotistGroup.inboxID ? nil : task.category
         model.scope = "all"
         model.selectTag(nil)
+        mainState.setGroupCollapsed(false, id: task.category)
         for parent in TaskHierarchy(model.tasks).ancestors(of: task.id) {
+            mainState.setGroupCollapsed(false, id: parent.category)
             mainState.expanded.insert(parent.id)
             if parent.completed { mainState.folded.insert(task.category) }
         }
@@ -810,7 +816,13 @@ private struct MainWindowContent: View, Equatable {
     let coordinator: DotistDelegate
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.model === rhs.model && lhs.coordinator === rhs.coordinator }
     var body: some View {
-        MainWindow(model: model, state: coordinator.mainState, showViews: coordinator.showViews, showSearch: coordinator.showSearch, showSettings: coordinator.showSettings, showGroupPanel: coordinator.showGroupPanel, collapse: coordinator.toggleBubble)
+        MainWindow(model: model, state: coordinator.mainState, showViews: coordinator.showViews, showSearch: coordinator.showSearch, showSettings: coordinator.showSettings, showGroupPanel: coordinator.showGroupPanel, collapse: coordinator.toggleBubble, isCompactOrAnimating: { [weak coordinator] in
+            coordinator.map { $0.bubble || $0.animationInProgress } ?? false
+        }, sideTabDropTarget: { [weak coordinator] point in
+            coordinator?.sideTabs?.updateTaskDrop(at: point)
+        }, endSideTabDrop: { [weak coordinator] in
+            coordinator?.sideTabs?.endTaskDrop()
+        })
     }
 }
 

@@ -20,8 +20,8 @@ extension MainWindow {
             handleRowKey(press, task: task, previous: previous, allTasks: allTasks)
         }
         .onTapGesture { if !hold.suppressesClick { clickRow(task) } }
-        .gesture(reorderGesture(task), including: editing == nil && draftAfter == nil ? .all : .subviews)
-        .simultaneousGesture(holdGesture(task), including: editing == nil && draftAfter == nil ? .all : .subviews)
+        .gesture(reorderGesture(task), including: editing == task.id ? .subviews : .all)
+        .simultaneousGesture(holdGesture(task), including: editing == task.id ? .subviews : .all)
         .onContinuousHover(coordinateSpace: .named(Self.listSpace)) { phase in
             if case .active(let point) = phase { hold.pointer = point }
         }
@@ -84,8 +84,15 @@ extension MainWindow {
                     ForEach(dropGroupIDs, id: \.self) { id in Button(model.groupDisplayName(id)) { model.change { _ = try $0.patchTask(id: task.id, category: id) } }.font(font(13, serif: true)) }
                 }
             }
-            Button(model.text(task.completed ? "恢复" : "完成")) { model.complete(task) }
-            Button(model.text("删除")) { model.delete(task) }
+            Button(model.text(task.completed ? "恢复" : "完成")) {
+                if editing == task.id || draftAfter == task.id { flushInputsOptimistically() }
+                model.complete(task)
+            }
+            Button(model.text("删除")) {
+                if editing == task.id { clearEditing() }
+                if draftAfter == task.id { clearInputs() }
+                model.delete(task)
+            }
     }
 
     private func planMenu(_ task: DotistTask) -> some View {
@@ -107,19 +114,25 @@ extension MainWindow {
 
     func rowContent(_ task: DotistTask, children: [DotistTask], sub: Bool, allTasks: Bool, previous: String?, hideDue: Bool, titleParts: DotistTaskTags?, actionsVisible: Bool, selected: Bool = false, focused: Bool = false, depthOverride: Int? = nil) -> some View {
         let depth = depthOverride ?? model.depth(of: task)
+        let isEditing = editing == task.id
+        let minRowHeight = TaskRowMetrics.height(depth, titleHeight: 20)
         let actionCount = (depth < 4 ? 1 : 0) + (task.dueDate == nil ? 1 : 0) + 1
         let fadeWidth = actionsVisible ? TaskRowActionMetrics.width(count: actionCount) : 0
-        return TaskRowLayout(depth: depth) {
-            Button { selection.update { $0.clear() }; model.complete(task) } label: {
+        return TaskRowLayout(depth: depth, editing: isEditing) {
+            Button {
+                if isEditing || draftAfter == task.id { flushInputsOptimistically() }
+                selection.update { $0.clear() }
+                model.complete(task)
+            } label: {
                 TaskCheckmark(depth: depth, completed: task.completed, children: children.map(\.completed), emphasized: selected || focused || drag?.target?.parentID == task.id)
             }.buttonStyle(.plain).focusEffectDisabled()
                 .accessibilityLabel(Text(model.text(task.completed ? "恢复 {title}" : "完成 {title}").replacingOccurrences(of: "{title}", with: task.title)))
-            if editing == task.id {
-                TaskEditor(text: $editedTitle, height: $editHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("任务内容"), commit: {
+            if isEditing {
+                TaskEditor(text: $editedTitle, height: $editHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("任务内容"), minRowHeight: minRowHeight, initialClickWindowPoint: editClickWindowPoint, commit: {
                     saveEditing(task) { startDraft(after: task) }
                 }, cancel: { clearEditing() }, indent: { reverse in
                     saveEditing(task) { changeIndent(ids: [task.id], reverse: reverse); selection.row(task.id).focusRequest.send() }
-                }, blur: { saveEditing(task) }).id("edit:\(task.id)").frame(height: editHeight)
+                }, blur: { saveEditing(task) }).id("edit:\(task.id)").frame(height: max(editHeight, minRowHeight))
             } else {
                 HStack(alignment: .opticalCenter, spacing: 4) {
                     OpticalText(title: titleParts?.tags.isEmpty == false ? (titleParts?.text ?? task.title) : task.title, size: 13, weight: selected ? .medium : .regular, language: model.language).lineLimit(1).truncationMode(.tail)
@@ -201,10 +214,14 @@ extension MainWindow {
     private func clickRow(_ task: DotistTask, edit: Bool = true) {
         traceReorder("row.click", taskID: task.id, fields: ["edit": "\(edit)"])
         let flags = NSEvent.modifierFlags
+        let clickPoint: CGPoint? = {
+            guard let event = NSApp.currentEvent, event.type == .leftMouseUp || event.type == .leftMouseDown else { return nil }
+            return event.locationInWindow
+        }()
         selection.update { $0.click(task.id, order: displayOrder, shift: flags.contains(.shift), command: flags.contains(.command)) }
         if flags.intersection([.shift, .command]).isEmpty && edit {
             selection.setFocusTarget(task.id)
-            beginEditing(task)
+            beginEditing(task, at: clickPoint)
         } else {
             selection.row(task.id).focusRequest.send()
         }
@@ -223,7 +240,7 @@ extension MainWindow {
     }
 
     func handleUndoShortcut(redo: Bool) -> Bool {
-        guard !composerFocused, editing == nil, draftAfter == nil, addingToGroup == nil else { return false }
+        guard !isCompactOrAnimating(), !composerFocused, editing == nil, draftAfter == nil, addingToGroup == nil else { return false }
         if redo {
             guard model.canRedoAction else { return false }
             model.redoLast()

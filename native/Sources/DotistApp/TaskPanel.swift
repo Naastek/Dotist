@@ -147,7 +147,7 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.isReleasedWhenClosed = false
-        panel.isMovableByWindowBackground = true
+        panel.isMovableByWindowBackground = false
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
         super.init(window: panel)
         motion = PanelMotion(model: model, panel: panel, size: size, title: { [weak self] in self?.bubbleTitle ?? "" },
@@ -190,6 +190,12 @@ final class GroupPanelController: NSWindowController, NSWindowDelegate, Observab
     }
     @objc private func expandPanel() { if compact { toggleCompact() }; window?.makeKeyAndOrderFront(nil) }
     @objc func closePanel() { close() }
+    func windowDidResize(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === self.window,
+              !compact, motion?.animationInProgress != true,
+              window.frame.width >= 320, window.frame.height >= 440 else { return }
+        motion?.expandedSize = window.frame.size
+    }
     func windowWillClose(_ notification: Notification) {
         motion?.stop()
         window?.contentView = nil
@@ -211,7 +217,11 @@ private struct GroupPanelContent: View {
             remaining: controller.remaining, total: controller.tasks.count, groupName: controller.groupName,
             contextMenu: controller.showBubbleMenu,
             content: MainWindow(model: model, state: state, showViews: showViews, showSearch: showSearch, showSettings: showSettings,
-                showGroupPanel: showGroupPanel, collapse: controller.toggleCompact, close: controller.closePanel, primary: false))
+                showGroupPanel: showGroupPanel, collapse: controller.toggleCompact, close: controller.closePanel, primary: false,
+                isCompactOrAnimating: { [weak controller] in
+                    guard let motion = controller?.motion else { return false }
+                    return motion.bubble || motion.animationInProgress
+                }))
         .onChange(of: state.groupID) { id in
             guard let id, id != DotistGroup.inboxID else { controller.closePanel(); return }
             controller.updateTitle()

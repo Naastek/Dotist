@@ -69,8 +69,66 @@ extension MainWindow {
         } else { clearInputs() }
     }
 
-    func clearEditing() { editing = nil; editedTitle = ""; editHeight = 20; pendingEdit = nil }
-    private func clearDraft() { draftAfter = nil; draftTitle = ""; draftParent = nil; draftHeight = 20; draftPlan = nil }
+    /// Synchronously snapshots and clears active inline editors/drafts while
+    /// persisting changes in the background, so a drag or outside click can
+    /// start immediately without waiting for SQLite round-trips.
+    func flushInputsOptimistically() {
+        if let id = editing {
+            let titleToSave = TaskDraftFlow.titleToSave(editedTitle)
+            let task = model.tasks.first(where: { $0.id == id })
+            clearEditing()
+            if let task, let titleToSave, titleToSave != task.title {
+                model.change { _ = try $0.patchTask(id: task.id, title: titleToSave) }
+            }
+        }
+        if let id = draftAfter {
+            let titleToSave = TaskDraftFlow.titleToSave(draftTitle)
+            let parent = draftParent
+            let plan = draftPlan
+            let task = model.tasks.first(where: { $0.id == id })
+            clearDraft()
+            if let task, let titleToSave {
+                model.change { store in
+                    let newTask = try store.addTask(title: titleToSave, category: task.category, parentId: parent,
+                                                    dueDate: plan == nil ? task.dueDate : nil, plan: plan)
+                    let hierarchy = TaskHierarchy(try store.listTasks())
+                    let anchor = ([task] + hierarchy.ancestors(of: task.id)).first { $0.parentId == parent }
+                    if let anchor { try store.reorder(newTask.id, relativeTo: anchor.id, after: true, allTasks: false) }
+                }
+            }
+        }
+        if let id = addingToGroup {
+            let titleToSave = TaskDraftFlow.titleToSave(groupTitles[id] ?? "")
+            addingToGroup = nil
+            groupTitles.removeValue(forKey: id)
+            if let titleToSave, model.groups.contains(where: { $0.id == id }) {
+                model.change { _ = try $0.addTask(title: titleToSave, category: id) }
+            }
+        }
+    }
+
+    func dismissActiveFocus() {
+        flushInputsOptimistically()
+        NSApp.keyWindow?.makeFirstResponder(nil)
+    }
+
+    /// Clears inline editing or draft states whose target row/group is no longer
+    /// mounted in the visible list, preventing ghost locks after deletes or filters.
+    func pruneStaleInputState() {
+        let editableIDs = Set(listEntries.compactMap { $0.expanded ? $0.row?.task.id : nil })
+        if let id = editing, !editableIDs.contains(id) { clearEditing() }
+        if let id = draftAfter, !editableIDs.contains(id) { clearDraft() }
+        if let id = addingToGroup {
+            let visible = id != DotistGroup.inboxID
+            if !model.groups.contains(where: { $0.id == id }) || !state.showsGroupContents(id, hasHeader: visible) {
+                addingToGroup = nil
+                groupTitles.removeValue(forKey: id)
+            }
+        }
+    }
+
+    func clearEditing() { editing = nil; editedTitle = ""; editHeight = 32; editClickWindowPoint = nil; pendingEdit = nil }
+    private func clearDraft() { draftAfter = nil; draftTitle = ""; draftParent = nil; draftHeight = 32; draftPlan = nil }
     func clearInputs() {
         clearDraft(); clearEditing(); addingToGroup = nil; groupTitles.removeAll()
     }
@@ -79,19 +137,22 @@ extension MainWindow {
         clearInputs()
         draftAfter = task.id; draftParent = asChild && model.depth(of: task) < 4 ? task.id : task.parentId
         draftPlan = state.planScope
+        let depth = draftParent.flatMap { id in model.tasks.first { $0.id == id } }.map { model.depth(of: $0) + 1 } ?? 0
+        draftHeight = TaskRowMetrics.height(depth, titleHeight: 20)
     }
 
     @ViewBuilder func draftRow(after task: DotistTask, sub: Bool) -> some View {
         if draftAfter == task.id {
             let depth = draftParent.flatMap { id in model.tasks.first { $0.id == id } }.map { model.depth(of: $0) + 1 } ?? 0
-            TaskRowLayout(depth: depth) {
+            let minRowHeight = TaskRowMetrics.height(depth, titleHeight: 20)
+            TaskRowLayout(depth: depth, editing: true) {
                 TaskCheckmark(depth: depth, completed: false, children: [], emphasized: false)
-                TaskEditor(text: $draftTitle, height: $draftHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("任务内容"), commit: {
+                TaskEditor(text: $draftTitle, height: $draftHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("任务内容"), minRowHeight: minRowHeight, commit: {
                     saveDraft(after: task, continueEditing: true)
                 }, cancel: { clearDraft() }, indent: { reverse in
                     draftParent = TaskDraftFlow.parent(reverse: reverse, current: draftParent, after: task, tasks: model.tasks)
                 }, blur: { saveDraft(after: task, continueEditing: false) })
-                    .id("draft:\(task.id)").frame(height: draftHeight)
+                    .id("draft:\(task.id)").frame(height: max(draftHeight, minRowHeight))
                 Color.clear.frame(width: 0, height: 0)
             }.background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(0.18)).padding(.horizontal, -6))
         }
@@ -119,10 +180,16 @@ extension MainWindow {
         }
     }
 
-    func beginEditing(_ task: DotistTask) {
+    func beginEditing(_ task: DotistTask, at clickPoint: CGPoint? = nil) {
         guard editing != task.id else { return }
         if editSaving { pendingEdit = task; return }
-        let start = { clearInputs(); editing = task.id; editedTitle = task.title }
+        let start = {
+            clearInputs()
+            editing = task.id
+            editedTitle = task.title
+            editHeight = TaskRowMetrics.height(model.depth(of: task), titleHeight: 20)
+            editClickWindowPoint = clickPoint
+        }
         if let id = editing, let current = model.tasks.first(where: { $0.id == id }) { saveEditing(current, then: start) }
         else if let after = draftAfter, let current = model.tasks.first(where: { $0.id == after }), TaskDraftFlow.titleToSave(draftTitle) != nil {
             saveDraft(after: current, continueEditing: false)
@@ -175,11 +242,18 @@ extension MainWindow {
                     guard !values.isEmpty else { return false }
                     selectedSuggestion = (selectedSuggestion + direction + values.count) % values.count
                     return true
-                }, complete: { force in chooseSuggestion(force: force) }, composing: $composerComposing)
+                }, complete: { force in chooseSuggestion(force: force) }, cancel: {
+                    if !tagSuggestions.isEmpty && !tagSuggestionsDismissed {
+                        tagSuggestionsDismissed = true
+                        selectedSuggestion = -1
+                        return true
+                    }
+                    return false
+                }, composing: $composerComposing)
                     .tint(DotistDesign.accent).frame(height: ComposerMetrics.rowHeight)
                     .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(DotistDesign.accent.opacity(composerCueVisible ? 0.5 : 0), lineWidth: 1).allowsHitTesting(false) }
                     .accessibilityIdentifier("composer-input")
-                if !tagSuggestions.isEmpty {
+                if !tagSuggestions.isEmpty && !tagSuggestionsDismissed {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(tagSuggestions.enumerated()), id: \.element) { index, tag in
                             Button("#" + tag) { selectedSuggestion = index; _ = chooseSuggestion(force: true) }
@@ -189,8 +263,8 @@ extension MainWindow {
                 }
             }.frame(maxWidth: .infinity).frame(height: ComposerMetrics.rowHeight)
                 .anchorPreference(key: ComposerInputBounds.self, value: .bounds) { $0 }
-                .onChange(of: composer) { _ in selectedSuggestion = -1; dismissComposerCue() }
-                .onChange(of: composerFocused) { focused in if !focused { dismissComposerCue() } }
+                .onChange(of: composer) { _ in selectedSuggestion = -1; tagSuggestionsDismissed = false; dismissComposerCue() }
+                .onChange(of: composerFocused) { focused in if !focused { tagSuggestionsDismissed = false; dismissComposerCue() } }
             Button { showDuePicker.toggle() } label: {
                 IconTextRow(spacing: 4) {
                     if let dateLabel { OpticalText(title: dateLabel, size: 12, language: model.language).lineLimit(1) }

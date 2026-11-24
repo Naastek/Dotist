@@ -8,6 +8,7 @@ import SwiftUI
 /// centered on that whole block, including wrapped lines and inline tags.
 struct TaskRowLayout: Layout {
     let depth: Int
+    var editing: Bool = false
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let width = proposal.width ?? 332
         let title = subviews[1].sizeThatFits(.init(width: titleWidth(width, subviews), height: nil))
@@ -15,7 +16,7 @@ struct TaskRowLayout: Layout {
     }
     private func titleWidth(_ width: CGFloat, _ subviews: Subviews) -> CGFloat {
         // Metadata is never compressed by the title, including at depth four.
-        let meta = subviews[2].sizeThatFits(.unspecified).width
+        let meta = editing ? 0 : subviews[2].sizeThatFits(.unspecified).width
         return max(1, width - (TaskRowMetrics.textX(depth) - TaskRowMetrics.inset) - (meta > 0 ? meta + 8 : 0))
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {

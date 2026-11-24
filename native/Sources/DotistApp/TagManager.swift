@@ -7,6 +7,7 @@ struct TagManager: View {
     let close: () -> Void
     let groups: () -> Void
     let select: (String) -> Void
+    var onRename: (String, String) -> Void = { _, _ in }
     @State private var renaming: String?
     @State private var name = ""
     @State private var saving = false
@@ -23,7 +24,7 @@ struct TagManager: View {
                 OpticalText(title: model.text("标签"), size: 14, weight: .medium, language: model.language)
                 Spacer()
                 OpticalText(title: model.text("{n} 个").replacingOccurrences(of: "{n}", with: "\(model.orderedTagCounts.count)"), size: 12, language: model.language).foregroundColor(DotistDesign.muted)
-            }.padding(.horizontal, 16).frame(height: 44)
+            }.padding(.horizontal, 16).frame(height: 44).background(FloatingWindowDragArea())
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     if model.orderedTagCounts.isEmpty { Text(model.text("在任务里写 #词 就会有标签，比如：写周报 #sideproject。")).font(font(12)).foregroundColor(DotistDesign.muted) }
@@ -31,7 +32,7 @@ struct TagManager: View {
                         HStack(alignment: .opticalCenter, spacing: 8) {
                             OpticalSymbol(name: "line.3.horizontal", size: 11).foregroundColor(hovered == tag.tag ? DotistDesign.muted : DotistDesign.faint).frame(width: 18)
                             if renaming == tag.tag {
-                                OpticalInput(text: $name, placeholder: model.text("标签名称"), font: DotistDesign.nativeFont(14, weight: .medium, language: model.language), focusOnAppear: true, commit: { save(tag.tag) }, blur: { save(tag.tag) }).frame(height: 24)
+                                OpticalInput(text: $name, placeholder: model.text("标签名称"), font: DotistDesign.nativeFont(14, weight: .medium, language: model.language), focusOnAppear: true, commit: { save(tag.tag) }, cancel: { renaming = nil }, blur: { save(tag.tag) }).frame(height: 24)
                             } else {
                                 Button { select(tag.tag); close() } label: { OpticalText(title: "#" + tag.tag, size: 14, weight: .medium, language: model.language) }.buttonStyle(.plain).modifier(DotistFocusRing()).frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -46,12 +47,21 @@ struct TagManager: View {
                 }.padding(.horizontal, 16)
             }
         }.foregroundColor(DotistDesign.ink)
+            .onExitCommand {
+                if renaming != nil { renaming = nil } else { close() }
+            }
     }
     private func save(_ tag: String) {
         guard renaming == tag, !saving else { return }
-        let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty && value != tag else { renaming = nil; return }
+        let normalized = String(name.trimmingCharacters(in: .whitespacesAndNewlines).drop(while: { $0 == "#" }).filter { !$0.isWhitespace }.prefix(24))
+        guard !normalized.isEmpty && normalized != tag else { renaming = nil; return }
         saving = true
-        model.change(completed: { saving = false; renaming = nil }, failed: { saving = false }) { try $0.retag(tag, replacement: value) }
+        let wasModelSelected = model.activeTag == tag
+        model.change(completed: {
+            saving = false
+            renaming = nil
+            if wasModelSelected { model.selectTag(normalized) }
+            onRename(tag, normalized)
+        }, failed: { saving = false }) { try $0.retag(tag, replacement: normalized) }
     }
 }

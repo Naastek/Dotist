@@ -14,6 +14,10 @@ struct MainWindow: View {
     let collapse: () -> Void
     var close: (() -> Void)? = nil
     var primary = true
+    var isCompactOrAnimating: () -> Bool = { false }
+    var sideTabDropTarget: ((CGPoint) -> String?)? = nil
+    var endSideTabDrop: (() -> Void)? = nil
+    var initialUpcomingOpen = false
     @ObservedObject var toolbarConfig = ToolbarConfig.shared
     @State var panelHovered = false
     @State var composerHovered = false
@@ -25,10 +29,12 @@ struct MainWindow: View {
     @State private var toolbarFrames: [ToolbarItem: CGRect] = [:]
     @State var showColorPicker = false
     @State var shelfTarget: String?
+    @State var sideTabTarget: String?
     @State var composer = ""
     @State var composerComposing = false
     @State var composerSubmitting = false
     @State var selectedSuggestion = -1
+    @State var tagSuggestionsDismissed = false
     @State var category = DotistGroup.inboxID
     @State var composerDate = TaskEntryDate()
     @State var addingToGroup: String?
@@ -45,7 +51,8 @@ struct MainWindow: View {
     @State var emptyStateHeight: CGFloat = 0
     @State var editedTitle = ""
     @State var editSaving = false
-    @State var editHeight: CGFloat = 20
+    @State var editHeight: CGFloat = 32
+    @State var editClickWindowPoint: CGPoint?
     @State var pendingEdit: DotistTask?
     @State var manageGroups = false
     @State var manageTags = false
@@ -98,6 +105,15 @@ struct MainWindow: View {
         (serif ? DotistDesign.nameFont(size, weight: weight, language: model.language) : DotistDesign.textFont(size, weight: weight, language: model.language))
     }
 
+    private var guardedRowFrames: [CGRect] {
+        let clippedRows = rowFrames.compactMap { row -> CGRect? in
+            guard !listViewport.isEmpty else { return row.frame }
+            let clipped = row.frame.intersection(listViewport)
+            return clipped.isNull || clipped.isEmpty ? nil : clipped
+        }
+        return clippedRows + Array(toolbarFrames.values)
+    }
+
     var body: some View {
         #if DOTIST_BENCH
         let _ = BenchPerf.count(.mainWindowBody)
@@ -107,7 +123,9 @@ struct MainWindow: View {
                 Text(model.text(error)).font(font(12)).foregroundColor(DotistDesign.danger).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16)
             }
             if manageTags {
-                TagManager(model: model, close: { manageTags = false }, groups: { manageTags = false; manageGroups = true }, select: { tag in state.activeTag = tag; state.scope = "all" })
+                TagManager(model: model, close: { manageTags = false }, groups: { manageTags = false; manageGroups = true }, select: { tag in state.activeTag = tag; state.scope = "all" }, onRename: { old, new in
+                    if state.activeTag == old { state.activeTag = new }
+                })
             } else if manageGroups {
                 GroupManager(model: model, close: { manageGroups = false }, tags: { manageGroups = false; manageTags = true })
             } else {
@@ -141,7 +159,7 @@ struct MainWindow: View {
             }
         }
         .background(TaskPickupFrameProbe(runtime: reorderRuntime, role: .panel))
-        .background(TaskReorderInteractionGuard(rowFrames: rowFrames.map(\.frame) + Array(toolbarFrames.values), dragging: drag != nil, cancel: cancelReorder, undoRedo: handleUndoShortcut))
+        .background(TaskReorderInteractionGuard(rowFrames: guardedRowFrames, dragging: drag != nil, cancel: cancelReorder, undoRedo: handleUndoShortcut, dismissEditor: flushInputsOptimistically))
         .onPreferenceChange(TaskListRowFrame.Key.self) { if rowFrames != $0 { rowFrames = $0; updateGhostFrame() } }
         .onPreferenceChange(TaskListGroupFrame.Key.self) { if groupFrames != $0 { groupFrames = $0; updateGhostFrame() } }
         .preference(key: TaskGhostFrameKey.self, value: ghostFrame)
@@ -185,7 +203,7 @@ struct MainWindow: View {
         .onDisappear { filterPresentation.dismiss(); traceReorder("lifecycle.disappear"); cancelReorder(); reorderRuntime.handleInput = nil; leaveInputs(); selection.update { $0.clear() } }
         .onHover { panelHovered = $0 }
         .foregroundColor(textColor)
-        .onAppear { category = state.groupID ?? DotistGroup.inboxID; reorderRuntime.handleInput = handleReorderInput }
+        .onAppear { category = state.groupID ?? DotistGroup.inboxID; reorderRuntime.handleInput = handleReorderInput; if initialUpcomingOpen { upcomingOpen = true } }
         .onChange(of: showCalendar) { _, open in filterPresentation.dateControlsChanged(open) }
         .onChange(of: state.groupID) { id in
             cancelReorder()
@@ -195,7 +213,21 @@ struct MainWindow: View {
             selection.ensureValidFocusTarget(in: displayOrder)
         }
         .onChange(of: model.tasks) { _ in
+            pruneStaleInputState()
             selection.ensureValidFocusTarget(in: displayOrder)
+        }
+        .onChange(of: hideCompleted) { _ in
+            pruneStaleInputState()
+            selection.ensureValidFocusTarget(in: displayOrder)
+        }
+        .onChange(of: state.activeTag) { _ in
+            pruneStaleInputState()
+        }
+        .onChange(of: state.customStart) { _ in
+            pruneStaleInputState()
+        }
+        .onChange(of: state.customEnd) { _ in
+            pruneStaleInputState()
         }
         .onChange(of: model.groups) { groups in
             if let id = state.groupID, !groups.contains(where: { $0.id == id }) { state.groupID = nil }

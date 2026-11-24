@@ -31,7 +31,7 @@ final class CommandPaletteSectionsTests: XCTestCase {
         let several = PaletteMetrics.height(sectionCounts: [3, 2, 1])
         // A short result set should not leave a mostly empty panel behind.
         XCTAssertEqual(empty, PaletteMetrics.searchRow + PaletteMetrics.emptyContent + PaletteMetrics.footer)
-        XCTAssertEqual(single, 52 + 18 + 14 + 4 + 38 + 10 + 32)
+        XCTAssertEqual(single, 52 + 18 + 14 + 4 + 38 + 10)
         XCTAssertGreaterThan(several, single)
         XCTAssertLessThan(several, PaletteMetrics.maxHeight)
         // Long lists stay bounded; the list scrolls beyond that.

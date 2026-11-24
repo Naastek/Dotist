@@ -21,6 +21,7 @@ struct SettingsWindow: View {
     @State private var manager: Manager?
     @State private var draggedToolbarItem: ToolbarItem?
     @State private var toolbarTranslation: CGFloat = 0
+    @State private var toolbarTargetIndex: Int?
     private enum Manager: String, Identifiable { case tags, groups; var id: String { rawValue } }
     init(model: AppModel, updater: NativeUpdater, beginShortcutCapture: @escaping () -> Void, endShortcutCapture: @escaping (UInt32, String?) -> Void, changeShortcutScope: @escaping (String, String) -> Void = { _, _ in }, resetWindowSize: @escaping () -> Void, initialModule: SettingsModule = .appearance) {
         self.model = model
@@ -240,8 +241,10 @@ struct SettingsWindow: View {
             }
             settingsGroup("窗口大小") {
                 settingRow("窗口大小") { Button(model.text("恢复默认"), action: resetWindowSize) }
-                boolRow("固定窗口", value: model.settings.locked) { $0.locked = $1 }
                 boolRow("窗口置顶", value: model.settings.alwaysOnTop) { $0.alwaysOnTop = $1 }
+            }
+            settingsGroup("展开与收起", footer: "开启「保持展开」时不会自动收起，也不会失焦淡出。") {
+                boolRow("保持展开", value: model.settings.locked) { $0.locked = $1 }
                 boolRow("悬停显示详情", value: model.settings.hoverExpand) { $0.hoverExpand = $1 }
                 boolRow("自动收起", value: model.settings.autoCollapse) { $0.autoCollapse = $1 }
                 numberRow("收起等待时间", value: Double(model.settings.autoCollapseSecs), range: 5...120) { $0.autoCollapseSecs = UInt16($1.rounded()) }
@@ -299,7 +302,7 @@ struct SettingsWindow: View {
                     }
                 }
                 settingRow("分组") {
-                    settingMenu("分组", value: model.settings.trayGroup == "all" || model.groups.contains(where: { $0.id == model.settings.trayGroup }) ? model.settings.trayGroup : "all", options: [("all", model.text("全部分组"))] + model.groups.map { ($0.id, $0.name) }) { value in update { $0.trayGroup = value } }
+                    settingMenu("分组", value: model.settings.trayGroup == "all" || model.visibleGroups.contains(where: { $0.id == model.settings.trayGroup }) ? model.settings.trayGroup : "all", options: [("all", model.text("全部分组"))] + model.visibleGroups.map { ($0.id, $0.name) }) { value in update { $0.trayGroup = value } }
                 }
                 numberRow("轮播间隔", value: Double(model.settings.trayRotateSecs), range: 2...30) { $0.trayRotateSecs = UInt16($1.rounded()) }
             }
@@ -322,20 +325,36 @@ struct SettingsWindow: View {
             settingRow("恢复默认") { Button(model.text("恢复默认")) { toolbar.reset() } }
         }
     }
+    private func toolbarRowOffset(_ item: ToolbarItem) -> CGFloat {
+        guard let dragged = draggedToolbarItem else { return 0 }
+        if dragged == item { return toolbarTranslation }
+        let items = orderedToolbarItems
+        guard let source = items.firstIndex(of: dragged),
+              let index = items.firstIndex(of: item),
+              let target = toolbarTargetIndex else { return 0 }
+        if source < target && index > source && index <= target { return -44 }
+        if target < source && index >= target && index < source { return 44 }
+        return 0
+    }
     private func toolbarRow(_ item: ToolbarItem) -> some View {
         HStack(spacing: 10) {
             OpticalSymbol(name: "line.3.horizontal", size: 13)
                 .foregroundStyle(draggedToolbarItem == item ? DotistDesign.accent : DotistDesign.faint)
                 .frame(width: 24, height: 32).contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 3).onChanged { value in
-                    draggedToolbarItem = item; toolbarTranslation = value.translation.height
+                    draggedToolbarItem = item
+                    toolbarTranslation = value.translation.height
+                    let items = orderedToolbarItems
+                    if let from = items.firstIndex(of: item) {
+                        toolbarTargetIndex = min(max(from + Int((value.translation.height / 44).rounded()), 0), items.count - 1)
+                    }
                 }.onEnded { value in
                     let items = orderedToolbarItems
                     if let from = items.firstIndex(of: item) {
-                        let to = min(max(from + Int((value.translation.height / 44).rounded()), 0), items.count - 1)
+                        let to = toolbarTargetIndex ?? min(max(from + Int((value.translation.height / 44).rounded()), 0), items.count - 1)
                         if from != to { withAnimation(motion.toolbar) { toolbar.move(item, onto: items[to]) } }
                     }
-                    draggedToolbarItem = nil; toolbarTranslation = 0
+                    draggedToolbarItem = nil; toolbarTranslation = 0; toolbarTargetIndex = nil
                 })
                 .accessibilityLabel(model.text("拖动调整顺序") + " " + model.text(toolbarTitle(item)))
                 .accessibilityIdentifier("settings-toolbar-drag-" + item.rawValue)
@@ -357,7 +376,8 @@ struct SettingsWindow: View {
                 .accessibilityIdentifier("settings-toolbar-visibility-" + item.rawValue)
         }.padding(.horizontal, 14).frame(height: 44)
             .overlay(alignment: .bottom) { Rectangle().fill(DotistDesign.rule).frame(height: 0.5).padding(.leading, 14) }
-            .offset(y: draggedToolbarItem == item ? toolbarTranslation : 0)
+            .offset(y: toolbarRowOffset(item))
+            .animation(draggedToolbarItem == item ? nil : motion.toolbar, value: toolbarTargetIndex)
             .zIndex(draggedToolbarItem == item ? 1 : 0)
             .settingsSearchAnchor(rowID(toolbarTitle(item)))
     }
@@ -368,7 +388,7 @@ struct SettingsWindow: View {
         case .calendar: return "日历"
         case .views: return "任务视图"
         case .pin: return "置顶窗口"
-        case .lock: return "固定窗口"
+        case .lock: return "保持展开"
         case .collapse: return "收起为悬浮球"
         default: return "颜色"
         }

@@ -26,7 +26,7 @@ struct GroupManager: View {
                 Button(action: tags) { OpticalText(title: model.text("标签"), size: 14, weight: .semibold, language: model.language) }.buttonStyle(.plain).modifier(DotistFocusRing()).foregroundColor(DotistDesign.faint)
                 Spacer()
                 OpticalText(title: model.text("{n} 个").replacingOccurrences(of: "{n}", with: "\(model.visibleGroups.count)"), size: 12, language: model.language).foregroundColor(DotistDesign.muted)
-            }.padding(.horizontal, 16).frame(height: 44)
+            }.padding(.horizontal, 16).frame(height: 44).background(FloatingWindowDragArea())
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(model.visibleGroups.enumerated()), id: \.element.id) { index, group in
@@ -35,7 +35,7 @@ struct GroupManager: View {
                                 .foregroundColor(hovered == group.id ? DotistDesign.muted : DotistDesign.faint)
                                 .frame(width: 18)
                             if renaming == group.id {
-                                OpticalInput(text: $name, placeholder: model.text("分组名称"), font: DotistDesign.nativeFont(14, weight: .semibold, serif: true, language: model.language), focusOnAppear: true, commit: { save(group) }, blur: { save(group) }).frame(height: 24)
+                                OpticalInput(text: $name, placeholder: model.text("分组名称"), font: DotistDesign.nativeFont(14, weight: .semibold, serif: true, language: model.language), focusOnAppear: true, commit: { save(group) }, cancel: { renaming = nil }, blur: { save(group) }).frame(height: 24)
                             } else {
                                 Button { begin(group) } label: { OpticalText(title: group.name, size: 14, weight: .semibold, serif: true, language: model.language).frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain).modifier(DotistFocusRing()).disabled(group.id == DotistGroup.inboxID)
                             }
@@ -64,6 +64,9 @@ struct GroupManager: View {
                 }.padding(.horizontal, 16)
             }
         }.foregroundColor(DotistDesign.ink)
+            .onExitCommand {
+                if renaming != nil { renaming = nil } else { close() }
+            }
     }
     private func begin(_ group: DotistGroup) {
         if renameSaving { pendingRename = group; return }
@@ -131,9 +134,18 @@ struct ManagerColorSwatch: View {
     let color: DotistGroupColor
     let selected: Bool
     var body: some View {
-        Circle().fill(DotistTheme.swatch(color)).frame(width: 16, height: 16)
-            .overlay(Circle().stroke(DotistDesign.muted, lineWidth: color == .none || selected ? 1 : 0))
-            .overlay { if selected { OpticalSymbol(name: "checkmark", size: 9, weight: .bold).foregroundColor(color == .none ? DotistDesign.ink : .white) } }
+        Circle().fill(color == .none ? Color.clear : DotistTheme.swatch(color))
+            .overlay {
+                if color == .none {
+                    Circle().strokeBorder(DotistDesign.faint, lineWidth: 1)
+                    Path { path in
+                        path.move(to: CGPoint(x: 3, y: 13)); path.addLine(to: CGPoint(x: 13, y: 3))
+                    }.stroke(DotistDesign.faint, lineWidth: 1)
+                }
+            }
+            .frame(width: 16, height: 16)
+            .padding(3)
+            .overlay { if selected { Circle().strokeBorder(DotistDesign.accent, lineWidth: 2) } }
             .frame(width: 24, height: 24).contentShape(Rectangle())
     }
 }

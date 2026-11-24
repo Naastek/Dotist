@@ -802,18 +802,20 @@ final class DotistUITests: XCTestCase {
         let original = try Data(contentsOf: path)
         let initial = try JSONSerialization.jsonObject(with: original) as! [String: Any]
         addTeardownBlock { app.terminate(); try original.write(to: path) }
-        for (key, off, on) in [("always_on_top", "置顶窗口", "取消置顶"), ("locked", "固定窗口", "取消固定")] {
+        for (key, identifier, label) in [("always_on_top", "toolbar:pin", "置顶窗口"), ("locked", "toolbar:lock", "保持展开")] {
             main.buttons["任务视图"].hover()
             let enabled = initial[key] as? Bool ?? (key == "always_on_top")
-            let action = main.buttons[enabled ? on : off]
+            let action = main.buttons[identifier]
             XCTAssertTrue(action.waitForExistence(timeout: 3))
+            XCTAssertEqual(action.label, label)
             action.click()
             expectation(for: NSPredicate { _, _ in
                 guard let data = try? Data(contentsOf: path), let settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
                 return settings[key] as? Bool == !enabled
             }, evaluatedWith: nil)
             waitForExpectations(timeout: 5)
-            XCTAssertTrue(main.buttons[enabled ? off : on].waitForExistence(timeout: 3))
+            XCTAssertTrue(main.buttons[identifier].waitForExistence(timeout: 3))
+            XCTAssertEqual(main.buttons[identifier].label, label)
         }
         openTaskViews(app)
         XCTAssertTrue(app.windows["任务视图"].waitForExistence(timeout: 5))
@@ -1166,7 +1168,7 @@ final class DotistUITests: XCTestCase {
         main.buttons["收起为悬浮球"].click()
         let bubble = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "点击展开")).firstMatch
         XCTAssertTrue(bubble.waitForExistence(timeout: 5))
-        for (key, off, on) in [("always_on_top", "置顶窗口", "取消置顶"), ("locked", "固定窗口", "取消固定")] {
+        for (key, off, on) in [("always_on_top", "置顶窗口", "取消置顶"), ("locked", "保持展开", "取消保持展开")] {
             let enabled = initial[key] as? Bool ?? (key == "always_on_top")
             bubble.rightClick()
             let action = main.menuItems[enabled ? on : off]

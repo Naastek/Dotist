@@ -38,10 +38,10 @@ enum SettingsSearchIndex {
     static let entries: [SettingsSearchEntry] = {
         let rows: [(SettingsModule, [String])] = [
             (.appearance, ["主题", "玻璃预设", "主表面透明度", "磨砂程度", "字体", "西文衬线", "西文无衬线", "中文衬线", "中文无衬线", "恢复默认字体", "失焦淡出", "淡出前等待", "淡出用时", "失焦后整窗透明度", "全部", "分组便签背景透明度", "便签入场预览"]),
-            (.general, ["语言", "显示在 Dock", "显示在菜单栏", "开机启动", "悬停显示详情", "窗口大小", "固定窗口", "自动收起", "收起等待时间", "窗口置顶", "分组", "标签"]),
+            (.general, ["语言", "显示在 Dock", "显示在菜单栏", "开机启动", "悬停显示详情", "窗口大小", "保持展开", "自动收起", "收起等待时间", "窗口置顶", "分组", "标签"]),
             (.filters, ["启动时打开", "筛选器"]),
             (.menubar, ["显示内容", "日期透视", "分组", "轮播间隔", "左键点击", "右键点击"]),
-            (.toolbar, ["颜色", "任务视图", "置顶窗口", "固定窗口", "收起为悬浮球", "恢复默认"]),
+            (.toolbar, ["颜色", "任务视图", "置顶窗口", "保持展开", "收起为悬浮球", "恢复默认"]),
             (.shortcuts, ["移动焦点", "调整顺序", "缩进", "新建同级任务", "换行", "取消", "完成 / 取消完成", "显示 / 收起窗口", "快速添加", "打开搜索", "打开任务视图", "打开设置"]),
             (.mcp, ["启用本地 MCP", "客户端", "复制"]),
             (.data, ["数据库路径"]),
@@ -93,6 +93,7 @@ enum SettingsSearchIndex {
     private static func aliases(_ title: String) -> [String] {
         switch title {
         case "主表面透明度": return ["transparency opacity alpha glass 透明程度 不透明度 透過率"] + translations("透明程度")
+        case "保持展开": return ["固定窗口 锁定 展开 keep expanded lock window"] + translations("固定窗口")
         case "分组便签背景透明度": return ["transparency opacity alpha group tab 分组便签不透明度"] + translations("分组便签不透明度")
         case "失焦后整窗透明度": return ["transparency opacity alpha idle fade 淡出后的不透明度"] + translations("淡出后的不透明度")
         case "字体": return ["Fonts Typeface フォント 字型 字體"]

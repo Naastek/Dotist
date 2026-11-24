@@ -39,7 +39,7 @@ extension MainWindow {
                             // windows without letting it size the section stack.
                             .onPreferenceChange(TaskEmptyStateHeightKey.self) { emptyStateHeight = $0 }
                             .padding(.horizontal, 16)
-                            .background(FloatingWindowDragArea())
+                            .background(FloatingWindowDragArea(onClick: dismissActiveFocus))
                             .background(TaskReorderScrollBridge(runtime: reorderRuntime))
                     }
                 .background(TaskPickupFrameProbe(runtime: reorderRuntime, role: .viewport))
@@ -57,6 +57,9 @@ extension MainWindow {
                 .onReceive(selection.navigation) { id in proxy.scrollTo(id, anchor: .center) }
                 .onChange(of: model.focusNavigation) { _ in
                     guard primary, let id = model.focusId else { return }
+                    if let task = model.tasks.first(where: { $0.id == id }), task.completed, hideCompleted {
+                        hideCompleted = false
+                    }
                     selection.setFocusTarget(id)
                     proxy.scrollTo(id, anchor: .center)
                 }
@@ -117,6 +120,7 @@ extension MainWindow {
             let regions = Set(rest.compactMap { $0.row?.region })
             rest.removeAll { entry in
                 guard let group = entry.group else { return false }
+                if group.region.hasPrefix("today-drop:") { return false }
                 return !regions.contains(group.region) && group.region != session.destination?.region
             }
         }
@@ -220,6 +224,28 @@ extension MainWindow {
             if !values.today.matches.isEmpty {
                 if hasSection { extra("today-gap", Color.clear.frame(height: 20)) }
                 flat(values.today, section: "today", date: Date().dotistDay); hasSection = true
+            } else if drag != nil, !values.overdue.matches.isEmpty || (upcomingOpen && !values.upcoming.matches.isEmpty) {
+                let targetGroupID = state.groupID ?? drag?.visibleBlock.first?.task.category ?? DotistGroup.inboxID
+                if let group = model.groups.first(where: { $0.id == targetGroupID }) ?? model.groups.first {
+                    if hasSection { extra("today-gap", Color.clear.frame(height: 20)) }
+                    let today = Date().dotistDay
+                    let region = "today-drop:" + group.id
+                    entries.append(.init(
+                        id: "header:" + region,
+                        group: .init(id: group.id, region: region, frame: .zero, date: today),
+                        content: AnyView(
+                            HStack(alignment: .opticalCenter, spacing: 6) {
+                                OpticalText(title: model.text("今天"), size: 15, weight: .semibold, language: model.language)
+                                    .foregroundColor(DotistDesign.ink)
+                                Spacer(minLength: 0)
+                            }
+                            .frame(height: 30)
+                            .padding(.top, 4)
+                            .accessibilityIdentifier("section-heading:today-drop")
+                        )
+                    ))
+                    hasSection = true
+                }
             }
             if !values.upcoming.matches.isEmpty { disclosure("接下来 {n} 天".replacingOccurrences(of: "{n}", with: "7"), result: values.upcoming, upcoming: true, gap: hasSection ? 20 : 0); hasSection = true }
             if !values.completed.matches.isEmpty { disclosure("已完成", result: values.completed, upcoming: false, gap: hasSection ? 20 : 0) }
@@ -245,12 +271,12 @@ extension MainWindow {
     }
 
     private func groupDraft(_ group: DotistGroup) -> some View {
-        TaskRowLayout(depth: 0) {
+        TaskRowLayout(depth: 0, editing: true) {
             TaskCheckmark(depth: 0, completed: false, children: [], emphasized: false)
             TaskEditor(text: Binding(get: { groupTitles[group.id] ?? "" }, set: { groupTitles[group.id] = $0 }), height: $draftHeight,
-                font: DotistDesign.nativeFont(13, language: model.language), label: model.text("新任务（{name}）").replacingOccurrences(of: "{name}", with: group.name),
+                font: DotistDesign.nativeFont(13, language: model.language), label: model.text("新任务（{name}）").replacingOccurrences(of: "{name}", with: group.name), minRowHeight: 32,
                 commit: { saveGroupDraft(group, continuing: true) }, cancel: { clearInputs() }, indent: { _ in }, blur: { saveGroupDraft(group, continuing: false) })
-                .id("group:\(group.id)").frame(height: draftHeight)
+                .id("group:\(group.id)").frame(height: max(draftHeight, 32))
             Color.clear.frame(width: 0, height: 0)
         }
     }
@@ -341,7 +367,7 @@ extension MainWindow {
     var composerArea: some View {
         GlassEffectContainer(spacing: 12) {
             Group {
-                if drag != nil { groupShelf } else { composerBar }
+                if drag != nil && state.groupID != nil { groupShelf } else { composerBar }
             }.overlay(alignment: .top) {
                 if let notice {
                     Text(model.text(notice)).font(font(13)).foregroundStyle(DotistDesign.muted)

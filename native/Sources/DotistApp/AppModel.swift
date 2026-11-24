@@ -367,7 +367,7 @@ final class AppModel: ObservableObject {
 
     /// The active drag remains frozen until the UI ends its session. The store
     /// validates the anchor and commits the complete move in one transaction.
-    func commitReorder(taskID: String, to target: TaskReorderEngine.Target, completed: (() -> Void)? = nil, failed: (() -> Void)? = nil) {
+    func commitReorder(taskID: String, to target: TaskReorderEngine.Target, dueDate: String? = nil, completed: (() -> Void)? = nil, failed: (() -> Void)? = nil) {
         changeWithSnapshot(completed: { [weak self] snapshot in
             // The committed snapshot is already applied before releasing the
             // frozen drag; expand moved ancestors from the same snapshot.
@@ -375,6 +375,10 @@ final class AppModel: ObservableObject {
             completed?()
         }, failed: failed) { store in
             try store.commitReorder(taskID, groupID: target.groupID, parentID: target.parentID, beforeID: target.beforeID)
+            if let dueDate {
+                let start = try store.listTasks().first(where: { $0.id == taskID })?.startDate.map { min($0, dueDate) }
+                _ = try store.setDateRange(taskID, start: start, due: dueDate)
+            }
         }
     }
 

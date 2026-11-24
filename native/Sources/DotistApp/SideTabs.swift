@@ -199,6 +199,7 @@ private final class SideTabPresentation: ObservableObject {
     @Published var inwardProgress: CGFloat = 0
     @Published var textOpacity = 0.0
     @Published var hovered: String?
+    @Published var dropTarget: String?
     @Published var visible = false
 }
 
@@ -238,6 +239,7 @@ private struct SideTabBackground: View {
     let inwardProgress: CGFloat
     let color: DotistGroupColor
     let selected: Bool
+    var dropTarget: Bool = false
     let opacity: UInt8
     @Environment(\.sideTabSurfaceStyle) private var style
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -250,15 +252,19 @@ private struct SideTabBackground: View {
         let reduceTransparency = accessibility?.reduceTransparency ?? self.reduceTransparency
         let contrast = accessibility?.contrast ?? self.contrast
         let alpha = reduceTransparency || contrast == .increased ? 1 : Double(min(100, opacity)) / 100
+        let emphasized = selected || dropTarget
         ZStack {
             // This underlay also protects contrast if a glass host loses sampling.
             // Resolve one fill before rasterizing its silhouette. Stacking two
             // antialiased shapes produces a darker seam at low background alpha.
             shape.fill(DotistDesign.paper.mix(with: color == .none ? DotistDesign.ink : DotistTheme.swatch(color),
-                by: selected ? (contrast == .increased ? GlassTintMaterial.tabHighContrastSelectedTint : GlassTintMaterial.tabSelectedTint) : GlassTintMaterial.tabUnselectedTint, in: .device))
+                by: emphasized ? (contrast == .increased ? GlassTintMaterial.tabHighContrastSelectedTint : GlassTintMaterial.tabSelectedTint) : GlassTintMaterial.tabUnselectedTint, in: .device))
+            if dropTarget {
+                shape.fill(DotistDesign.accent.opacity(contrast == .increased ? 0.24 : 0.14))
+            }
             if style == .glass && !reduceTransparency && contrast != .increased {
                 Color.clear
-                    .glassEffect(.regular.tint(DotistTheme.tint(color, scheme).opacity(selected ? 1 : 0.5)), in: shape)
+                    .glassEffect(.regular.tint(DotistTheme.tint(color, scheme).opacity(emphasized ? 1 : 0.5)), in: shape)
             }
         }
         // Composite first so tint cannot raise the configured alpha.
@@ -276,6 +282,7 @@ struct SideTabLabel: View {
     let language: String
     let selected: Bool
     let hovered: Bool
+    var dropTarget: Bool = false
     // Compatibility with the optical label harness: this is the reveal direction,
     // never a choice of which side of the panel hosts the tabs.
     let right: Bool
@@ -286,8 +293,8 @@ struct SideTabLabel: View {
     @Environment(\.sideTabAccessibility) private var accessibility
 
     var body: some View {
-        OpticalText(title: name, size: 13, weight: selected ? .semibold : .regular, serif: true, language: language)
-            .foregroundStyle(selected || hovered || (accessibility?.contrast ?? contrast) == .increased ? DotistDesign.ink : DotistDesign.faint)
+        OpticalText(title: name, size: 13, weight: selected || dropTarget ? .semibold : .regular, serif: true, language: language)
+            .foregroundStyle(selected || hovered || dropTarget || (accessibility?.contrast ?? contrast) == .increased ? DotistDesign.ink : DotistDesign.faint)
             .lineLimit(1)
             .fixedSize()
             .padding(.horizontal, 14)
@@ -305,16 +312,17 @@ private struct SideTabContent: View {
     let color: DotistGroupColor
     let selected: Bool
     let hovered: Bool
+    var dropTarget: Bool = false
     let inwardProgress: CGFloat
     let textOpacity: Double
     let opacity: UInt8
 
     var body: some View {
         ZStack(alignment: inwardProgress > 0 ? .leading : .trailing) {
-            SideTabBackground(inwardProgress: inwardProgress, color: color, selected: selected, opacity: opacity)
+            SideTabBackground(inwardProgress: inwardProgress, color: color, selected: selected, dropTarget: dropTarget, opacity: opacity)
                 .frame(width: row.rect.width, height: SideTabGeometry.height)
             SideTabLabel(name: row.name, language: language, selected: selected,
-                         hovered: hovered, right: inwardProgress > 0, width: row.rect.width,
+                         hovered: hovered, dropTarget: dropTarget, right: inwardProgress > 0, width: row.rect.width,
                          fullWidth: row.fullWidth, textOpacity: textOpacity)
         }
         .frame(width: row.rect.width, height: SideTabGeometry.height)
@@ -330,6 +338,7 @@ struct SideTabsCanvas: View {
     let language: String
     let selectedGroupID: String?
     let hovered: String?
+    var dropTarget: String? = nil
     let inwardProgress: CGFloat
     let textOpacity: Double
     let opacity: UInt8
@@ -344,6 +353,7 @@ struct SideTabsCanvas: View {
             ForEach(rows.filter { $0.opacity > 0 }) { row in
                 SideTabContent(row: row, language: language, color: color(row.groupID),
                     selected: selectedGroupID == row.groupID, hovered: hovered == row.id,
+                    dropTarget: dropTarget == row.id,
                     inwardProgress: inwardProgress, textOpacity: textOpacity, opacity: opacity)
                     .overlay {
                         if row.interactive, let pointer {
@@ -379,7 +389,7 @@ private struct SideTabsView: View {
 
     var body: some View {
         SideTabsCanvas(rows: presentation.rows, size: presentation.size, language: model.language,
-            selectedGroupID: state.groupID, hovered: presentation.hovered, inwardProgress: presentation.inwardProgress,
+            selectedGroupID: state.groupID, hovered: presentation.hovered, dropTarget: presentation.dropTarget, inwardProgress: presentation.inwardProgress,
             textOpacity: presentation.textOpacity, opacity: model.settings.sideTabOpacity,
             color: { model.themeColor(forGroup: $0) },
             pointer: pointer, select: { state.groupID = $0 })
@@ -516,10 +526,12 @@ final class SideTabsController: NSObject {
     private var pointerAnimationRunning = false
     private var localMonitor: Any?
     private var globalMonitor: Any?
-    private var expanded = false
+    private(set) var expanded = false
     private var collapseWork: DispatchWorkItem?
     private var expansion = SideTabExpansion()
     private var press: (id: String, point: CGPoint, order: [String], expanded: Bool)?
+    private var taskDragPoint: CGPoint?
+    private(set) var dropTargetID: String?
     private var dragging = false
     private var deltaY: CGFloat = 0
     private var preview: [String]?
@@ -631,10 +643,28 @@ final class SideTabsController: NSObject {
             return
         }
         let inside = pointerInterest.contains(point)
-        let shouldSynchronize = inside || pointerWasInside || press != nil || dragging
+        let shouldSynchronize = inside || pointerWasInside || press != nil || taskDragPoint != nil || dragging
             || expanded || collapseWork != nil || pointerAnimationRunning
         pointerWasInside = inside
         if shouldSynchronize { synchronize(mouse: point) }
+    }
+
+    /// Coordinates task drag-to-group drops across the panel and side-tab child window.
+    /// Returns the resolved target group ID (`DotistGroup.inboxID` for the "All" tab) or `nil`.
+    @discardableResult
+    func updateTaskDrop(at screenPoint: CGPoint) -> String? {
+        guard !stopped else { return nil }
+        taskDragPoint = screenPoint
+        synchronize(mouse: screenPoint)
+        guard let dropTargetID else { return nil }
+        return dropTargetID == "all" ? DotistGroup.inboxID : dropTargetID
+    }
+
+    func endTaskDrop() {
+        guard taskDragPoint != nil || dropTargetID != nil else { return }
+        taskDragPoint = nil
+        dropTargetID = nil
+        synchronize()
     }
 
     func stop() {
@@ -696,7 +726,7 @@ final class SideTabsController: NSObject {
             guard let press else { return }
             let delta = CGPoint(x: point.x - press.point.x, y: point.y - press.point.y)
             if SideTabGeometry.isDrag(delta) { dragging = true }
-            if dragging, press.expanded, let source = press.order.firstIndex(of: press.id) {
+            if dragging, let source = press.order.firstIndex(of: press.id) {
                 expanded = true; collapseWork?.cancel(); collapseWork = nil
                 deltaY = min(max(delta.y, -CGFloat(press.order.count - 1 - source) * SideTabGeometry.stride), CGFloat(source) * SideTabGeometry.stride)
                 preview = SideTabGeometry.reordered(press.order, id: press.id,
@@ -728,7 +758,7 @@ final class SideTabsController: NSObject {
         #if DOTIST_BENCH
         BenchPerf.count(.sideTabsSynchronize)
         #endif
-        let mouse = mouse ?? environment.mouse()
+        let mouse = taskDragPoint ?? mouse ?? environment.mouse()
         let groups = model.visibleGroups
         let ids = groups.map(\.id)
         if let press, press.order != ids { cancelDrag() }
@@ -751,7 +781,7 @@ final class SideTabsController: NSObject {
         let visibleMinX = environment.visibleMinX(parent)
         let now = environment.time()
         placement.update(availableSpace: frame.minX - visibleMinX, expandedWidth: maxWidth,
-            canSwitch: press == nil)
+            canSwitch: press == nil && taskDragPoint == nil)
         let inward = placement.inward
         let visible = hostVisible && !motion.bubble && !motion.animationInProgress
         // A shrinking parent and retracting tabs otherwise resize two windows
@@ -769,16 +799,7 @@ final class SideTabsController: NSObject {
         let sensor = SideTabGeometry.windowFrame(panel: frame, count: items.count,
             width: expanded ? maxWidth : SideTabGeometry.selectedWidth, inward: inward, visibleMinX: visibleMinX)
         let overTab = zip(current.tabs, current.opacities).contains { $0.1 > 0 && $0.0.contains(mouse) }
-        if !visible {
-            expanded = false; collapseWork?.cancel(); collapseWork = nil; cancelDrag()
-        } else if press == nil && environment.mouseButtons() != 0 {
-            // A moving or resizing parent can carry its tabs across a held pointer.
-            // Preserve the target until release; captured tab gestures still follow
-            // the normal press path below.
-            collapseWork?.cancel(); collapseWork = nil
-        } else if press != nil || overTab || (expanded && sensor.contains(mouse)) {
-            expanded = true; collapseWork?.cancel(); collapseWork = nil
-        } else if expanded && collapseWork == nil {
+        func scheduleCollapse() {
             // Event-triggered debounce; no extra polling interval is added.
             let work = DispatchWorkItem { [weak self] in
                 guard let self, !self.stopped else { return }
@@ -790,6 +811,25 @@ final class SideTabsController: NSObject {
             }
             collapseWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + SideTabGeometry.collapseDelay, execute: work)
+        }
+        if !visible {
+            expanded = false; collapseWork?.cancel(); collapseWork = nil; cancelDrag()
+            taskDragPoint = nil; dropTargetID = nil
+        } else if taskDragPoint != nil {
+            if overTab || (expanded && sensor.contains(mouse)) {
+                expanded = true; collapseWork?.cancel(); collapseWork = nil
+            } else if expanded && collapseWork == nil {
+                scheduleCollapse()
+            }
+        } else if press == nil && environment.mouseButtons() != 0 {
+            // A moving or resizing parent can carry its tabs across a held pointer.
+            // Preserve the target until release; captured tab gestures still follow
+            // the normal press path below.
+            collapseWork?.cancel(); collapseWork = nil
+        } else if press != nil || overTab || (expanded && sensor.contains(mouse)) {
+            expanded = true; collapseWork?.cancel(); collapseWork = nil
+        } else if expanded && collapseWork == nil {
+            scheduleCollapse()
         }
         expansion.setExpanded(expanded, at: now, reduceMotion: settleTabs)
         let expansionProgressAfter = expansion.progress(at: now)
@@ -818,11 +858,14 @@ final class SideTabsController: NSObject {
         pointerInterest = hitRects.reduce(sensor) { $0.union($1) }
         let inwardProgress = inward ? CGFloat(sample.textOpacity) : 0
         let hovered = rows.first { $0.interactive && $0.rect.offsetBy(dx: bounds.minX, dy: bounds.minY).contains(mouse) }?.id
+        let dropTarget = (visible && taskDragPoint != nil) ? hovered : nil
+        dropTargetID = dropTarget
         let presentationChanged = presentation.size != bounds.size
             || presentation.inwardProgress != inwardProgress
             || presentation.textOpacity != sample.textOpacity
             || presentation.rows != rows
             || presentation.hovered != hovered
+            || presentation.dropTarget != dropTarget
             || presentation.visible != visible
         if presentation.size != bounds.size { presentation.size = bounds.size }
         if presentation.inwardProgress != inwardProgress { presentation.inwardProgress = inwardProgress }
@@ -831,6 +874,7 @@ final class SideTabsController: NSObject {
         if presentation.rows != rows { presentation.rows = rows }
         (window.contentView as? SideTabHostingView<SideTabsView>)?.screenHitRects = hitRects
         if presentation.hovered != hovered { presentation.hovered = hovered }
+        if presentation.dropTarget != dropTarget { presentation.dropTarget = dropTarget }
         if presentation.visible != visible { presentation.visible = visible }
         let painted = hostVisible && rows.contains { $0.opacity > 0 }
         // Resolve the new SwiftUI layout before the resized child is composited.
@@ -840,7 +884,7 @@ final class SideTabsController: NSObject {
             #endif
             window.contentView?.layoutSubtreeIfNeeded()
         }
-        window.ignoresMouseEvents = !visible || (press == nil && !hitRects.contains { $0.contains(mouse) })
+        window.ignoresMouseEvents = !visible || taskDragPoint != nil || (press == nil && !hitRects.contains { $0.contains(mouse) })
         window.alphaValue = painted ? parent.alphaValue : 0
         // At the screen edge the ear can extend into the panel. Paint it once,
         // above the panel, so the glass clearance cannot reveal a duplicate fill.
