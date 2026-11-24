@@ -198,8 +198,8 @@ extension MainWindow {
                 .sorted { dropGroupIDs.firstIndex(of: $0.id)! < dropGroupIDs.firstIndex(of: $1.id)! }
             var first = true
             for group in groups {
-                let open = model.filteredTasks(scope: "all", groupID: group.id, tag: state.activeTag)
-                let done = model.filteredTasks(scope: "done", groupID: group.id, tag: state.activeTag)
+                let open = pinFiltered(model.filteredTasks(scope: "all", groupID: group.id, tag: state.activeTag), groupID: group.id, completed: false)
+                let done = pinFiltered(model.filteredTasks(scope: "done", groupID: group.id, tag: state.activeTag), groupID: group.id, completed: true)
                 let openIDs = Set(open.roots.map(\.id))
                 let completed = done.roots.filter { !openIDs.contains($0.id) }
                 let roots = model.ordered(panelTasks.filter { $0.category == group.id && $0.parentId == nil })
@@ -268,6 +268,15 @@ extension MainWindow {
             }
         }
         return entries
+    }
+
+    private func pinFiltered(_ result: TaskFilterResult, groupID: String? = nil, completed: Bool? = nil) -> TaskFilterResult {
+        guard let pinnedID = pinnedFilteredTaskID ?? drag?.taskID,
+              state.activeTag != nil,
+              let task = model.tasks.first(where: { $0.id == pinnedID }),
+              (groupID == nil || task.category == groupID),
+              (completed == nil || task.completed == completed) else { return result }
+        return result.including(pinnedID: pinnedID, in: model.tasks)
     }
 
     private func groupDraft(_ group: DotistGroup) -> some View {

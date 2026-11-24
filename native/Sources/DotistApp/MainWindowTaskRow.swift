@@ -20,8 +20,8 @@ extension MainWindow {
             handleRowKey(press, task: task, previous: previous, allTasks: allTasks)
         }
         .onTapGesture { if !hold.suppressesClick { clickRow(task) } }
-        .gesture(reorderGesture(task), including: editing == task.id ? .subviews : .all)
-        .simultaneousGesture(holdGesture(task), including: editing == task.id ? .subviews : .all)
+        .gesture(reorderGesture(task), including: .all)
+        .simultaneousGesture(holdGesture(task), including: .all)
         .onContinuousHover(coordinateSpace: .named(Self.listSpace)) { phase in
             if case .active(let point) = phase { hold.pointer = point }
         }
@@ -128,7 +128,7 @@ extension MainWindow {
             }.buttonStyle(.plain).focusEffectDisabled()
                 .accessibilityLabel(Text(model.text(task.completed ? "恢复 {title}" : "完成 {title}").replacingOccurrences(of: "{title}", with: task.title)))
             if isEditing {
-                TaskEditor(text: $editedTitle, height: $editHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("任务内容"), minRowHeight: minRowHeight, initialClickWindowPoint: editClickWindowPoint, commit: {
+                TaskEditor(text: $editedTitle, height: $editHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("任务内容"), minRowHeight: minRowHeight, initialClickWindowPoint: editClickWindowPoint, restrictHitTestToText: true, commit: {
                     saveEditing(task) { startDraft(after: task) }
                 }, cancel: { clearEditing() }, indent: { reverse in
                     saveEditing(task) { changeIndent(ids: [task.id], reverse: reverse); selection.row(task.id).focusRequest.send() }
@@ -211,7 +211,12 @@ extension MainWindow {
         return rowFrames.filter { $0.frame.height > 0 }.sorted { $0.frame.minY < $1.frame.minY }.compactMap { seen.insert($0.task.id).inserted ? $0.task.id : nil }
     }
 
-    private func clickRow(_ task: DotistTask, edit: Bool = true) {
+    func clickRow(_ task: DotistTask, edit: Bool = true) {
+        if hold.dismissedEditingTaskID == task.id {
+            hold.dismissedEditingTaskID = nil
+            return
+        }
+        hold.dismissedEditingTaskID = nil
         traceReorder("row.click", taskID: task.id, fields: ["edit": "\(edit)"])
         let flags = NSEvent.modifierFlags
         let clickPoint: CGPoint? = {

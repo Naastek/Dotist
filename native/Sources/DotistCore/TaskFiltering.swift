@@ -21,6 +21,25 @@ public struct TaskFilterResult: Sendable {
         let ids = Set(tasks.map(\.id))
         return tasks.filter { $0.parentId.map { !ids.contains($0) } ?? true }
     }
+
+    /// Keeps a pressed or dragged task (and its ancestor chain) mounted in the
+    /// current filtered result until the pointer gesture finishes or releases.
+    public func including(pinnedID: String, in allTasks: [DotistTask]) -> TaskFilterResult {
+        guard !tasks.contains(where: { $0.id == pinnedID }),
+              let target = allTasks.first(where: { $0.id == pinnedID }) else { return self }
+        let hierarchy = TaskHierarchy(allTasks)
+        let ancestors = hierarchy.ancestors(of: pinnedID)
+        var existing = Set(tasks.map(\.id))
+        var nextTasks = tasks
+        var nextContext = contextIDs
+        for ancestor in ancestors where existing.insert(ancestor.id).inserted {
+            nextTasks.append(ancestor)
+            nextContext.insert(ancestor.id)
+        }
+        nextTasks.append(target)
+        let nextMatches = matches.contains(where: { $0.id == pinnedID }) ? matches : matches + [target]
+        return TaskFilterResult(matches: nextMatches, tasks: nextTasks, contextIDs: nextContext)
+    }
 }
 
 public struct TaskTodaySections: Sendable {

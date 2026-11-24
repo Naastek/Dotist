@@ -8,6 +8,7 @@ struct TaskEditor: NSViewRepresentable {
     let label: String
     var minRowHeight: CGFloat = 32
     var initialClickWindowPoint: CGPoint? = nil
+    var restrictHitTestToText: Bool = false
     let commit: () -> Void
     let cancel: () -> Void
     let indent: (Bool) -> Void
@@ -15,12 +16,13 @@ struct TaskEditor: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
+        let scroll = TaskEditorScrollView()
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         scroll.hasVerticalScroller = false
         let initialInset = max(0, (minRowHeight - 20) / 2)
         let editor = TaskTextView(frame: NSRect(x: 0, y: 0, width: 120, height: minRowHeight))
+        editor.restrictHitTestToText = restrictHitTestToText
         editor.delegate = context.coordinator
         editor.layoutManager?.delegate = context.coordinator
         editor.drawsBackground = false
@@ -66,6 +68,7 @@ struct TaskEditor: NSViewRepresentable {
         context.coordinator.parent = self
         guard let editor = scroll.documentView as? TaskTextView else { return }
         editor.font = font
+        editor.restrictHitTestToText = restrictHitTestToText
         editor.setAccessibilityLabel(label)
         editor.commit = commit; editor.cancel = cancel; editor.indent = indent; editor.blur = blur
         if editor.string != text && !editor.hasMarkedText() { editor.string = text }
@@ -94,6 +97,7 @@ struct TaskEditor: NSViewRepresentable {
             guard let editor = notification.object as? TaskTextView else { return }
             parent.text = editor.string
             measure(editor)
+            editor.invalidateTextCursorRects()
         }
         func measure(_ editor: NSTextView) {
             guard let layout = editor.layoutManager, let container = editor.textContainer else { return }
@@ -105,16 +109,129 @@ struct TaskEditor: NSViewRepresentable {
             }
             let measured = max(parent.minRowHeight, contentHeight)
             if abs(parent.height - measured) > 0.5 { DispatchQueue.main.async { self.parent.height = measured } }
+            (editor as? TaskTextView)?.invalidateTextCursorRects()
         }
     }
 }
 
+final class TaskEditorScrollView: NSScrollView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let editor = documentView as? TaskTextView,
+              let superview else { return super.hitTest(point) }
+        let localInScroll = convert(point, from: superview)
+        guard bounds.contains(localInScroll) else { return nil }
+        let localInEditor = editor.convert(localInScroll, from: self)
+        guard editor.isPointInTextHitZone(localInEditor) else { return nil }
+        return super.hitTest(point)
+    }
+}
+
 final class TaskTextView: NSTextView {
+    static let trailingHitMargin: CGFloat = 12
+    static let emptyTextHitWidth: CGFloat = 36
+
     var opticalSample = "中文任务"
+    var restrictHitTestToText = false
+    private(set) var registeredCursorRects: [CGRect] = []
     var commit: () -> Void = {}
     var cancel: () -> Void = {}
     var indent: (Bool) -> Void = { _ in }
     var blur: () -> Void = {}
+
+    func textHitRects() -> [CGRect] {
+        guard restrictHitTestToText else { return [bounds] }
+        guard let layout = layoutManager, let container = textContainer else { return [bounds] }
+        layout.ensureLayout(for: container)
+        let origin = textContainerOrigin
+        let glyphRange = layout.glyphRange(for: container)
+        if glyphRange.length == 0 {
+            return [CGRect(x: 0, y: 0, width: min(bounds.width, origin.x + Self.emptyTextHitWidth), height: bounds.height)]
+        }
+        var lineRects: [CGRect] = []
+        layout.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, _, _ in
+            var rect = usedRect.offsetBy(dx: origin.x, dy: origin.y)
+            rect.origin.x = 0
+            rect.size.width = min(self.bounds.width, usedRect.maxX + origin.x + Self.trailingHitMargin)
+            lineRects.append(rect)
+        }
+        let extra = layout.extraLineFragmentRect
+        if !extra.isEmpty {
+            var rect = extra.offsetBy(dx: origin.x, dy: origin.y)
+            rect.origin.x = 0
+            rect.size.width = min(bounds.width, origin.x + Self.emptyTextHitWidth)
+            lineRects.append(rect)
+        }
+        guard !lineRects.isEmpty else {
+            return [CGRect(x: 0, y: 0, width: min(bounds.width, origin.x + Self.emptyTextHitWidth), height: bounds.height)]
+        }
+        // Extend top of the first line and bottom of the last line across vertical
+        // textContainerInset so clicking directly above/below glyphs stays in text.
+        lineRects[0].size.height += lineRects[0].origin.y
+        lineRects[0].origin.y = 0
+        let lastIndex = lineRects.count - 1
+        lineRects[lastIndex].size.height = max(lineRects[lastIndex].size.height, bounds.maxY - lineRects[lastIndex].origin.y)
+        return lineRects
+    }
+
+    func isPointInTextHitZone(_ point: NSPoint) -> Bool {
+        guard bounds.contains(point) else { return false }
+        return textHitRects().contains { $0.contains(point) }
+    }
+
+    func invalidateTextCursorRects() {
+        guard restrictHitTestToText else { return }
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        invalidateTextCursorRects()
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        invalidateTextCursorRects()
+    }
+
+    override func resetCursorRects() {
+        guard restrictHitTestToText else {
+            registeredCursorRects = [visibleRect]
+            super.resetCursorRects()
+            return
+        }
+        discardCursorRects()
+        let visible = visibleRect
+        var active: [CGRect] = []
+        for rect in textHitRects() {
+            let clipped = rect.intersection(visible)
+            if !clipped.isNull, !clipped.isEmpty {
+                addCursorRect(clipped, cursor: .iBeam)
+                active.append(clipped)
+            }
+        }
+        registeredCursorRects = active
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        guard restrictHitTestToText else {
+            super.cursorUpdate(with: event)
+            return
+        }
+        let local = convert(event.locationInWindow, from: nil)
+        if isPointInTextHitZone(local) {
+            NSCursor.iBeam.set()
+        } else {
+            NSCursor.arrow.set()
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let superview else { return super.hitTest(point) }
+        let local = convert(point, from: superview)
+        guard isPointInTextHitZone(local) else { return nil }
+        return super.hitTest(point)
+    }
+
     override func keyDown(with event: NSEvent) {
         if hasMarkedText() { super.keyDown(with: event); return }
         if event.keyCode == 53 { cancel(); return }

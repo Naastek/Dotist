@@ -323,6 +323,19 @@ final class AppModel: ObservableObject {
     }
 
     func complete(_ task: DotistTask) { change { _ = try $0.patchTask(id: task.id, completed: !task.completed) } }
+    func patchTaskTitleOptimistically(id: String, title: String) {
+        if let index = tasks.firstIndex(where: { $0.id == id }), tasks[index].title != title {
+            var updated = tasks
+            updated[index] = updated[index].withTitle(title)
+            tasks = updated
+            tagDescription = TaskTags.describe(updated)
+            rebuildIndexes()
+            if let tag = activeTag {
+                taggedTasks = TaskTags.filter(tasks, tag: tag, description: tagDescription)
+            }
+        }
+        change(failed: { [weak self] in self?.refresh() }) { _ = try $0.patchTask(id: id, title: title) }
+    }
     func delete(_ task: DotistTask) {
         change(completed: { [weak self] in self?.undo = UndoEntry(id: task.id, title: task.title, group: false) }) { try $0.deleteTask(task.id) }
     }

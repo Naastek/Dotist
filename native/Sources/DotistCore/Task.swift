@@ -22,6 +22,27 @@ public struct DotistTask: Codable, Identifiable, Equatable, Sendable {
     public let startDate: String?
     public internal(set) var plannedDay: String? = nil
     public internal(set) var plannedWeekStart: String? = nil
+
+    public func withTitle(_ title: String) -> DotistTask {
+        var copy = DotistTask(
+            id: id,
+            title: title,
+            category: category,
+            completed: completed,
+            status: status,
+            position: position,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            deletedAt: deletedAt,
+            revision: revision,
+            parentId: parentId,
+            dueDate: dueDate,
+            startDate: startDate
+        )
+        copy.plannedDay = plannedDay
+        copy.plannedWeekStart = plannedWeekStart
+        return copy
+    }
 }
 
 /// The user's intended work window, independent of the task's schedule.

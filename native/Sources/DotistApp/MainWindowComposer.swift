@@ -78,7 +78,7 @@ extension MainWindow {
             let task = model.tasks.first(where: { $0.id == id })
             clearEditing()
             if let task, let titleToSave, titleToSave != task.title {
-                model.change { _ = try $0.patchTask(id: task.id, title: titleToSave) }
+                model.patchTaskTitleOptimistically(id: task.id, title: titleToSave)
             }
         }
         if let id = draftAfter {
@@ -105,6 +105,15 @@ extension MainWindow {
                 model.change { _ = try $0.addTask(title: titleToSave, category: id) }
             }
         }
+    }
+
+    func dismissEditorFromOutsideClick() {
+        guard editing != nil || draftAfter != nil || addingToGroup != nil else { return }
+        if let id = editing {
+            hold.dismissedEditingTaskID = id
+            if state.activeTag != nil { pinnedFilteredTaskID = id }
+        }
+        flushInputsOptimistically()
     }
 
     func dismissActiveFocus() {

@@ -41,6 +41,7 @@ struct MainWindow: View {
     @State var groupTitles: [String: String] = [:]
     @State var groupSubmitting = false
     @State var editing: String?
+    @State var pinnedFilteredTaskID: String?
     @State var draftAfter: String?
     @State var draftTitle = ""
     @State var draftParent: String?
@@ -98,7 +99,16 @@ struct MainWindow: View {
 
     private var textColor: Color { DotistDesign.ink }
     var panelTasks: [DotistTask] {
-        let tasks = state.activeTag.map { TaskTags.filter(model.tasks, tag: $0, description: model.tagDescription) } ?? model.tasks
+        var tasks = state.activeTag.map { TaskTags.filter(model.tasks, tag: $0, description: model.tagDescription) } ?? model.tasks
+        if let pinned = pinnedFilteredTaskID ?? drag?.taskID,
+           !tasks.contains(where: { $0.id == pinned }),
+           let task = model.tasks.first(where: { $0.id == pinned }) {
+            let hierarchy = TaskHierarchy(model.tasks)
+            var existing = Set(tasks.map(\.id))
+            for item in hierarchy.ancestors(of: pinned) + [task] where existing.insert(item.id).inserted {
+                tasks.append(item)
+            }
+        }
         return tasks.filter { state.groupID == nil || $0.category == state.groupID }
     }
     func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular, serif: Bool = false) -> Font {
@@ -159,7 +169,21 @@ struct MainWindow: View {
             }
         }
         .background(TaskPickupFrameProbe(runtime: reorderRuntime, role: .panel))
-        .background(TaskReorderInteractionGuard(rowFrames: guardedRowFrames, dragging: drag != nil, cancel: cancelReorder, undoRedo: handleUndoShortcut, dismissEditor: flushInputsOptimistically))
+        .background(TaskReorderInteractionGuard(
+            rowFrames: guardedRowFrames,
+            dragging: drag != nil,
+            cancel: cancelReorder,
+            undoRedo: handleUndoShortcut,
+            dismissEditor: dismissEditorFromOutsideClick,
+            onPointerDown: { hitEditor in
+                hold.pointerInsideEditor = hitEditor
+                hold.dismissedEditingTaskID = nil
+            },
+            onPointerUp: {
+                hold.pointerInsideEditor = false
+                if pinnedFilteredTaskID != nil { pinnedFilteredTaskID = nil }
+            }
+        ))
         .onPreferenceChange(TaskListRowFrame.Key.self) { if rowFrames != $0 { rowFrames = $0; updateGhostFrame() } }
         .onPreferenceChange(TaskListGroupFrame.Key.self) { if groupFrames != $0 { groupFrames = $0; updateGhostFrame() } }
         .preference(key: TaskGhostFrameKey.self, value: ghostFrame)

@@ -13,6 +13,8 @@ struct TaskReorderInteractionGuard: NSViewRepresentable {
     let cancel: () -> Void
     var undoRedo: (Bool) -> Bool = { _ in false }
     var dismissEditor: () -> Void = {}
+    var onPointerDown: (Bool) -> Void = { _ in }
+    var onPointerUp: () -> Void = {}
     func makeNSView(context: Context) -> GuardView { GuardView() }
     func updateNSView(_ view: GuardView, context: Context) {
         view.rowFrames = rowFrames
@@ -20,6 +22,8 @@ struct TaskReorderInteractionGuard: NSViewRepresentable {
         view.cancel = cancel
         view.undoRedo = undoRedo
         view.dismissEditor = dismissEditor
+        view.onPointerDown = onPointerDown
+        view.onPointerUp = onPointerUp
     }
     static func dismantleNSView(_ view: GuardView, coordinator: ()) { view.stop() }
 
@@ -29,6 +33,8 @@ struct TaskReorderInteractionGuard: NSViewRepresentable {
         var cancel: () -> Void = {}
         var undoRedo: (Bool) -> Bool = { _ in false }
         var dismissEditor: () -> Void = {}
+        var onPointerDown: (Bool) -> Void = { _ in }
+        var onPointerUp: () -> Void = {}
         private var monitor: Any?
         private var observers: [NSObjectProtocol] = []
         private weak var guardedWindow: NSWindow?
@@ -51,56 +57,66 @@ struct TaskReorderInteractionGuard: NSViewRepresentable {
                 }
             ]
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .keyDown]) { [weak self] event in
-                guard let self else { return event }
-                if TaskDragDiagnostics.enabled, event.window === self.window,
-                   [.leftMouseDown, .leftMouseDragged, .leftMouseUp].contains(event.type) {
-                    let point = self.convert(event.locationInWindow, from: nil)
-                    let content = self.window?.contentView
-                    let hit = content.flatMap { $0.hitTest($0.convert(event.locationInWindow, from: nil)) }
-                    TaskDragDiagnostics.record("native.\(event.type)", fields: [
-                        "windowNumber": "\(event.windowNumber)", "windowPoint": "\(event.locationInWindow)",
-                        "guardPoint": "\(point)", "guardFrame": "\(frame)", "windowFrame": "\(String(describing: self.window?.frame))",
-                        "rowHits": "\(rowFrames.filter { $0.contains(point) }.count)", "rowCount": "\(rowFrames.count)",
-                        "hitClass": hit.map { String(describing: type(of: $0)) } ?? "nil",
-                        "dragging": "\(dragging)", "movableByBackground": "\(self.window?.isMovableByWindowBackground == true)"])
-                }
-                if event.type == .leftMouseUp { restoreWindowMovement(); return event }
-                guard event.window === self.window else { return event }
-                if let redo = TaskPanelUndoShortcut.redo(for: event, responder: self.window?.firstResponder), undoRedo(redo) {
-                    return nil
-                }
-                if event.type == .keyDown, event.keyCode == 53, dragging {
-                    TaskDragDiagnostics.record("native.escape-cancel")
-                    cancel()
-                    restoreWindowMovement()
-                    return nil
-                }
-                if event.type == .leftMouseDown {
-                    restoreWindowMovement()
-                    let content = self.window?.contentView
-                    let hit = content.flatMap { $0.hitTest($0.convert(event.locationInWindow, from: nil)) }
-                    if let editor = self.window?.firstResponder as? TaskTextView,
-                       hit !== editor, hit?.isDescendant(of: editor) != true {
-                        dismissEditor()
-                        if !(hit is NSTextField) && !(hit is NSTextView) {
-                            self.window?.makeFirstResponder(nil)
-                        }
-                    }
-                    if rowFrames.contains(where: { $0.contains(self.convert(event.locationInWindow, from: nil)) }) {
-                        guardedWindow = self.window
-                        originalBackgroundMovement = self.window?.isMovableByWindowBackground
-                        originalMovable = self.window?.isMovable
-                        self.window?.isMovableByWindowBackground = false
-                        // ⌘-drag otherwise moves the whole window before SwiftUI sees it.
-                        if event.modifierFlags.contains(.command) { self.window?.isMovable = false }
-                        TaskDragDiagnostics.record("native.disable-background-movement")
-                    }
-                }
-                return event
+                self?.handleLocalEvent(event) ?? event
             }
             TaskDragDiagnostics.record("native.guard-installed", fields: ["windowNumber": "\(window.windowNumber)"])
         }
+
+        private func hitTestWindowPoint(_ locationInWindow: NSPoint) -> NSView? {
+            guard let content = self.window?.contentView else { return nil }
+            let pointInSuperview = content.superview.map { $0.convert(locationInWindow, from: nil) } ?? locationInWindow
+            return content.hitTest(pointInSuperview)
+        }
+
+        func handleLocalEvent(_ event: NSEvent) -> NSEvent? {
+            if TaskDragDiagnostics.enabled, event.window === self.window,
+               [.leftMouseDown, .leftMouseDragged, .leftMouseUp].contains(event.type) {
+                let point = self.convert(event.locationInWindow, from: nil)
+                let hit = hitTestWindowPoint(event.locationInWindow)
+                TaskDragDiagnostics.record("native.\(event.type)", fields: [
+                    "windowNumber": "\(event.windowNumber)", "windowPoint": "\(event.locationInWindow)",
+                    "guardPoint": "\(point)", "guardFrame": "\(frame)", "windowFrame": "\(String(describing: self.window?.frame))",
+                    "rowHits": "\(rowFrames.filter { $0.contains(point) }.count)", "rowCount": "\(rowFrames.count)",
+                    "hitClass": hit.map { String(describing: type(of: $0)) } ?? "nil",
+                    "dragging": "\(dragging)", "movableByBackground": "\(self.window?.isMovableByWindowBackground == true)"])
+            }
+            if event.type == .leftMouseUp { onPointerUp(); restoreWindowMovement(); return event }
+            guard event.window === self.window else { return event }
+            if let redo = TaskPanelUndoShortcut.redo(for: event, responder: self.window?.firstResponder), undoRedo(redo) {
+                return nil
+            }
+            if event.type == .keyDown, event.keyCode == 53, dragging {
+                TaskDragDiagnostics.record("native.escape-cancel")
+                cancel()
+                restoreWindowMovement()
+                return nil
+            }
+            if event.type == .leftMouseDown {
+                restoreWindowMovement()
+                let hit = hitTestWindowPoint(event.locationInWindow)
+                let activeEditor = self.window?.firstResponder as? TaskTextView
+                let hitTaskEditor = (hit is TaskTextView) || (activeEditor.map { hit === $0 || hit?.isDescendant(of: $0) == true } ?? false)
+                onPointerDown(hitTaskEditor)
+                if !hitTaskEditor {
+                    dismissEditor()
+                    if activeEditor != nil, !(hit is NSTextField), !(hit is NSTextView) {
+                        self.window?.makeFirstResponder(nil)
+                    }
+                }
+                if rowFrames.contains(where: { $0.contains(self.convert(event.locationInWindow, from: nil)) }) {
+                    guardedWindow = self.window
+                    originalBackgroundMovement = self.window?.isMovableByWindowBackground
+                    originalMovable = self.window?.isMovable
+                    self.window?.isMovableByWindowBackground = false
+                    // ⌘-drag otherwise moves the whole window before SwiftUI sees it.
+                    if event.modifierFlags.contains(.command) { self.window?.isMovable = false }
+                    TaskDragDiagnostics.record("native.disable-background-movement")
+                }
+            }
+            return event
+        }
         private func restoreWindowMovement() {
+            onPointerUp()
             if let originalBackgroundMovement { guardedWindow?.isMovableByWindowBackground = originalBackgroundMovement }
             if let originalMovable { guardedWindow?.isMovable = originalMovable }
             originalMovable = nil

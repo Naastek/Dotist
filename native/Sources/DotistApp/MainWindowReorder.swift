@@ -76,15 +76,18 @@ extension MainWindow {
     func reorderGesture(_ task: DotistTask) -> some Gesture {
         DragGesture(minimumDistance: 6, coordinateSpace: .named(Self.listSpace))
             .updating($reorderGestureActive) { value, active, _ in
+                guard !hold.pointerInsideEditor else { return }
                 traceReorder("swiftui.updating", taskID: task.id, point: value.location, fields: ["start": "\(value.startLocation)"])
                 active = true
             }
             .onChanged { value in
+                guard !hold.pointerInsideEditor else { return }
                 traceReorder("swiftui.changed", taskID: task.id, point: value.location, fields: ["start": "\(value.startLocation)"])
                 if drag == nil { reorderRuntime.send(.begin(task.id, value.startLocation)) }
                 reorderRuntime.send(.move(task.id, value.location))
             }
             .onEnded { value in
+                guard !hold.pointerInsideEditor else { return }
                 traceReorder("swiftui.ended", taskID: task.id, point: value.location)
                 reorderRuntime.send(.end(task.id, value.location))
             }
@@ -96,15 +99,18 @@ extension MainWindow {
         LongPressGesture(minimumDuration: TaskHoldTracker.duration, maximumDistance: 6)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.listSpace)))
             .updating($holdGestureActive) { value, active, _ in
+                guard !hold.pointerInsideEditor else { return }
                 if case .second = value { active = true }
             }
             .onChanged { value in
+                guard !hold.pointerInsideEditor else { return }
                 guard case .second(true, let dragValue) = value else { return }
                 hold.lifted = true
                 if drag == nil { reorderRuntime.send(.begin(task.id, dragValue?.startLocation ?? hold.pointer)) }
                 if let dragValue { reorderRuntime.send(.move(task.id, dragValue.location)) }
             }
             .onEnded { value in
+                guard !hold.pointerInsideEditor else { return }
                 guard case .second(true, let dragValue) = value else { return }
                 reorderRuntime.send(.end(task.id, dragValue?.location ?? hold.pointer))
                 hold.finish()
@@ -116,19 +122,19 @@ extension MainWindow {
         switch input {
         case .begin(let id, let point):
             traceReorder("input.begin", taskID: id, point: point)
-            guard !dragCancelled, editing != id, drag == nil,
-                  let task = model.tasks.first(where: { $0.id == id }) else { traceReorder("input.begin-rejected", taskID: id); return }
+            guard !dragCancelled, !hold.pointerInsideEditor, drag == nil else { traceReorder("input.begin-rejected", taskID: id); return }
             if editing != nil || draftAfter != nil || addingToGroup != nil {
                 flushInputsOptimistically()
                 if NSApp.keyWindow?.firstResponder is TaskTextView {
                     NSApp.keyWindow?.makeFirstResponder(nil)
                 }
             }
+            guard let task = model.tasks.first(where: { $0.id == id }) else { traceReorder("input.begin-rejected", taskID: id); return }
             beginReorder(task, at: point)
         case .move(let id, let point), .end(let id, let point):
             if case .move = input { traceReorder("input.move", taskID: id, point: point) }
             else { traceReorder("input.end", taskID: id, point: point) }
-            if case .move = input { guard editing != id else { traceReorder("input.move-rejected-editor", taskID: id); return } }
+            if case .move = input { guard !hold.pointerInsideEditor, editing != id else { traceReorder("input.move-rejected-editor", taskID: id); return } }
             guard !dragCancelled, drag?.taskID == id, drag?.committing == false else { traceReorder("input.move-or-end-rejected", taskID: id); return }
             dragMotion.location = point
             // Mouse-up commits the last presented slot, as Tic does. Resolving
@@ -141,6 +147,7 @@ extension MainWindow {
     }
 
     private func beginReorder(_ task: DotistTask, at start: CGPoint) {
+        hold.dismissedEditingTaskID = nil
         let rowFrames = reorderRuntime.pickupFrames(self.rowFrames)
         guard let head = rowFrames.first(where: { $0.task.id == task.id && $0.frame.contains(start) }) ?? rowFrames.first(where: { $0.task.id == task.id }) else { traceReorder("begin.missing-row", taskID: task.id, point: start); return }
         let hierarchy = TaskHierarchy(model.tasks)
@@ -148,6 +155,7 @@ extension MainWindow {
         let roots = hierarchy.selectionRoots(ids: selectedIDs, groupIDs: model.groups.map(\.id))
             .sorted { a, b in (displayOrder.firstIndex(of: a.id) ?? 0) < (displayOrder.firstIndex(of: b.id) ?? 0) }
         let ids = Set(roots.flatMap { [$0.id] + model.descendants(of: $0).map(\.id) })
+        let latestTasks = Dictionary(uniqueKeysWithValues: model.tasks.map { ($0.id, $0) })
         // A filtered outline can show the same task as context in several
         // regions. Lift one representation per identity, preferring the press's
         // region; other representations keep their ordinary layout.
@@ -157,6 +165,10 @@ extension MainWindow {
                 if ($0.region == head.region) != ($1.region == head.region) { return $0.region == head.region }
                 return abs($0.frame.midY - head.frame.midY) < abs($1.frame.midY - head.frame.midY)
             }.filter { seen.insert($0.task.id).inserted }.sorted { $0.frame.minY < $1.frame.minY }
+            .map { row -> TaskListRowFrame in
+                guard let fresh = latestTasks[row.task.id] else { return row }
+                return TaskListRowFrame(task: fresh, frame: row.frame, sub: row.sub, allTasks: row.allTasks, hideDue: row.hideDue, region: row.region, date: row.date, depth: row.depth)
+            }
         guard !block.isEmpty else { return }
         dragMotion.location = start
         var next = TaskListDrag(taskID: task.id, blockIDs: ids, visibleBlock: block,
