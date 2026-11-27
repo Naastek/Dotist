@@ -8,6 +8,13 @@ public struct TaskHistoryGroup: Equatable, Sendable {
     public let updatedAt: String
     public let deletedAt: String?
 
+    init(group: DotistGroup, createdAt: String, updatedAt: String, deletedAt: String?) {
+        self.group = group
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.deletedAt = deletedAt
+    }
+
     init(row: Row) throws {
         group = try DotistGroup(row: row)
         createdAt = row["created_at"]
@@ -32,10 +39,94 @@ public struct TaskRestorePoint: Equatable, Sendable {
     }
 }
 
+public enum TaskHistorySource: String, Equatable, Sendable {
+    case user
+    case agent
+}
+
 public struct TaskMutationPatch: Equatable, Sendable {
     public let before: TaskRestorePoint
     public let after: TaskRestorePoint
     public var isEmpty: Bool { before == after }
+
+    public init(before: TaskRestorePoint, after: TaskRestorePoint) {
+        self.before = before
+        self.after = after
+    }
+
+    /// Combines two sequential patches (`self` followed by `next`) into one
+    /// atomic patch while cancelling identities whose net change is a no-op.
+    public func merged(with next: TaskMutationPatch) -> TaskMutationPatch {
+        let firstBeforeTasks = Dictionary(uniqueKeysWithValues: before.tasks.map { ($0.id, $0) })
+        let firstAfterTasks = Dictionary(uniqueKeysWithValues: after.tasks.map { ($0.id, $0) })
+        let nextBeforeTasks = Dictionary(uniqueKeysWithValues: next.before.tasks.map { ($0.id, $0) })
+        let nextAfterTasks = Dictionary(uniqueKeysWithValues: next.after.tasks.map { ($0.id, $0) })
+
+        let firstTouchedTaskIDs = Set(firstBeforeTasks.keys)
+            .union(firstAfterTasks.keys)
+            .union(before.missingTaskIDs)
+            .union(after.missingTaskIDs)
+        let nextTouchedTaskIDs = Set(nextBeforeTasks.keys)
+            .union(nextAfterTasks.keys)
+            .union(next.before.missingTaskIDs)
+            .union(next.after.missingTaskIDs)
+
+        var mergedBeforeTasks: [DotistTask] = []
+        var mergedAfterTasks: [DotistTask] = []
+        var mergedBeforeMissing: Set<String> = []
+        var mergedAfterMissing: Set<String> = []
+
+        for id in firstTouchedTaskIDs.union(nextTouchedTaskIDs).sorted() {
+            let startTask = firstTouchedTaskIDs.contains(id) ? firstBeforeTasks[id] : nextBeforeTasks[id]
+            let endTask = nextTouchedTaskIDs.contains(id) ? nextAfterTasks[id] : firstAfterTasks[id]
+            if let startTask, let endTask, startTask.hasSameHistoryContent(as: endTask) { continue }
+            if startTask == nil && endTask == nil { continue }
+            if let startTask { mergedBeforeTasks.append(startTask) } else { mergedBeforeMissing.insert(id) }
+            if let endTask { mergedAfterTasks.append(endTask) } else { mergedAfterMissing.insert(id) }
+        }
+
+        let firstBeforeGroups = Dictionary(uniqueKeysWithValues: before.groups.map { ($0.group.id, $0) })
+        let firstAfterGroups = Dictionary(uniqueKeysWithValues: after.groups.map { ($0.group.id, $0) })
+        let nextBeforeGroups = Dictionary(uniqueKeysWithValues: next.before.groups.map { ($0.group.id, $0) })
+        let nextAfterGroups = Dictionary(uniqueKeysWithValues: next.after.groups.map { ($0.group.id, $0) })
+
+        let firstTouchedGroupIDs = Set(firstBeforeGroups.keys)
+            .union(firstAfterGroups.keys)
+            .union(before.missingGroupIDs)
+            .union(after.missingGroupIDs)
+        let nextTouchedGroupIDs = Set(nextBeforeGroups.keys)
+            .union(nextAfterGroups.keys)
+            .union(next.before.missingGroupIDs)
+            .union(next.after.missingGroupIDs)
+
+        var mergedBeforeGroups: [TaskHistoryGroup] = []
+        var mergedAfterGroups: [TaskHistoryGroup] = []
+        var mergedBeforeMissingGroups: Set<String> = []
+        var mergedAfterMissingGroups: Set<String> = []
+
+        for id in firstTouchedGroupIDs.union(nextTouchedGroupIDs).sorted() {
+            let startGroup = firstTouchedGroupIDs.contains(id) ? firstBeforeGroups[id] : nextBeforeGroups[id]
+            let endGroup = nextTouchedGroupIDs.contains(id) ? nextAfterGroups[id] : firstAfterGroups[id]
+            if startGroup?.group == endGroup?.group && startGroup?.deletedAt == endGroup?.deletedAt { continue }
+            if let startGroup { mergedBeforeGroups.append(startGroup) } else { mergedBeforeMissingGroups.insert(id) }
+            if let endGroup { mergedAfterGroups.append(endGroup) } else { mergedAfterMissingGroups.insert(id) }
+        }
+
+        return TaskMutationPatch(
+            before: TaskRestorePoint(
+                tasks: mergedBeforeTasks,
+                missingTaskIDs: mergedBeforeMissing,
+                groups: mergedBeforeGroups,
+                missingGroupIDs: mergedBeforeMissingGroups
+            ),
+            after: TaskRestorePoint(
+                tasks: mergedAfterTasks,
+                missingTaskIDs: mergedAfterMissing,
+                groups: mergedAfterGroups,
+                missingGroupIDs: mergedAfterMissingGroups
+            )
+        )
+    }
 }
 
 extension DotistTask {
@@ -123,19 +214,218 @@ extension TaskStore {
     /// parent/category states never escape this transaction. New-task undo uses
     /// tombstones so its delete is also represented in the sync outbox.
     public func apply(patch: TaskRestorePoint) throws {
-        try apply(patch: patch, relativeTo: [:])
+        try apply(patch: patch, relativeTo: [:], relativeGroups: [:])
     }
 
     public func apply(mutation: TaskMutationPatch, redo: Bool) throws {
         let target = redo ? mutation.after : mutation.before
         let source = redo ? mutation.before : mutation.after
-        try apply(patch: target, relativeTo: Dictionary(uniqueKeysWithValues: source.tasks.map { ($0.id, $0) }))
+        try apply(
+            patch: target,
+            relativeTo: Dictionary(uniqueKeysWithValues: source.tasks.map { ($0.id, $0) }),
+            relativeGroups: Dictionary(uniqueKeysWithValues: source.groups.map { ($0.group.id, $0) })
+        )
     }
 
-    private func apply(patch: TaskRestorePoint, relativeTo sources: [String: DotistTask]) throws {
+    /// Reverts a recorded mutation (typically from an external MCP agent) while
+    /// preserving any later user edits to the same tasks or groups.
+    public func applySelectiveUndo(of mutation: TaskMutationPatch) throws {
         try write { db in
             let now = Self.timestamp()
-            for state in patch.groups {
+            let afterTasks = Dictionary(uniqueKeysWithValues: mutation.after.tasks.map { ($0.id, $0) })
+            let afterGroups = Dictionary(uniqueKeysWithValues: mutation.after.groups.map { ($0.group.id, $0) })
+            var categoryReverted: [(id: String, category: String)] = []
+
+            // 1. Restore modified or deleted groups without clobbering later user edits.
+            for beforeGroup in mutation.before.groups {
+                let id = beforeGroup.group.id
+                let current = try Row.fetchOne(db, sql: "SELECT * FROM task_groups WHERE id=?", arguments: [id])
+                    .map { try TaskHistoryGroup(row: $0) }
+                let restored: TaskHistoryGroup
+                if let current, let agentGroup = afterGroups[id] {
+                    let name = (beforeGroup.group.name != agentGroup.group.name && current.group.name == agentGroup.group.name)
+                        ? beforeGroup.group.name : current.group.name
+                    let color = (beforeGroup.group.color != agentGroup.group.color && current.group.color == agentGroup.group.color)
+                        ? beforeGroup.group.color : current.group.color
+                    let position = (beforeGroup.group.position != agentGroup.group.position && current.group.position == agentGroup.group.position)
+                        ? beforeGroup.group.position : current.group.position
+                    let deletedAt = (beforeGroup.deletedAt != agentGroup.deletedAt && current.deletedAt == agentGroup.deletedAt)
+                        ? beforeGroup.deletedAt : current.deletedAt
+                    restored = TaskHistoryGroup(
+                        group: DotistGroup(id: id, name: name, color: color, position: position),
+                        createdAt: current.createdAt,
+                        updatedAt: now,
+                        deletedAt: deletedAt
+                    )
+                    if restored.group == current.group && restored.deletedAt == current.deletedAt { continue }
+                } else if current == nil {
+                    restored = beforeGroup
+                } else {
+                    continue
+                }
+                let group = restored.group
+                try db.execute(sql: """
+                    INSERT INTO task_groups (id,name,color,position,created_at,updated_at,deleted_at)
+                    VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                    name=excluded.name,color=excluded.color,position=excluded.position,
+                    created_at=excluded.created_at,updated_at=excluded.updated_at,deleted_at=excluded.deleted_at
+                    """, arguments: [group.id, group.name, group.color, group.position, restored.createdAt, restored.updatedAt, restored.deletedAt])
+            }
+
+            // 2. Revert modified or deleted tasks field-by-field, keeping any field
+            //    the user subsequently changed and preserving completion timestamps.
+            for beforeTask in mutation.before.tasks {
+                let current = try DotistTask.fetchOne(db, sql: "SELECT * FROM tasks WHERE id=?", arguments: [beforeTask.id])
+                let nextState: DotistTask
+                if let current, let agentTask = afterTasks[beforeTask.id] {
+                    let title = (beforeTask.title != agentTask.title && current.title == agentTask.title) ? beforeTask.title : current.title
+                    let category = (beforeTask.category != agentTask.category && current.category == agentTask.category) ? beforeTask.category : current.category
+                    let revertCompletion = (beforeTask.completed != agentTask.completed || beforeTask.status != agentTask.status)
+                        && current.completed == agentTask.completed && current.status == agentTask.status
+                    let completed = revertCompletion ? beforeTask.completed : current.completed
+                    let status = revertCompletion ? beforeTask.status : current.status
+                    let position = (beforeTask.position != agentTask.position && current.position == agentTask.position) ? beforeTask.position : current.position
+                    let parentId = (beforeTask.parentId != agentTask.parentId && current.parentId == agentTask.parentId) ? beforeTask.parentId : current.parentId
+                    let dueDate = (beforeTask.dueDate != agentTask.dueDate && current.dueDate == agentTask.dueDate) ? beforeTask.dueDate : current.dueDate
+                    let startDate = (beforeTask.startDate != agentTask.startDate && current.startDate == agentTask.startDate) ? beforeTask.startDate : current.startDate
+                    let deletedAt = (beforeTask.deletedAt != agentTask.deletedAt && current.deletedAt == agentTask.deletedAt) ? beforeTask.deletedAt : current.deletedAt
+                    let updatedAt = revertCompletion ? beforeTask.updatedAt : (current.completed ? current.updatedAt : now)
+                    var merged = DotistTask(
+                        id: current.id,
+                        title: title,
+                        category: category,
+                        completed: completed,
+                        status: status,
+                        position: position,
+                        createdAt: current.createdAt,
+                        updatedAt: updatedAt,
+                        deletedAt: deletedAt,
+                        revision: current.revision,
+                        parentId: parentId,
+                        dueDate: dueDate,
+                        startDate: startDate
+                    )
+                    if !beforeTask.hasSamePlan(as: agentTask) && current.hasSamePlan(as: agentTask) {
+                        merged = merged.withPlan(from: beforeTask)
+                    } else {
+                        merged = merged.withPlan(from: current)
+                    }
+                    if merged.hasSameHistoryContent(as: current) { continue }
+                    if category != current.category {
+                        categoryReverted.append((id: current.id, category: category))
+                    }
+                    nextState = merged
+                } else if current == nil {
+                    nextState = beforeTask
+                } else {
+                    continue
+                }
+                let revision = max(current?.revision ?? 0, nextState.revision) + 1
+                try db.execute(sql: """
+                    INSERT INTO tasks (id,title,category,completed,status,position,created_at,updated_at,deleted_at,revision,parent_id,due_date,start_date,planned_day,planned_week_start)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                    title=excluded.title,category=excluded.category,completed=excluded.completed,status=excluded.status,
+                    position=excluded.position,created_at=excluded.created_at,updated_at=excluded.updated_at,
+                    deleted_at=excluded.deleted_at,revision=excluded.revision,parent_id=excluded.parent_id,
+                    due_date=excluded.due_date,start_date=excluded.start_date,
+                    planned_day=excluded.planned_day,planned_week_start=excluded.planned_week_start
+                    """, arguments: [nextState.id, nextState.title, nextState.category, nextState.completed, nextState.status.rawValue, nextState.position,
+                                      nextState.createdAt, nextState.updatedAt, nextState.deletedAt, revision, nextState.parentId, nextState.dueDate,
+                                      nextState.startDate, nextState.plannedDay, nextState.plannedWeekStart])
+                let restored = try Self.task(db, nextState.id, deleted: true)
+                let kind = nextState.deletedAt != nil ? "delete" : current == nil ? "create" : current?.deletedAt != nil ? "restore" : "update"
+                try Self.record(db, restored, kind: kind, base: current?.revision)
+            }
+
+            // 3. Soft-delete tasks created by the agent only if the user has not
+            //    edited them or attached new active subtasks underneath them.
+            var candidateDeleteIDs: Set<String> = []
+            for id in mutation.before.missingTaskIDs {
+                guard let current = try DotistTask.fetchOne(db, sql: "SELECT * FROM tasks WHERE id=? AND deleted_at IS NULL", arguments: [id]),
+                      let agentTask = afterTasks[id],
+                      current.hasSameHistoryContent(as: agentTask) else { continue }
+                candidateDeleteIDs.insert(id)
+            }
+            if !candidateDeleteIDs.isEmpty {
+                let activeTasks = try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE deleted_at IS NULL")
+                let byID = Dictionary(uniqueKeysWithValues: activeTasks.map { ($0.id, $0) })
+                // Any active task that will remain must keep its ancestor chain alive.
+                for task in activeTasks where !candidateDeleteIDs.contains(task.id) {
+                    var parentID = task.parentId
+                    var visited: Set<String> = [task.id]
+                    while let pid = parentID, visited.insert(pid).inserted {
+                        candidateDeleteIDs.remove(pid)
+                        parentID = byID[pid]?.parentId
+                    }
+                }
+                for id in candidateDeleteIDs.sorted() {
+                    guard let old = try DotistTask.fetchOne(db, sql: "SELECT * FROM tasks WHERE id=? AND deleted_at IS NULL", arguments: [id]) else { continue }
+                    try db.execute(sql: "UPDATE tasks SET deleted_at=?,updated_at=?,revision=revision+1 WHERE id=?", arguments: [now, now, id])
+                    try Self.record(db, Self.task(db, id, deleted: true), kind: "delete", base: old.revision)
+                }
+            }
+
+            // 4. Propagate reverted categories across active descendants so user-added
+            //    children attached under a migrated parent stay attached in the restored group.
+            if !categoryReverted.isEmpty {
+                let activeTasks = try DotistTask.fetchAll(db, sql: "SELECT * FROM tasks WHERE deleted_at IS NULL")
+                let childrenByParent = Dictionary(grouping: activeTasks.filter { $0.parentId != nil }, by: { $0.parentId! })
+                var queue = categoryReverted
+                var visited: Set<String> = []
+                while let item = queue.first {
+                    queue.removeFirst()
+                    guard visited.insert(item.id).inserted else { continue }
+                    for child in childrenByParent[item.id] ?? [] {
+                        if child.category != item.category {
+                            let childUpdatedAt = child.completed ? child.updatedAt : now
+                            try db.execute(sql: "UPDATE tasks SET category=?,updated_at=?,revision=revision+1 WHERE id=?",
+                                           arguments: [item.category, childUpdatedAt, child.id])
+                            try Self.record(db, Self.task(db, child.id, deleted: true), kind: "update", base: child.revision)
+                        }
+                        queue.append((id: child.id, category: item.category))
+                    }
+                }
+            }
+
+            // 5. Soft-delete groups created by the agent only if untouched and empty.
+            for id in mutation.before.missingGroupIDs.sorted() {
+                guard let current = try Row.fetchOne(db, sql: "SELECT * FROM task_groups WHERE id=? AND deleted_at IS NULL", arguments: [id])
+                    .map({ try TaskHistoryGroup(row: $0) }),
+                      let agentGroup = afterGroups[id],
+                      current.group == agentGroup.group && current.deletedAt == agentGroup.deletedAt else { continue }
+                let activeTaskCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM tasks WHERE category=? AND deleted_at IS NULL", arguments: [id]) ?? 0
+                if activeTaskCount == 0 {
+                    try db.execute(sql: "UPDATE task_groups SET deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL", arguments: [now, now, id])
+                }
+            }
+
+            try Self.validateRestoredGraph(db)
+        }
+    }
+
+    private func apply(patch: TaskRestorePoint, relativeTo sources: [String: DotistTask], relativeGroups: [String: TaskHistoryGroup]) throws {
+        try write { db in
+            let now = Self.timestamp()
+            for targetGroup in patch.groups {
+                let id = targetGroup.group.id
+                let oldGroup = try Row.fetchOne(db, sql: "SELECT * FROM task_groups WHERE id=?", arguments: [id])
+                    .map { try TaskHistoryGroup(row: $0) }
+                let state: TaskHistoryGroup
+                if let oldGroup, let sourceGroup = relativeGroups[id] {
+                    let name = sourceGroup.group.name != targetGroup.group.name ? targetGroup.group.name : oldGroup.group.name
+                    let color = sourceGroup.group.color != targetGroup.group.color ? targetGroup.group.color : oldGroup.group.color
+                    let position = sourceGroup.group.position != targetGroup.group.position ? targetGroup.group.position : oldGroup.group.position
+                    let deletedAt = sourceGroup.deletedAt != targetGroup.deletedAt ? targetGroup.deletedAt : oldGroup.deletedAt
+                    let updatedAt = sourceGroup.updatedAt != targetGroup.updatedAt ? targetGroup.updatedAt : oldGroup.updatedAt
+                    state = TaskHistoryGroup(
+                        group: DotistGroup(id: id, name: name, color: color, position: position),
+                        createdAt: oldGroup.createdAt,
+                        updatedAt: updatedAt,
+                        deletedAt: deletedAt
+                    )
+                } else {
+                    state = targetGroup
+                }
                 let group = state.group
                 try db.execute(sql: """
                     INSERT INTO task_groups (id,name,color,position,created_at,updated_at,deleted_at)
@@ -151,11 +441,49 @@ extension TaskStore {
                 let old = try DotistTask.fetchOne(db, sql: "SELECT * FROM tasks WHERE id=?", arguments: [target.id])
                 let state: DotistTask
                 if let old, let source = sources[target.id] {
-                    // A plan-only undo must leave intervening edits (especially dates) intact.
-                    if source.hasSamePlan(as: target) { state = target.withPlan(from: old) }
-                    else if source.withPlan(from: target).hasSameHistoryContent(as: target) {
-                        state = old.withPlan(from: target)
-                    } else { state = target }
+                    // Replay only fields owned by this mutation so intervening selective
+                    // withdrawals (e.g. an undone MCP due date) are never re-applied.
+                    let title = source.title != target.title ? target.title : old.title
+                    let category = source.category != target.category ? target.category : old.category
+                    let completionChanged = source.completed != target.completed || source.status != target.status
+                    let completed = completionChanged ? target.completed : old.completed
+                    let status = completionChanged ? target.status : old.status
+                    let position = source.position != target.position ? target.position : old.position
+                    let parentId = source.parentId != target.parentId ? target.parentId : old.parentId
+                    let dueDate = source.dueDate != target.dueDate ? target.dueDate : old.dueDate
+                    let startDate = source.startDate != target.startDate ? target.startDate : old.startDate
+                    let deletedAt = source.deletedAt != target.deletedAt ? target.deletedAt : old.deletedAt
+                    let updatedAt: String
+                    if completionChanged {
+                        updatedAt = target.updatedAt
+                    } else if old.completed && old.updatedAt != source.updatedAt {
+                        updatedAt = old.updatedAt
+                    } else if source.updatedAt != target.updatedAt {
+                        updatedAt = target.updatedAt
+                    } else {
+                        updatedAt = old.updatedAt
+                    }
+                    var merged = DotistTask(
+                        id: old.id,
+                        title: title,
+                        category: category,
+                        completed: completed,
+                        status: status,
+                        position: position,
+                        createdAt: old.createdAt,
+                        updatedAt: updatedAt,
+                        deletedAt: deletedAt,
+                        revision: old.revision,
+                        parentId: parentId,
+                        dueDate: dueDate,
+                        startDate: startDate
+                    )
+                    if !source.hasSamePlan(as: target) {
+                        merged = merged.withPlan(from: target)
+                    } else {
+                        merged = merged.withPlan(from: old)
+                    }
+                    state = merged
                 } else { state = target }
                 // Redo/undo is a new sync mutation; revisions never move back.
                 let revision = max(old?.revision ?? 0, state.revision) + 1

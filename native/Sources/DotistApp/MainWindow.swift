@@ -184,7 +184,13 @@ struct MainWindow: View {
                 if pinnedFilteredTaskID != nil { pinnedFilteredTaskID = nil }
             }
         ))
-        .onPreferenceChange(TaskListRowFrame.Key.self) { if rowFrames != $0 { rowFrames = $0; updateGhostFrame() } }
+        .onPreferenceChange(TaskListRowFrame.Key.self) {
+            if rowFrames != $0 {
+                rowFrames = $0
+                updateGhostFrame()
+                if drag == nil { selection.ensureValidFocusTarget(in: displayOrder) }
+            }
+        }
         .onPreferenceChange(TaskListGroupFrame.Key.self) { if groupFrames != $0 { groupFrames = $0; updateGhostFrame() } }
         .preference(key: TaskGhostFrameKey.self, value: ghostFrame)
         .onChange(of: listViewport) { _ in updateGhostFrame() }
@@ -227,7 +233,12 @@ struct MainWindow: View {
         .onDisappear { filterPresentation.dismiss(); traceReorder("lifecycle.disappear"); cancelReorder(); reorderRuntime.handleInput = nil; leaveInputs(); selection.update { $0.clear() } }
         .onHover { panelHovered = $0 }
         .foregroundColor(textColor)
-        .onAppear { category = state.groupID ?? DotistGroup.inboxID; reorderRuntime.handleInput = handleReorderInput; if initialUpcomingOpen { upcomingOpen = true } }
+        .onAppear {
+            category = state.groupID ?? DotistGroup.inboxID
+            reorderRuntime.handleInput = handleReorderInput
+            selection.onFocusTargetChanged = { [weak model] _, _ in model?.sealUndoHistory() }
+            if initialUpcomingOpen { upcomingOpen = true }
+        }
         .onChange(of: showCalendar) { _, open in filterPresentation.dateControlsChanged(open) }
         .onChange(of: state.groupID) { id in
             cancelReorder()
@@ -246,12 +257,15 @@ struct MainWindow: View {
         }
         .onChange(of: state.activeTag) { _ in
             pruneStaleInputState()
+            selection.ensureValidFocusTarget(in: displayOrder)
         }
         .onChange(of: state.customStart) { _ in
             pruneStaleInputState()
+            selection.ensureValidFocusTarget(in: displayOrder)
         }
         .onChange(of: state.customEnd) { _ in
             pruneStaleInputState()
+            selection.ensureValidFocusTarget(in: displayOrder)
         }
         .onChange(of: model.groups) { groups in
             if let id = state.groupID, !groups.contains(where: { $0.id == id }) { state.groupID = nil }

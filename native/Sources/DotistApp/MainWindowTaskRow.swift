@@ -70,18 +70,18 @@ extension MainWindow {
                     changeIndent(ids: [task.id], reverse: false)
                 }
             }
-            if let previous { Button(model.text("上移")) { model.reorder(task.id, relativeTo: previous, after: false, allTasks: allTasks) } }
-            if let next { Button(model.text("下移")) { model.reorder(task.id, relativeTo: next, after: true, allTasks: allTasks) } }
+            if let previous { Button(model.text("上移")) { selection.keepFocus(on: task.id, scroll: true); model.reorder(task.id, relativeTo: previous, after: false, allTasks: allTasks) } }
+            if let next { Button(model.text("下移")) { selection.keepFocus(on: task.id, scroll: true); model.reorder(task.id, relativeTo: next, after: true, allTasks: allTasks) } }
             if !task.completed { planMenu(task) }
             Menu(model.text("到期日")) {
-                Button(model.text("今天")) { let date = Date().dotistDay; model.change { _ = try $0.setDueDate(task.id, date: date) } }
-                Button(model.text("明天")) { let date = Calendar.current.date(byAdding: .day, value: 1, to: Date())!.dotistDay; model.change { _ = try $0.setDueDate(task.id, date: date) } }
+                Button(model.text("今天")) { selection.keepFocus(on: task.id, scroll: true); let date = Date().dotistDay; model.change { _ = try $0.setDueDate(task.id, date: date) } }
+                Button(model.text("明天")) { selection.keepFocus(on: task.id, scroll: true); let date = Calendar.current.date(byAdding: .day, value: 1, to: Date())!.dotistDay; model.change { _ = try $0.setDueDate(task.id, date: date) } }
                 Button(model.text(task.dueDate == nil ? "设置到期日…" : "修改到期日…")) { pickingTask = task.id }
-                if task.dueDate != nil { Button(model.text("清除到期日")) { model.change { _ = try $0.setDueDate(task.id, date: nil) } } }
+                if task.dueDate != nil { Button(model.text("清除到期日")) { selection.keepFocus(on: task.id, scroll: true); model.change { _ = try $0.setDueDate(task.id, date: nil) } } }
             }
             if !sub {
                 Menu(model.text("分组")) {
-                    ForEach(dropGroupIDs, id: \.self) { id in Button(model.groupDisplayName(id)) { model.change { _ = try $0.patchTask(id: task.id, category: id) } }.font(font(13, serif: true)) }
+                    ForEach(dropGroupIDs, id: \.self) { id in Button(model.groupDisplayName(id)) { selection.keepFocus(on: task.id, scroll: true); model.change { _ = try $0.patchTask(id: task.id, category: id) } }.font(font(13, serif: true)) }
                 }
             }
             Button(model.text(task.completed ? "恢复" : "完成")) {
@@ -128,11 +128,16 @@ extension MainWindow {
             }.buttonStyle(.plain).focusEffectDisabled()
                 .accessibilityLabel(Text(model.text(task.completed ? "恢复 {title}" : "完成 {title}").replacingOccurrences(of: "{title}", with: task.title)))
             if isEditing {
-                TaskEditor(text: $editedTitle, height: $editHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("任务内容"), minRowHeight: minRowHeight, initialClickWindowPoint: editClickWindowPoint, restrictHitTestToText: true, commit: {
-                    saveEditing(task) { startDraft(after: task) }
+                TaskEditor(text: $editedTitle, height: $editHeight, font: DotistDesign.nativeFont(13, language: model.language), label: model.text("任务内容"), minRowHeight: minRowHeight, initialClickWindowPoint: editClickWindowPoint, restrictHitTestToText: true, onCaretMove: {
+                    checkpointEditingForCaretMove(for: task.id)
+                }, commit: {
+                    _ = settleEditing(for: task.id, sealHistory: true)
+                    startDraft(after: task)
                 }, cancel: { clearEditing() }, indent: { reverse in
-                    saveEditing(task) { changeIndent(ids: [task.id], reverse: reverse); selection.row(task.id).focusRequest.send() }
-                }, blur: { saveEditing(task) }).id("edit:\(task.id)").frame(height: max(editHeight, minRowHeight))
+                    _ = settleEditing(for: task.id, sealHistory: true)
+                    changeIndent(ids: [task.id], reverse: reverse)
+                    selection.row(task.id).focusRequest.send()
+                }, blur: { _ = settleEditing(for: task.id, sealHistory: true) }).id("edit:\(task.id)").frame(height: max(editHeight, minRowHeight))
             } else {
                 HStack(alignment: .opticalCenter, spacing: 4) {
                     OpticalText(title: titleParts?.tags.isEmpty == false ? (titleParts?.text ?? task.title) : task.title, size: 13, weight: selected ? .medium : .regular, language: model.language).lineLimit(1).truncationMode(.tail)
@@ -197,7 +202,11 @@ extension MainWindow {
                                 .help(model.text("设置到期日"))
                                 .accessibilityLabel(Text(model.text("设置到期日 {title}").replacingOccurrences(of: "{title}", with: task.title)))
                         }
-                        Button { model.delete(task) } label: { OpticalSymbol(name: "xmark", size: 11).frame(width: 22, height: 22) }
+                        Button {
+                            if editing == task.id { clearEditing() }
+                            if draftAfter == task.id { clearInputs() }
+                            model.delete(task)
+                        } label: { OpticalSymbol(name: "xmark", size: 11).frame(width: 22, height: 22) }
                             .help(model.text("删除"))
                             .accessibilityLabel(Text(model.text("删除 {title}").replacingOccurrences(of: "{title}", with: task.title)))
                     }.buttonStyle(.plain).font(font(11, .regular)).foregroundColor(DotistDesign.muted)
@@ -233,6 +242,9 @@ extension MainWindow {
     }
 
     private func changeIndent(ids: [String], reverse: Bool) {
+        if let primaryID = ids.first {
+            selection.keepFocus(on: primaryID, assertKeyboardFocus: true, scroll: true)
+        }
         let complete = { }
         let failed = { showNotice(model.error ?? model.text("无法更改任务层级")); model.error = nil }
         if reverse { model.outdent(ids: ids, completed: complete, failed: failed) }
@@ -266,7 +278,10 @@ extension MainWindow {
             let direction = press.key == .upArrow ? -1 : 1
             if press.modifiers.contains(.option) {
                 let siblings = model.ordered(model.tasks.filter { $0.parentId == task.parentId && $0.category == task.category && $0.completed == task.completed })
-                if let i = siblings.firstIndex(where: { $0.id == task.id }), siblings.indices.contains(i + direction) { model.reorder(task.id, relativeTo: siblings[i + direction].id, after: direction > 0, allTasks: false) }
+                if let i = siblings.firstIndex(where: { $0.id == task.id }), siblings.indices.contains(i + direction) {
+                    selection.keepFocus(on: task.id, assertKeyboardFocus: true, scroll: true)
+                    model.reorder(task.id, relativeTo: siblings[i + direction].id, after: direction > 0, allTasks: false)
+                }
             } else if let i = order.firstIndex(of: task.id), order.indices.contains(i + direction) {
                 let id = order[i + direction]
                 selection.update {

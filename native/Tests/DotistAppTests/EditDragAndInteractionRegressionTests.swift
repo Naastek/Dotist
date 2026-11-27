@@ -523,6 +523,10 @@ final class EditDragAndInteractionRegressionTests: XCTestCase {
         let ordered = model.ordered(saved.filter { $0.category == group.id })
         XCTAssertEqual(ordered.map(\.id), [taskB.id, taskA.id],
                        "Edited task must reorder below taskB in a single drag while persisting its new title")
+        // Settling draft on drag start must have sealed the title-edit history entry
+        // so the subsequent reorder is recorded as a distinct undo step.
+        XCTAssertEqual(model.undoEntries.count, 2)
+        XCTAssertTrue(model.undoEntries.allSatisfy(\.sealed))
     }
 
     /// Pressing inside TaskTextView's text hit zone sets pointerInsideEditor and prevents
@@ -869,5 +873,114 @@ final class EditDragAndInteractionRegressionTests: XCTestCase {
                        "After plain click release, task without #work must disappear from #work filtered view")
         XCTAssertTrue(rows.contains { $0.task.id == taskB.id })
         XCTAssertEqual(try store.listTasks().first { $0.id == taskA.id }?.title, "写周报")
+    }
+
+    /// Typing at one location in TaskEditor, repositioning the caret, typing at another
+    /// location, and committing must produce two distinct app-level undo steps.
+    func testInlineEditorCaretMoveSealsUndoHistoryIntoTwoUndoSteps() async throws {
+        let (dir, store) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let group = try store.addGroup(name: "测试组F")
+        let taskA = try store.addTask(title: "Hello World", category: group.id)
+        let model = try AppModel(store: store)
+
+        let state = TaskPanelState(groupID: group.id)
+        let main = MainWindow(
+            model: model, state: state,
+            showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, collapse: {},
+            editing: taskA.id, editedTitle: "Hello World"
+        )
+        let host = DotistHostingView(rootView: main.frame(width: 364, height: 620))
+        host.frame = CGRect(x: 0, y: 0, width: 364, height: 620)
+        let window = DotistPanel(contentRect: host.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+
+        for _ in 0..<40 where firstView(of: TaskTextView.self, in: host) == nil {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let editor = try XCTUnwrap(firstView(of: TaskTextView.self, in: host))
+        window.makeFirstResponder(editor)
+        try await Task.sleep(for: .milliseconds(40))
+
+        // 1. Type at end of string.
+        editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+        editor.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(editor.string, "Hello World!")
+
+        // 2. Reposition caret to start without editing -> seals first typing burst.
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        for _ in 0..<40 where model.busy || model.undoEntries.isEmpty {
+            try await Task.sleep(for: .milliseconds(15))
+        }
+        XCTAssertEqual(model.undoEntries.count, 1)
+        XCTAssertTrue(model.undoEntries[0].sealed)
+        XCTAssertEqual(try store.listTasks().first { $0.id == taskA.id }?.title, "Hello World!")
+
+        // 3. Type at start of string and commit via blur.
+        editor.insertText("Hi ", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(editor.string, "Hi Hello World!")
+        editor.blur()
+        for _ in 0..<40 where model.busy || model.undoEntries.count < 2 {
+            try await Task.sleep(for: .milliseconds(15))
+        }
+        XCTAssertEqual(model.undoEntries.count, 2)
+        XCTAssertEqual(try store.listTasks().first { $0.id == taskA.id }?.title, "Hi Hello World!")
+
+        // 4. First ⌘Z undoes only the second burst; second ⌘Z undoes the first burst.
+        model.undoLast()
+        for _ in 0..<40 where model.busy { try await Task.sleep(for: .milliseconds(15)) }
+        XCTAssertEqual(try store.listTasks().first { $0.id == taskA.id }?.title, "Hello World!")
+
+        model.undoLast()
+        for _ in 0..<40 where model.busy { try await Task.sleep(for: .milliseconds(15)) }
+        XCTAssertEqual(try store.listTasks().first { $0.id == taskA.id }?.title, "Hello World")
+    }
+
+    /// Filtering an edited row out of the visible list must synchronously settle its
+    /// edited title once and clear the inline editor immediately.
+    func testFilteringOutEditedRowSettlesTitleOnceAndClearsEditorImmediately() async throws {
+        let (dir, store) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let group = try store.addGroup(name: "测试组G")
+        let taskA = try store.addTask(title: "任务一 #alpha", category: group.id)
+        _ = try store.addTask(title: "任务二 #beta", category: group.id)
+        let model = try AppModel(store: store)
+
+        let state = TaskPanelState(groupID: group.id)
+        let main = MainWindow(
+            model: model, state: state,
+            showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, collapse: {},
+            editing: taskA.id, editedTitle: "任务一已修改 #alpha"
+        )
+        let host = DotistHostingView(rootView: main.frame(width: 364, height: 620))
+        host.frame = CGRect(x: 0, y: 0, width: 364, height: 620)
+        let window = DotistPanel(contentRect: host.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+
+        for _ in 0..<40 where firstView(of: TaskTextView.self, in: host) == nil {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let editor = try XCTUnwrap(firstView(of: TaskTextView.self, in: host))
+        let delayedBlur = editor.blur
+
+        // Filter out taskA by switching active tag to #beta.
+        state.activeTag = "beta"
+        for _ in 0..<40 where firstView(of: TaskTextView.self, in: host) != nil || model.busy {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(15))
+        }
+        // Invoke any delayed blur callback from the dismantled editor; it must be a no-op.
+        delayedBlur()
+        for _ in 0..<20 where model.busy { try await Task.sleep(for: .milliseconds(15)) }
+
+        XCTAssertNil(firstView(of: TaskTextView.self, in: host), "Filtered-out editor must unmount immediately")
+        XCTAssertEqual(try store.listTasks().first { $0.id == taskA.id }?.title, "任务一已修改 #alpha")
+        XCTAssertEqual(model.undoEntries.count, 1, "Filtered-out edit must persist exactly once")
     }
 }

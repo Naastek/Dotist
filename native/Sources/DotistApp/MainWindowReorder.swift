@@ -276,10 +276,14 @@ extension MainWindow {
         guard let target = drag.target, listViewport.contains(dragMotion.location) || shelfTarget != nil || sideTabTarget != nil else { cancelReorder(); return }
         self.drag?.committing = true
         let targetDate = drag.destination?.date
+        let movedID = drag.rootIDs.first ?? drag.taskID
+        let hadFocus = selection.activeFocusedID != nil
         let complete = {
             // Publish the committed snapshot and retire the placeholder in one
             // transaction. There is no measured second landing or release clock.
+            selection.keepFocus(on: movedID, assertKeyboardFocus: hadFocus, scroll: true)
             withAnimation(reorderAnimation(0.18)) { clearReorder() }
+            selection.ensureValidFocusTarget(in: displayOrder)
         }
         if drag.rootIDs.count == 1 {
             model.commitReorder(taskID: drag.rootIDs[0], to: target, dueDate: targetDate, completed: complete, failed: { clearReorder() })

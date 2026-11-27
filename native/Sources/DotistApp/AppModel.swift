@@ -44,8 +44,14 @@ final class AppModel: ObservableObject {
     @Published var undo: UndoEntry?
     @Published var canUndoAction = false
     @Published var canRedoAction = false
-    var undoHistory: [TaskMutationPatch] = []
-    var redoHistory: [TaskMutationPatch] = []
+    @Published var canUndoAgentAction = false
+    var undoEntries: [TaskHistoryEntry] = []
+    var redoEntries: [TaskHistoryEntry] = []
+    var pendingAgentHistory: [(patch: TaskMutationPatch, label: String?)] = []
+    var undoHistory: [TaskMutationPatch] { undoEntries.map(\.patch) }
+    var redoHistory: [TaskMutationPatch] { redoEntries.map(\.patch) }
+    var historyGroupDelay: TimeInterval = 0.8
+    var historyClock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     var historyActionInFlight = false
     @Published var scope = "all"
     @Published var scopeNavigation = 0
@@ -104,6 +110,9 @@ final class AppModel: ObservableObject {
         }, onChange: { [weak self] snapshot, sequence in
             MainActor.assumeIsolated { self?.apply(snapshot, writeSequence: sequence) }
         })
+        mcp.onMutation = { [weak self] patch, toolName in
+            self?.recordAgentHistory(patch, label: toolName)
+        }
     }
 
     deinit { observation?.cancel() }
@@ -275,6 +284,7 @@ final class AppModel: ObservableObject {
     }
 
     func beginDrag(_ id: String, scope: String) {
+        sealUndoHistory()
         dragId = id
         dragScope = scope
         updateHistoryAvailability()
@@ -286,11 +296,11 @@ final class AppModel: ObservableObject {
         updateHistoryAvailability()
     }
 
-    func change(recordHistory: Bool = true, completed: (() -> Void)? = nil, failed: (() -> Void)? = nil, _ operation: @escaping (TaskStore) throws -> Void) {
-        changeWithSnapshot(recordHistory: recordHistory, completed: { _ in completed?() }, failed: failed, operation)
+    func change(recordHistory: Bool = true, historyGroupKey: String? = nil, sealHistory: Bool = false, completed: (() -> Void)? = nil, failed: (() -> Void)? = nil, _ operation: @escaping (TaskStore) throws -> Void) {
+        changeWithSnapshot(recordHistory: recordHistory, historyGroupKey: historyGroupKey, sealHistory: sealHistory, completed: { _ in completed?() }, failed: failed, operation)
     }
 
-    private func changeWithSnapshot(recordHistory: Bool = true, completed: ((TaskSnapshot) -> Void)? = nil, failed: (() -> Void)? = nil, _ operation: @escaping (TaskStore) throws -> Void) {
+    private func changeWithSnapshot(recordHistory: Bool = true, historyGroupKey: String? = nil, sealHistory: Bool = false, completed: ((TaskSnapshot) -> Void)? = nil, failed: (() -> Void)? = nil, _ operation: @escaping (TaskStore) throws -> Void) {
         pendingChanges += 1
         busy = true
         updateHistoryAvailability()
@@ -304,7 +314,7 @@ final class AppModel: ObservableObject {
                     self.pendingChanges -= 1
                     self.busy = self.pendingChanges > 0
                     self.error = nil
-                    if let patch = result.patch { self.recordHistory(patch) }
+                    if let patch = result.patch { self.recordHistory(patch, source: .user, groupKey: historyGroupKey, sealAfterRecord: sealHistory) }
                     if let settings, self.settings != settings { self.settings = settings }
                     self.apply(result.snapshot, writeSequence: result.writeSequence)
                     completed?(result.snapshot)
@@ -323,7 +333,7 @@ final class AppModel: ObservableObject {
     }
 
     func complete(_ task: DotistTask) { change { _ = try $0.patchTask(id: task.id, completed: !task.completed) } }
-    func patchTaskTitleOptimistically(id: String, title: String) {
+    func patchTaskTitleOptimistically(id: String, title: String, historyGroupKey: String? = nil, sealHistory: Bool = false) {
         if let index = tasks.firstIndex(where: { $0.id == id }), tasks[index].title != title {
             var updated = tasks
             updated[index] = updated[index].withTitle(title)
@@ -334,7 +344,7 @@ final class AppModel: ObservableObject {
                 taggedTasks = TaskTags.filter(tasks, tag: tag, description: tagDescription)
             }
         }
-        change(failed: { [weak self] in self?.refresh() }) { _ = try $0.patchTask(id: id, title: title) }
+        change(historyGroupKey: historyGroupKey ?? "task-title:\(id)", sealHistory: sealHistory, failed: { [weak self] in self?.refresh() }) { _ = try $0.patchTask(id: id, title: title) }
     }
     func delete(_ task: DotistTask) {
         change(completed: { [weak self] in self?.undo = UndoEntry(id: task.id, title: task.title, group: false) }) { try $0.deleteTask(task.id) }

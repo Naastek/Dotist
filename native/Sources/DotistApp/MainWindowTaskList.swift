@@ -284,7 +284,7 @@ extension MainWindow {
             TaskCheckmark(depth: 0, completed: false, children: [], emphasized: false)
             TaskEditor(text: Binding(get: { groupTitles[group.id] ?? "" }, set: { groupTitles[group.id] = $0 }), height: $draftHeight,
                 font: DotistDesign.nativeFont(13, language: model.language), label: model.text("新任务（{name}）").replacingOccurrences(of: "{name}", with: group.name), minRowHeight: 32,
-                commit: { saveGroupDraft(group, continuing: true) }, cancel: { clearInputs() }, indent: { _ in }, blur: { saveGroupDraft(group, continuing: false) })
+                commit: { saveGroupDraft(group, continuing: true) }, cancel: { clearInputs() }, indent: { _ in }, blur: { _ = settleGroupDraft(for: group.id, sealHistory: true) })
                 .id("group:\(group.id)").frame(height: max(draftHeight, 32))
             Color.clear.frame(width: 0, height: 0)
         }
@@ -366,6 +366,12 @@ extension MainWindow {
     }
 
     @ViewBuilder private var listMenu: some View {
+        if model.canUndoAgentAction {
+            Button(model.text("撤销 AI 改动")) {
+                model.undoLastAgentAction { showNotice("已撤销 AI 改动") }
+            }
+            Divider()
+        }
         Button(model.text("新建分组…")) { manageGroups = true }
         Button(model.text("管理分组…")) { manageGroups = true }
         Button(model.text("管理标签…")) { manageTags = true }

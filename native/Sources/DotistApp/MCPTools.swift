@@ -5,6 +5,18 @@ import MCP
 struct DotistMCPTools: Sendable {
     let store: TaskStore
     var focus: @MainActor @Sendable (DotistTask?) -> Void
+    var onMutation: (@MainActor @Sendable (TaskMutationPatch, String) -> Void)? = nil
+
+    private func mutate<T>(_ toolName: String, _ operation: (TaskStore) throws -> T) async throws -> T {
+        var output: T!
+        let patch = try store.captureChanges { store in
+            output = try operation(store)
+        }
+        if !patch.isEmpty, let onMutation {
+            await onMutation(patch, toolName)
+        }
+        return output
+    }
 
     private struct Arguments: Decodable {
         var id: String?
@@ -105,28 +117,47 @@ struct DotistMCPTools: Sendable {
                     guard let group = task.category ?? arguments.category else { throw TaskStoreError("每个任务需要 category，或为批次指定 category") }
                     return TaskStore.NewTask(title: task.title, category: group, parentId: task.parentId, dueDate: task.dueDate)
                 }
-                return try result(store.addTasks(drafts))
+                return try result(await mutate(name) { try $0.addTasks(drafts) })
             case "update_task":
                 guard arguments.title != nil || arguments.category != nil || arguments.completed != nil || arguments.status != nil else { throw TaskStoreError("请提供要修改的字段") }
-                return try result(store.patchTask(id: arguments.taskID(), title: arguments.title, category: arguments.category, completed: arguments.completed, status: arguments.status))
-            case "delete_task": try store.deleteTask(arguments.taskID())
-            case "restore_task": return try result(store.restoreTask(arguments.taskID()))
-            case "set_due_date": return try result(store.setDueDate(arguments.taskID(), date: arguments.dueDate))
-            case "set_start_date": return try result(store.setStartDate(arguments.taskID(), date: arguments.startDate))
-            case "set_task_plan": return try result(store.setPlan(arguments.taskID(), scope: arguments.plan?.scope))
-            case "set_task_parent": return try result(store.reparent(arguments.taskID(), parentId: arguments.parentId))
+                let id = try arguments.taskID()
+                return try result(await mutate(name) { try $0.patchTask(id: id, title: arguments.title, category: arguments.category, completed: arguments.completed, status: arguments.status) })
+            case "delete_task":
+                let id = try arguments.taskID()
+                try await mutate(name) { try $0.deleteTask(id) }
+            case "restore_task":
+                let id = try arguments.taskID()
+                return try result(await mutate(name) { try $0.restoreTask(id) })
+            case "set_due_date":
+                let id = try arguments.taskID()
+                return try result(await mutate(name) { try $0.setDueDate(id, date: arguments.dueDate) })
+            case "set_start_date":
+                let id = try arguments.taskID()
+                return try result(await mutate(name) { try $0.setStartDate(id, date: arguments.startDate) })
+            case "set_task_plan":
+                let id = try arguments.taskID()
+                return try result(await mutate(name) { try $0.setPlan(id, scope: arguments.plan?.scope) })
+            case "set_task_parent":
+                let id = try arguments.taskID()
+                return try result(await mutate(name) { try $0.reparent(id, parentId: arguments.parentId) })
             case "move_task":
                 guard let direction = arguments.direction else { throw TaskStoreError("需要 direction：up 或 down") }
-                try store.move(arguments.taskID(), direction: direction == .up ? -1 : 1)
+                let id = try arguments.taskID()
+                try await mutate(name) { try $0.move(id, direction: direction == .up ? -1 : 1) }
             case "list_groups": return try result(store.listGroups())
             case "add_group":
-                guard let name = arguments.name else { throw TaskStoreError("需要分组名称") }
-                return try result(store.addGroup(name: name))
+                guard let nameValue = arguments.name else { throw TaskStoreError("需要分组名称") }
+                return try result(await mutate(name) { try $0.addGroup(name: nameValue) })
             case "update_group":
-                guard let name = arguments.name else { throw TaskStoreError("需要分组名称") }
-                return try result(store.updateGroup(arguments.taskID(), name: name))
-            case "delete_group": try store.deleteGroup(arguments.taskID())
-            case "restore_group": return try result(store.restoreGroup(arguments.taskID()))
+                guard let nameValue = arguments.name else { throw TaskStoreError("需要分组名称") }
+                let id = try arguments.taskID()
+                return try result(await mutate(name) { try $0.updateGroup(id, name: nameValue) })
+            case "delete_group":
+                let id = try arguments.taskID()
+                try await mutate(name) { try $0.deleteGroup(id) }
+            case "restore_group":
+                let id = try arguments.taskID()
+                return try result(await mutate(name) { try $0.restoreGroup(id) })
             case "focus_task":
                 let task = try arguments.id.map { id in
                     guard let task = try store.listTasks().first(where: { $0.id == id }) else { throw TaskStoreError("找不到任务") }

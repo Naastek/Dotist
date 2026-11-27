@@ -60,51 +60,101 @@ extension MainWindow {
     }
 
     func leaveInputs() {
-        if let id = editing, let task = model.tasks.first(where: { $0.id == id }) {
-            saveEditing(task) { clearInputs() }
-        } else if let id = draftAfter, let task = model.tasks.first(where: { $0.id == id }) {
-            saveDraft(after: task, continueEditing: false)
-        } else if let id = addingToGroup, let group = model.groups.first(where: { $0.id == id }) {
-            saveGroupDraft(group, continuing: false)
-        } else { clearInputs() }
+        settleDraft(sealHistory: true)
+    }
+
+    /// Checkpoints an in-progress title edit as a sealed history step when the user
+    /// repositions the caret inside the inline editor without closing it, so typing
+    /// in two different locations produces separate app-level undo entries.
+    func checkpointEditingForCaretMove(for taskID: String) {
+        guard editing == taskID, !editSaving else { return }
+        if let task = model.tasks.first(where: { $0.id == taskID }),
+           let titleToSave = TaskDraftFlow.titleToSave(editedTitle),
+           titleToSave != task.title {
+            model.patchTaskTitleOptimistically(id: task.id, title: titleToSave, sealHistory: true)
+        } else {
+            model.sealUndoHistory()
+        }
+    }
+
+    /// Identity-guarded synchronous settlement for an active row title editor.
+    @discardableResult
+    func settleEditing(for taskID: String, sealHistory: Bool = true) -> Bool {
+        guard editing == taskID else { return false }
+        let alreadySaving = editSaving
+        let titleToSave = TaskDraftFlow.titleToSave(editedTitle)
+        let task = model.tasks.first(where: { $0.id == taskID })
+        clearEditing()
+        if !alreadySaving, let task, let titleToSave, titleToSave != task.title {
+            model.patchTaskTitleOptimistically(id: task.id, title: titleToSave, sealHistory: sealHistory)
+            return true
+        }
+        if sealHistory { model.sealUndoHistory() }
+        return false
+    }
+
+    /// Identity-guarded synchronous settlement for an active inline sibling/child draft.
+    @discardableResult
+    func settleDraftRow(after anchorID: String, sealHistory: Bool = true) -> Bool {
+        guard draftAfter == anchorID else { return false }
+        let alreadySaving = draftSaving
+        let titleToSave = TaskDraftFlow.titleToSave(draftTitle)
+        let parent = draftParent
+        let plan = draftPlan
+        let task = model.tasks.first(where: { $0.id == anchorID })
+        clearDraft()
+        if !alreadySaving, let task, let titleToSave {
+            model.change(sealHistory: sealHistory) { store in
+                let newTask = try store.addTask(title: titleToSave, category: task.category, parentId: parent,
+                                                dueDate: plan == nil ? task.dueDate : nil, plan: plan)
+                let hierarchy = TaskHierarchy(try store.listTasks())
+                let anchor = ([task] + hierarchy.ancestors(of: task.id)).first { $0.parentId == parent }
+                if let anchor { try store.reorder(newTask.id, relativeTo: anchor.id, after: true, allTasks: false) }
+            }
+            return true
+        }
+        if sealHistory { model.sealUndoHistory() }
+        return false
+    }
+
+    /// Identity-guarded synchronous settlement for an active empty-group draft.
+    @discardableResult
+    func settleGroupDraft(for groupID: String, sealHistory: Bool = true) -> Bool {
+        guard addingToGroup == groupID else { return false }
+        let alreadySaving = groupSubmitting
+        let titleToSave = TaskDraftFlow.titleToSave(groupTitles[groupID] ?? "")
+        addingToGroup = nil
+        groupTitles.removeValue(forKey: groupID)
+        if !alreadySaving, let titleToSave, model.groups.contains(where: { $0.id == groupID }) {
+            model.change(sealHistory: sealHistory) { _ = try $0.addTask(title: titleToSave, category: groupID) }
+            return true
+        }
+        if sealHistory { model.sealUndoHistory() }
+        return false
     }
 
     /// Synchronously snapshots and clears active inline editors/drafts while
-    /// persisting changes in the background, so a drag or outside click can
-    /// start immediately without waiting for SQLite round-trips.
-    func flushInputsOptimistically() {
+    /// persisting changes in the background (UI SDK `settleDraft`), so blur,
+    /// view switches, outside clicks, or drag starts never drop drafts or
+    /// double-submit an in-flight save.
+    func settleDraft(sealHistory: Bool = true) {
+        var dispatchedPersistence = false
         if let id = editing {
-            let titleToSave = TaskDraftFlow.titleToSave(editedTitle)
-            let task = model.tasks.first(where: { $0.id == id })
-            clearEditing()
-            if let task, let titleToSave, titleToSave != task.title {
-                model.patchTaskTitleOptimistically(id: task.id, title: titleToSave)
-            }
+            dispatchedPersistence = settleEditing(for: id, sealHistory: sealHistory) || dispatchedPersistence
         }
         if let id = draftAfter {
-            let titleToSave = TaskDraftFlow.titleToSave(draftTitle)
-            let parent = draftParent
-            let plan = draftPlan
-            let task = model.tasks.first(where: { $0.id == id })
-            clearDraft()
-            if let task, let titleToSave {
-                model.change { store in
-                    let newTask = try store.addTask(title: titleToSave, category: task.category, parentId: parent,
-                                                    dueDate: plan == nil ? task.dueDate : nil, plan: plan)
-                    let hierarchy = TaskHierarchy(try store.listTasks())
-                    let anchor = ([task] + hierarchy.ancestors(of: task.id)).first { $0.parentId == parent }
-                    if let anchor { try store.reorder(newTask.id, relativeTo: anchor.id, after: true, allTasks: false) }
-                }
-            }
+            dispatchedPersistence = settleDraftRow(after: id, sealHistory: sealHistory) || dispatchedPersistence
         }
         if let id = addingToGroup {
-            let titleToSave = TaskDraftFlow.titleToSave(groupTitles[id] ?? "")
-            addingToGroup = nil
-            groupTitles.removeValue(forKey: id)
-            if let titleToSave, model.groups.contains(where: { $0.id == id }) {
-                model.change { _ = try $0.addTask(title: titleToSave, category: id) }
-            }
+            dispatchedPersistence = settleGroupDraft(for: id, sealHistory: sealHistory) || dispatchedPersistence
         }
+        if sealHistory && !dispatchedPersistence {
+            model.sealUndoHistory()
+        }
+    }
+
+    func flushInputsOptimistically() {
+        settleDraft(sealHistory: true)
     }
 
     func dismissEditorFromOutsideClick() {
@@ -121,17 +171,32 @@ extension MainWindow {
         NSApp.keyWindow?.makeFirstResponder(nil)
     }
 
-    /// Clears inline editing or draft states whose target row/group is no longer
-    /// mounted in the visible list, preventing ghost locks after deletes or filters.
+    /// Settles or clears inline editing/draft states whose target row/group is no
+    /// longer mounted in the visible list: if the target still exists (filtered out
+    /// or collapsed), settles its draft synchronously once; if deleted, clears it.
     func pruneStaleInputState() {
         let editableIDs = Set(listEntries.compactMap { $0.expanded ? $0.row?.task.id : nil })
-        if let id = editing, !editableIDs.contains(id) { clearEditing() }
-        if let id = draftAfter, !editableIDs.contains(id) { clearDraft() }
+        if let id = editing, !editableIDs.contains(id) {
+            if model.tasks.contains(where: { $0.id == id }) {
+                _ = settleEditing(for: id, sealHistory: true)
+            } else {
+                clearEditing()
+            }
+        }
+        if let id = draftAfter, !editableIDs.contains(id) {
+            if model.tasks.contains(where: { $0.id == id }) {
+                _ = settleDraftRow(after: id, sealHistory: true)
+            } else {
+                clearDraft()
+            }
+        }
         if let id = addingToGroup {
             let visible = id != DotistGroup.inboxID
-            if !model.groups.contains(where: { $0.id == id }) || !state.showsGroupContents(id, hasHeader: visible) {
+            if !model.groups.contains(where: { $0.id == id }) {
                 addingToGroup = nil
                 groupTitles.removeValue(forKey: id)
+            } else if !state.showsGroupContents(id, hasHeader: visible) {
+                _ = settleGroupDraft(for: id, sealHistory: true)
             }
         }
     }
@@ -160,7 +225,7 @@ extension MainWindow {
                     saveDraft(after: task, continueEditing: true)
                 }, cancel: { clearDraft() }, indent: { reverse in
                     draftParent = TaskDraftFlow.parent(reverse: reverse, current: draftParent, after: task, tasks: model.tasks)
-                }, blur: { saveDraft(after: task, continueEditing: false) })
+                }, blur: { _ = settleDraftRow(after: task.id, sealHistory: true) })
                     .id("draft:\(task.id)").frame(height: max(draftHeight, minRowHeight))
                 Color.clear.frame(width: 0, height: 0)
             }.background(RoundedRectangle(cornerRadius: 6).fill(DotistDesign.rule.opacity(0.18)).padding(.horizontal, -6))
@@ -192,27 +257,22 @@ extension MainWindow {
     func beginEditing(_ task: DotistTask, at clickPoint: CGPoint? = nil) {
         guard editing != task.id else { return }
         if editSaving { pendingEdit = task; return }
-        let start = {
-            clearInputs()
-            editing = task.id
-            editedTitle = task.title
-            editHeight = TaskRowMetrics.height(model.depth(of: task), titleHeight: 20)
-            editClickWindowPoint = clickPoint
+        if editing != nil || draftAfter != nil || addingToGroup != nil {
+            settleDraft(sealHistory: true)
+        } else {
+            model.sealUndoHistory()
         }
-        if let id = editing, let current = model.tasks.first(where: { $0.id == id }) { saveEditing(current, then: start) }
-        else if let after = draftAfter, let current = model.tasks.first(where: { $0.id == after }), TaskDraftFlow.titleToSave(draftTitle) != nil {
-            saveDraft(after: current, continueEditing: false)
-            // The old draft callback is identity-guarded, so switching editor
-            // cannot make a delayed blur save a different row's buffer.
-            start()
-        } else { start() }
+        editing = task.id
+        editedTitle = task.title
+        editHeight = TaskRowMetrics.height(model.depth(of: task), titleHeight: 20)
+        editClickWindowPoint = clickPoint
     }
 
     func saveEditing(_ task: DotistTask, then: @escaping () -> Void = {}) {
         guard editing == task.id, !editSaving else { return }
         guard let title = TaskDraftFlow.titleToSave(editedTitle), title != task.title else { clearEditing(); then(); return }
         editSaving = true
-        model.change(completed: {
+        model.change(historyGroupKey: "task-title:\(task.id)", completed: {
             editSaving = false
             if editing == task.id {
                 let pending = pendingEdit

@@ -9,6 +9,7 @@ struct TaskEditor: NSViewRepresentable {
     var minRowHeight: CGFloat = 32
     var initialClickWindowPoint: CGPoint? = nil
     var restrictHitTestToText: Bool = false
+    var onCaretMove: (() -> Void)? = nil
     let commit: () -> Void
     let cancel: () -> Void
     let indent: (Bool) -> Void
@@ -43,6 +44,7 @@ struct TaskEditor: NSViewRepresentable {
         editor.insertionPointColor = NSColor(DotistDesign.accent)
         editor.textColor = NSColor(DotistDesign.ink)
         editor.string = text
+        context.coordinator.syncSelection(editor)
         editor.commit = commit
         editor.cancel = cancel
         editor.indent = indent
@@ -58,9 +60,11 @@ struct TaskEditor: NSViewRepresentable {
                 let local = editor.convert(clickPoint, from: nil)
                 if editor.bounds.insetBy(dx: -4, dy: -4).contains(local) {
                     let index = editor.characterIndexForInsertion(at: local)
+                    context.coordinator.suppressNextSelectionEvent = true
                     editor.setSelectedRange(NSRange(location: index, length: 0))
                 }
             }
+            context.coordinator.syncSelection(editor)
         }
         return scroll
     }
@@ -71,7 +75,11 @@ struct TaskEditor: NSViewRepresentable {
         editor.restrictHitTestToText = restrictHitTestToText
         editor.setAccessibilityLabel(label)
         editor.commit = commit; editor.cancel = cancel; editor.indent = indent; editor.blur = blur
-        if editor.string != text && !editor.hasMarkedText() { editor.string = text }
+        if editor.string != text && !editor.hasMarkedText() {
+            context.coordinator.suppressNextSelectionEvent = true
+            editor.string = text
+            context.coordinator.syncSelection(editor)
+        }
         context.coordinator.measure(editor)
     }
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
@@ -92,12 +100,47 @@ struct TaskEditor: NSViewRepresentable {
             return true
         }
         var parent: TaskEditor
-        init(_ parent: TaskEditor) { self.parent = parent }
+        var lastText: String
+        var lastSelectedRange = NSRange(location: NSNotFound, length: 0)
+        var suppressNextSelectionEvent = false
+        init(_ parent: TaskEditor) {
+            self.parent = parent
+            self.lastText = parent.text
+        }
+        func syncSelection(_ editor: NSTextView) {
+            lastText = editor.string
+            lastSelectedRange = editor.selectedRange()
+        }
         func textDidChange(_ notification: Notification) {
             guard let editor = notification.object as? TaskTextView else { return }
+            lastText = editor.string
+            lastSelectedRange = editor.selectedRange()
             parent.text = editor.string
             measure(editor)
             editor.invalidateTextCursorRects()
+        }
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let editor = notification.object as? TaskTextView, !editor.hasMarkedText() else { return }
+            let range = editor.selectedRange()
+            if suppressNextSelectionEvent {
+                suppressNextSelectionEvent = false
+                lastText = editor.string
+                lastSelectedRange = range
+                return
+            }
+            // If text changed since the last observed selection, this caret shift is
+            // part of typing/editing rather than an explicit cursor reposition.
+            if editor.string != lastText {
+                lastText = editor.string
+                lastSelectedRange = range
+                return
+            }
+            if lastSelectedRange.location != NSNotFound && range != lastSelectedRange {
+                lastSelectedRange = range
+                parent.onCaretMove?()
+            } else {
+                lastSelectedRange = range
+            }
         }
         func measure(_ editor: NSTextView) {
             guard let layout = editor.layoutManager, let container = editor.textContainer else { return }

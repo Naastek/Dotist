@@ -78,7 +78,7 @@ struct WindowDragArea: View {
 }
 
 @MainActor
-final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableObject {
+final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation, ObservableObject {
     private struct ShortcutSignature: Equatable {
         let language: String
         let scopes: [String: String]
@@ -443,6 +443,9 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
         menu.addItem(editItem)
         let editMenu = NSMenu(title: model.text("编辑"))
         editMenu.addItem(withTitle: model.text("撤销"), action: Selector(("undo:")), keyEquivalent: "z")
+        let undoAgent = NSMenuItem(title: model.text("撤销 AI 改动"), action: #selector(undoAgentChangesFromMenu), keyEquivalent: "")
+        undoAgent.target = self
+        editMenu.addItem(undoAgent)
         editMenu.addItem(.separator())
         editMenu.addItem(withTitle: model.text("剪切"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         editMenu.addItem(withTitle: model.text("复制"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
@@ -459,6 +462,14 @@ final class DotistDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, O
     @objc private func openSettingsFromMenu() { shortcutTrace("settings menu action"); showSettings() }
     @objc private func openQuickFromMenu() { showQuick() }
     @objc private func openSearchFromMenu() { shortcutTrace("search menu action"); showSearch() }
+    @objc private func undoAgentChangesFromMenu() { model.undoLastAgentAction() }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(undoAgentChangesFromMenu) {
+            return model?.canUndoAgentAction ?? false
+        }
+        return true
+    }
 
     /// Whether an app-scoped shortcut is already carried by a menu key equivalent.
     private func menuHandles(key: String, value: String) -> Bool {

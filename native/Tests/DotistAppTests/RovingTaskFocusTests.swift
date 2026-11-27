@@ -76,4 +76,56 @@ final class RovingTaskFocusTests: XCTestCase {
         XCTAssertEqual(ids.filter { selection.row($0).focusable }, [target])
         XCTAssertEqual(navigated, [target])
     }
+
+    func testFocusRecoverySelectsNextThenPreviousSurvivingNeighborOnRemoval() {
+        let controller = TaskSelectionController()
+        let initial = ["a", "b", "c", "d", "e"]
+        for id in initial { _ = controller.row(id) }
+        controller.ensureValidFocusTarget(in: initial)
+
+        // Focus middle item 'c', then remove it -> recovers to next neighbor 'd'.
+        controller.setFocusTarget("c")
+        let afterMiddleRemoval = ["a", "b", "d", "e"]
+        controller.ensureValidFocusTarget(in: afterMiddleRemoval)
+        XCTAssertEqual(controller.focusTargetID, "d")
+        XCTAssertTrue(controller.row("d").focusable)
+        XCTAssertFalse(controller.row("c").focusable)
+
+        // Focus last item 'e', then remove it -> recovers to previous neighbor 'd'.
+        controller.setFocusTarget("e")
+        let afterTailRemoval = ["a", "b", "d"]
+        controller.ensureValidFocusTarget(in: afterTailRemoval)
+        XCTAssertEqual(controller.focusTargetID, "d")
+
+        // Multi-item removal (e.g. completing/filtering a subtree): 'b' and 'd' disappear -> falls back to 'a'.
+        controller.setFocusTarget("b")
+        controller.ensureValidFocusTarget(in: ["a"])
+        XCTAssertEqual(controller.focusTargetID, "a")
+
+        // Empty list clears focus target.
+        controller.ensureValidFocusTarget(in: [])
+        XCTAssertNil(controller.focusTargetID)
+    }
+
+    func testKeepFocusFollowsMovedTaskAcrossReordersAndFallsBackWhenFilteredOut() {
+        let controller = TaskSelectionController()
+        let initial = ["a", "b", "c"]
+        for id in initial { _ = controller.row(id) }
+        controller.ensureValidFocusTarget(in: initial)
+
+        var navigated: [String] = []
+        let token = controller.navigation.sink { navigated.append($0) }
+        defer { token.cancel() }
+
+        // Moving 'a' to the bottom keeps focus on 'a' and scrolls to follow it.
+        controller.keepFocus(on: "a", assertKeyboardFocus: true, scroll: true)
+        controller.ensureValidFocusTarget(in: ["b", "c", "a"])
+        XCTAssertEqual(controller.focusTargetID, "a")
+        XCTAssertEqual(navigated, ["a"])
+
+        // Moving 'a' out of the current panel/filter falls back to deterministic FocusRecovery ('c').
+        controller.keepFocus(on: "a", assertKeyboardFocus: false, scroll: true)
+        controller.ensureValidFocusTarget(in: ["b", "c"])
+        XCTAssertEqual(controller.focusTargetID, "c")
+    }
 }

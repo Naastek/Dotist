@@ -10,6 +10,7 @@ final class MCPService: ObservableObject {
     @Published private(set) var connections = 0
     @Published private(set) var error: String?
     var focus: @MainActor @Sendable (DotistTask?) -> Void = { _ in }
+    var onMutation: (@MainActor @Sendable (TaskMutationPatch, String) -> Void)?
     nonisolated static var socketPath: String { TaskStore.dataDirectory.appendingPathComponent("mcp.sock").path }
     private let store: TaskStore
     private let socketPath: String
@@ -139,7 +140,7 @@ final class MCPService: ObservableObject {
         let key = ObjectIdentifier(server)
         sessions[key] = (server, connection)
         connections = sessions.count
-        let tools = DotistMCPTools(store: store, focus: focus)
+        let tools = DotistMCPTools(store: store, focus: focus, onMutation: onMutation)
         Task { [weak self] in
             await server.withMethodHandler(ListTools.self) { _ in ListTools.Result(tools: tools.definitions()) }
             await server.withMethodHandler(CallTool.self) { await tools.call($0.name, $0.arguments) }

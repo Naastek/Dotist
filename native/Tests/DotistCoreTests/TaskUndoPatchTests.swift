@@ -185,4 +185,119 @@ final class TaskUndoPatchTests: XCTestCase {
             XCTAssertEqual(json["title"] as? String, restored.title)
         }
     }
+
+    func testPatchMergeCoalescesSequentialEditsAndCancelsRoundTripNoOp() throws {
+        let store = try store()
+        let task = try store.addTask(title: "A", category: "work")
+        let first = try store.captureChanges { _ = try $0.patchTask(id: task.id, title: "AB") }
+        let second = try store.captureChanges { _ = try $0.patchTask(id: task.id, title: "ABC") }
+        let merged = first.merged(with: second)
+        XCTAssertFalse(merged.isEmpty)
+        XCTAssertEqual(merged.before.tasks.first?.title, "A")
+        XCTAssertEqual(merged.after.tasks.first?.title, "ABC")
+
+        try store.apply(mutation: merged, redo: false)
+        XCTAssertEqual(try store.listTasks().first?.title, "A")
+        try store.apply(mutation: merged, redo: true)
+        XCTAssertEqual(try store.listTasks().first?.title, "ABC")
+
+        let backToStart = try store.captureChanges { _ = try $0.patchTask(id: task.id, title: "A") }
+        let cancelled = merged.merged(with: backToStart)
+        XCTAssertTrue(cancelled.isEmpty)
+    }
+
+    func testSelectiveAgentUndoPreservesLaterUserEditsAndUserSubtasks() throws {
+        let store = try store()
+        let taskA = try store.addTask(title: "Original A", category: "work")
+
+        // Agent batch: creates B, C, D and sets due date on A.
+        var taskB: DotistTask!
+        var taskC: DotistTask!
+        var taskD: DotistTask!
+        let agentPatch = try store.captureChanges { s in
+            let created = try s.addTasks([
+                .init(title: "AI B", category: "work"),
+                .init(title: "AI C", category: "work"),
+                .init(title: "AI D", category: "work"),
+            ])
+            taskB = created[0]
+            taskC = created[1]
+            taskD = created[2]
+            _ = try s.setDueDate(taskA.id, date: "2026-12-01")
+        }
+
+        // Later user edits:
+        // - Renames A (different field than agent's dueDate)
+        // - Edits B's title (modified an agent-created task)
+        // - Adds a user subtask under C (depends on agent-created parent C)
+        // - Leaves D untouched
+        _ = try store.patchTask(id: taskA.id, title: "User Edited A")
+        _ = try store.patchTask(id: taskB.id, title: "User Refined B")
+        let userSubtask = try store.addTask(title: "User Subtask", category: "work", parentId: taskC.id)
+
+        try store.applySelectiveUndo(of: agentPatch)
+
+        let remaining = try store.listTasks()
+        let byID = Dictionary(uniqueKeysWithValues: remaining.map { ($0.id, $0) })
+        // A keeps user title while agent dueDate is reverted.
+        XCTAssertEqual(byID[taskA.id]?.title, "User Edited A")
+        XCTAssertNil(byID[taskA.id]?.dueDate)
+        // B was edited by user -> preserved.
+        XCTAssertEqual(byID[taskB.id]?.title, "User Refined B")
+        // C is ancestor of user subtask -> preserved along with user subtask.
+        XCTAssertNotNil(byID[taskC.id])
+        XCTAssertEqual(byID[userSubtask.id]?.parentId, taskC.id)
+        // D was untouched by user -> removed.
+        XCTAssertNil(byID[taskD.id])
+    }
+
+    func testSelectiveAgentUndoOfDeleteGroupMigratesUserAddedSubtreeTogether() throws {
+        let store = try store()
+        let group = try store.addGroup(name: "Project X")
+        let parent = try store.addTask(title: "Parent", category: group.id)
+
+        // Agent deletes the group; parent migrates to inbox.
+        let deleteGroupPatch = try store.captureChanges { try $0.deleteGroup(group.id) }
+        XCTAssertEqual(try store.listTasks().first { $0.id == parent.id }?.category, DotistGroup.inboxID)
+
+        // User adds a subtask under the migrated parent while in inbox.
+        let child = try store.addTask(title: "User Child", category: DotistGroup.inboxID, parentId: parent.id)
+
+        // Selective undo restores group and moves both parent and user-added child back together.
+        try store.applySelectiveUndo(of: deleteGroupPatch)
+
+        XCTAssertTrue(try store.listGroups().contains { $0.id == group.id })
+        let tasks = try store.listTasks()
+        let restoredParent = try XCTUnwrap(tasks.first { $0.id == parent.id })
+        let restoredChild = try XCTUnwrap(tasks.first { $0.id == child.id })
+        XCTAssertEqual(restoredParent.category, group.id)
+        XCTAssertEqual(restoredChild.parentId, parent.id)
+        XCTAssertEqual(restoredChild.category, group.id)
+    }
+
+    func testSelectiveAgentUndoPreservesEarlierCompletionDateOnCompletedTask() throws {
+        let store = try store()
+        let task = try store.addTask(title: "Finished Yesterday", category: "work")
+        _ = try store.patchTask(id: task.id, completed: true)
+        let yesterdayStamp = "2026-11-26T09:00:00.000Z"
+        try store.database.write { db in
+            try db.execute(sql: "UPDATE tasks SET updated_at=? WHERE id=?", arguments: [yesterdayStamp, task.id])
+        }
+
+        // Agent edits only the title of the completed task.
+        let agentPatch = try store.captureChanges {
+            _ = try $0.patchTask(id: task.id, title: "AI Retitled")
+        }
+        // Restore yesterday's completion date on the DB row as if the task remained completed yesterday.
+        try store.database.write { db in
+            try db.execute(sql: "UPDATE tasks SET updated_at=? WHERE id=?", arguments: [yesterdayStamp, task.id])
+        }
+
+        try store.applySelectiveUndo(of: agentPatch)
+
+        let restored = try XCTUnwrap(try store.listTasks().first { $0.id == task.id })
+        XCTAssertEqual(restored.title, "Finished Yesterday")
+        XCTAssertTrue(restored.completed)
+        XCTAssertEqual(restored.updatedAt, yesterdayStamp)
+    }
 }
