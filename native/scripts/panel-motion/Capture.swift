@@ -374,7 +374,7 @@ private enum InstalledPanelCapture {
         try files.createDirectory(at: data, withIntermediateDirectories: false)
         try files.createDirectory(at: home.appendingPathComponent("Library/Preferences"), withIntermediateDirectories: true)
         let settings: [String: Any] = [
-            "theme": "light", "language": "zh-CN", "opacity": 82, "frost": 68,
+            "theme": "light", "language": "zh-CN", "panel_material": "regular",
             "window_width": 454, "window_height": 568, "always_on_top": true,
             "auto_check_updates": false, "auto_install_updates": false,
             "auto_collapse": false, "idle_fade": false, "hover_expand": true, "mcp_enabled": false

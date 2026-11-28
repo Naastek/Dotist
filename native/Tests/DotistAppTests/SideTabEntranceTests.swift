@@ -140,7 +140,7 @@ final class SideTabEntranceSamplingTests: XCTestCase {
                     XCTAssertEqual(rect.maxY, panel.maxY - 40 - CGFloat(index) * 40)
                     if inward {
                         let width = index == 1 ? SideTabGeometry.selectedWidth : SideTabGeometry.collapsedWidth
-                        let resting = max(-1000, panel.minX + ExpandedReadingMaterial.opticalClearance - width + 8 * (1 - values[index]))
+                        let resting = max(-1000, panel.minX + FloatingSurface.expandedOpticalClearance - width + 8 * (1 - values[index]))
                         let expanded = max(-1000, panel.minX - SideTabGeometry.collapsedWidth)
                         XCTAssertEqual(rect.minX, resting + (expanded - resting) * 0.3, accuracy: 0.000001)
                     } else {

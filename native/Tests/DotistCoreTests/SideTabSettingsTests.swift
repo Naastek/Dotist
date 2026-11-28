@@ -16,7 +16,7 @@ final class SideTabSettingsTests: XCTestCase {
             try legacy.write(to: path)
             let store = try SettingsStore(path: path)
             XCTAssertEqual(store.current().sideTabOpacity, 85)
-            XCTAssertEqual(store.current().opacity, 43)
+            XCTAssertEqual(store.current().resolvedPanelMaterial, .regular)
             XCTAssertEqual(try Data(contentsOf: path), legacy)
         }
     }
@@ -47,14 +47,16 @@ final class SideTabSettingsTests: XCTestCase {
                 patch.sideTabOpacity = input
                 let updated = try store.update(patch)
                 XCTAssertEqual(updated.sideTabOpacity, expected)
-                XCTAssertEqual(updated.opacity, 56)
+                XCTAssertEqual(updated.resolvedPanelMaterial, .regular)
                 XCTAssertEqual(try SettingsStore(path: path).current().sideTabOpacity, expected)
                 let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
                 XCTAssertEqual(object["side_tab_opacity"] as? Int, Int(expected))
                 XCTAssertNil(object["sideTabOpacity"])
+                XCTAssertNil(object["opacity"])
+                XCTAssertNil(object["frost"])
             }
             var unrelated = DotistSettingsPatch()
-            unrelated.opacity = 32
+            unrelated.panelMaterial = DotistPanelMaterial.clear.rawValue
             XCTAssertEqual(try store.update(unrelated).sideTabOpacity, 100)
         }
     }
@@ -92,7 +94,7 @@ final class SideTabSettingsTests: XCTestCase {
             XCTAssertEqual(try SettingsStore(path: path).current().resolvedPanelMaterial, .clear)
 
             // Legacy clear/ultra presets infer `.clear` without rewriting the file.
-            for legacyJSON in [#"{"opacity":38,"frost":22}"#, #"{"opacity":8,"frost":4}"#] {
+            for legacyJSON in [#"{"opacity":38,"frost":22}"#, #"{"opacity":8,"frost":4}"#, #"{"opacity":0,"frost":0}"#] {
                 let data = Data(legacyJSON.utf8)
                 try data.write(to: path)
                 let store = try SettingsStore(path: path)

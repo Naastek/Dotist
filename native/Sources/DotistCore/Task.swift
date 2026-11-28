@@ -167,10 +167,8 @@ public struct DotistSettings: Codable, Equatable, Sendable {
     public var resolvedPanelMaterial: DotistPanelMaterial {
         DotistPanelMaterial(rawValue: panelMaterial)
     }
-    public var opacity: UInt8
-    /// Background opacity of side tabs, independent of panel opacity (0...100).
+    /// Background opacity of side tabs (0...100).
     public var sideTabOpacity: UInt8 = 85
-    public var frost: UInt8
     public var toggleShortcut: String
     public var quickAddShortcut: String
     public var settingsShortcut: String
@@ -214,7 +212,7 @@ public struct DotistSettings: Codable, Equatable, Sendable {
 extension DotistSettings {
     private enum CodingKeys: String, CodingKey {
         case theme, language, fontSerifLatin, fontSansLatin, fontSerifCjk, fontSansCjk
-        case panelMaterial, opacity, sideTabOpacity, frost, toggleShortcut, quickAddShortcut, settingsShortcut, viewsShortcut, searchShortcut, shortcutScopes
+        case panelMaterial, sideTabOpacity, toggleShortcut, quickAddShortcut, settingsShortcut, viewsShortcut, searchShortcut, shortcutScopes
         case trayMode, trayRotateSecs, trayLeftClick, trayRightClick
         case alwaysOnTop, hoverExpand, showDock, showMenubar, idleFade, locked
         case hoverPreviewTaskId
@@ -232,9 +230,7 @@ extension DotistSettings {
         fontSansLatin = try values.decodeIfPresent(String.self, forKey: .fontSansLatin)
         fontSerifCjk = try values.decodeIfPresent(String.self, forKey: .fontSerifCjk)
         fontSansCjk = try values.decodeIfPresent(String.self, forKey: .fontSansCjk)
-        opacity = try values.decode(UInt8.self, forKey: .opacity)
         sideTabOpacity = try values.decodeIfPresent(UInt8.self, forKey: .sideTabOpacity) ?? 85
-        frost = try values.decode(UInt8.self, forKey: .frost)
         panelMaterial = try values.decodeIfPresent(String.self, forKey: .panelMaterial) ?? DotistPanelMaterial.defaultValue.rawValue
         toggleShortcut = try values.decode(String.self, forKey: .toggleShortcut)
         quickAddShortcut = try values.decode(String.self, forKey: .quickAddShortcut)
@@ -283,9 +279,7 @@ public struct DotistSettingsPatch: Encodable, Sendable {
     public var fontSerifCjk: String?
     public var fontSansCjk: String?
     public var panelMaterial: String?
-    public var opacity: UInt8?
     public var sideTabOpacity: UInt8?
-    public var frost: UInt8?
     public var alwaysOnTop: Bool?
     public var hoverExpand: Bool?
     /// A task ID selects a preview, an empty string clears it, and nil leaves it unchanged.

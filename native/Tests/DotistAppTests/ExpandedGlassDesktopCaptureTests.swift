@@ -143,17 +143,14 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
         let variant: Variant
         let scheme: ColorScheme
         var body: some View {
-            let clearance = ExpandedReadingMaterial.opticalClearance
+            let clearance = FloatingSurface.expandedOpticalClearance
             let radius = DotistDesign.windowCornerRadius - clearance
             let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
             let amount = 0.8
             let backdrop = FloatingGlassBackdrop()
                 .overlay(shape.fill(DotistTheme.tint(.pink, scheme)))
                 .clipShape(shape)
-            let background = ZStack {
-                backdrop
-                ExpandedReadingMaterial(opacity: 80, frost: 40, color: .pink, scheme: scheme, cornerRadius: radius)
-            }.padding(clearance)
+            let background = backdrop.padding(clearance)
             ZStack {
                 if variant == .focusNativeOnly {
                     backdrop.padding(clearance)
@@ -163,7 +160,8 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
                     } else {
                         background.mask {
                             Color.white.overlay {
-                                ExpandedReadingMaterial.interiorMask(cornerRadius: radius)
+                                shape.inset(by: 0.75).fill(.white).blur(radius: 0.45)
+                                    .clipShape(shape.inset(by: 0.5))
                                     .padding(clearance).opacity(1 - amount).blendMode(.destinationOut)
                             }.compositingGroup()
                         }
@@ -203,7 +201,7 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
             Color.clear.glassEffect(.regular.tint(DotistTheme.tint(.pink, scheme)), in: shape)
                 .overlay {
                     DotistDesign.paper.opacity(0.8)
-                        .overlay(DotistDesign.paper.opacity(0.4 * GlassTintMaterial.expandedFrostScale))
+                        .overlay(DotistDesign.paper.opacity(0.4 * 0.12))
                 }
                 .overlay(DotistTheme.swatch(.pink).opacity(scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint))
                 .overlay { GlassEdge(cornerRadius: DotistDesign.windowCornerRadius, scheme: scheme) }
@@ -292,7 +290,7 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
                 .overlay {
                     if variant.overlays {
                         DotistDesign.paper.opacity(0.8)
-                            .overlay(DotistDesign.paper.opacity(0.4 * GlassTintMaterial.expandedFrostScale))
+                            .overlay(DotistDesign.paper.opacity(0.4 * 0.12))
                     }
                 }
                 .overlay {

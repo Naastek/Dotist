@@ -23,17 +23,17 @@ final class TaskStoreTests: XCTestCase {
     func testNativeStoreRetainsTaskSemantics() throws {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("dotist-swift-bridge-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try Data(#"{"theme":"dark","opacity":0,"window_width":100,"window_height":1000}"#.utf8).write(to: directory.appendingPathComponent("settings.json"))
+        try Data(#"{"theme":"dark","opacity":0,"frost":0,"window_width":100,"window_height":1000}"#.utf8).write(to: directory.appendingPathComponent("settings.json"))
         let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
         XCTAssertEqual(try store.settings().theme, "dark")
-        XCTAssertEqual(try store.settings().opacity, 0)
+        XCTAssertEqual(try store.settings().resolvedPanelMaterial, .clear)
         XCTAssertEqual(try store.settings().windowWidth, 320)
         var patch = DotistSettingsPatch()
         patch.theme = "light"
-        patch.opacity = 99
+        patch.panelMaterial = DotistPanelMaterial.regular.rawValue
         let updated = try store.updateSettings(patch)
         XCTAssertEqual(updated.theme, "light")
-        XCTAssertEqual(updated.opacity, 99)
+        XCTAssertEqual(updated.resolvedPanelMaterial, .regular)
         XCTAssertEqual(try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path).settings(), updated)
         patch.theme = "invalid"
         XCTAssertThrowsError(try store.updateSettings(patch))

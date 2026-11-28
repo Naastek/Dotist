@@ -213,7 +213,7 @@ final class SideTabAppearanceTests: XCTestCase {
                     let tabs = try XCTUnwrap(SideTabsSnapshot.render(names: ["全部", "Work projects 工作计划"], language: "zh-CN",
                         scheme: scheme, inward: inward, expanded: expanded, opacity: 100, color: { _ in .teal }))
                     let panelX: CGFloat = 220
-                    let clearance = ExpandedReadingMaterial.opticalClearance
+                    let clearance = FloatingSurface.expandedOpticalClearance
                     let canvas = ZStack(alignment: .topLeading) {
                         Color.clear.zIndex(-2)
                         RoundedRectangle(cornerRadius: 20).fill(scheme == .dark ? Color(white: 0.2) : Color(white: 0.97))

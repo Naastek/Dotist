@@ -279,7 +279,7 @@ final class PanelMotion: ObservableObject {
 
     private func prepareSurfaceTransition(compact: Bool) {
         // Both compact (FloatingSurface outer padding) and expanded
-        // (ExpandedReadingMaterial.opticalClearance) share the same 2pt optical
+        // (FloatingSurface.expandedOpticalClearance) share the same 2pt optical
         // clearance in normal mode and 0pt in accessibility solid mode. Switch
         // surfaceInsets immediately with `compact` so total visible clearance
         // never double-pads (4pt) on expand or drops to 0pt on collapse.

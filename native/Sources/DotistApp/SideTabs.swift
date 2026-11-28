@@ -16,7 +16,7 @@ enum SideTabGeometry {
     static let collapseDelay = 0.12
     static let shadowInset: CGFloat = 0
     // Reach past the glass clearance and cover the composited window edge.
-    static let connectionOverlap = ExpandedReadingMaterial.opticalClearance + 1
+    static let connectionOverlap = FloatingSurface.expandedOpticalClearance + 1
     static var stride: CGFloat { height + spacing }
 
     static let modeHysteresis: CGFloat = 80
@@ -60,7 +60,7 @@ enum SideTabGeometry {
                          bridgesOpticalClearance: Bool = true) -> Snapshot {
         let progress = min(1, max(0, progress))
         let opacities = fullWidths.indices.map { Double(min(1, max(0, entrance?[$0] ?? 1))) }
-        let clearance = bridgesOpticalClearance ? ExpandedReadingMaterial.opticalClearance : 0
+        let clearance = bridgesOpticalClearance ? FloatingSurface.expandedOpticalClearance : 0
         let overlap = bridgesOpticalClearance ? connectionOverlap : 0
         let restingExtension = overlap - clearance
         let tabs = fullWidths.enumerated().map { index, fullWidth in
@@ -699,7 +699,7 @@ final class SideTabsController: NSObject {
         let path = CGMutablePath()
         path.addRect(content.bounds)
         let clearance = CGPath(rect: CGRect(x: 0, y: 0,
-            width: ExpandedReadingMaterial.opticalClearance, height: content.bounds.height), transform: nil)
+            width: FloatingSurface.expandedOpticalClearance, height: content.bounds.height), transform: nil)
         for rect in rects {
             let silhouette = SideTabShape(inwardProgress: 0).path(in: rect).cgPath
             path.addPath(silhouette.intersection(clearance))

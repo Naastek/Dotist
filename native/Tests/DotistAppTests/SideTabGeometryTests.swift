@@ -22,7 +22,7 @@ final class SideTabGeometryTests: XCTestCase {
     }
     func testRestingEarsKeepTheirVisibleWidthsAndBridgeTheGlassEdge() {
         let panel = CGRect(x: 24, y: 100, width: 364, height: 620)
-        let glassEdge = panel.minX + ExpandedReadingMaterial.opticalClearance
+        let glassEdge = panel.minX + FloatingSurface.expandedOpticalClearance
         for inward in [false, true] {
             let sample = SideTabGeometry.snapshot(panel: panel, fullWidths: [54, 70],
                 progress: 0, inward: inward, visibleMinX: 0, selectedIndex: 0)
@@ -652,8 +652,8 @@ final class SideTabWindowSynchronizationTests: XCTestCase {
         for room: CGFloat in [4, 10, 40] {
             parent.setFrameOrigin(CGPoint(x: area.minX + room, y: parent.frame.minY))
             moveMouse(outside)
-            XCTAssertEqual(child.frame.minX, max(area.minX, parent.frame.minX + ExpandedReadingMaterial.opticalClearance - SideTabGeometry.selectedWidth), accuracy: 0.001)
-            if room + ExpandedReadingMaterial.opticalClearance < SideTabGeometry.selectedWidth {
+            XCTAssertEqual(child.frame.minX, max(area.minX, parent.frame.minX + FloatingSurface.expandedOpticalClearance - SideTabGeometry.selectedWidth), accuracy: 0.001)
+            if room + FloatingSurface.expandedOpticalClearance < SideTabGeometry.selectedWidth {
                 try assertOrderedAbove(child, parent)
                 XCTAssertNotNil(parent.contentView?.layer?.mask)
             } else {

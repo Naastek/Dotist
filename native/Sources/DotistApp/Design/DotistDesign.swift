@@ -38,11 +38,6 @@ enum DotistDesign {
             ? NSColor.white.withAlphaComponent(0.10) : NSColor.white.withAlphaComponent(0.68)
     })
 
-    static func materialOpacity(_ opacity: UInt8, dark: Bool, highContrast: Bool) -> Double {
-        let requested = Double(opacity) / 100
-        return highContrast ? max(requested, 0.96) : requested
-    }
-
     private static func rgb(_ hex: Int) -> NSColor {
         NSColor(srgbRed: CGFloat((hex >> 16) & 255) / 255, green: CGFloat((hex >> 8) & 255) / 255, blue: CGFloat(hex & 255) / 255, alpha: 1)
     }

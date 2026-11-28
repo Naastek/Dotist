@@ -13,7 +13,7 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
         let id: String
         let size: CGSize
         let compact: Bool
-        var radius: CGFloat { compact ? 24 : DotistDesign.windowCornerRadius - ExpandedReadingMaterial.opticalClearance }
+        var radius: CGFloat { compact ? 24 : DotistDesign.windowCornerRadius - FloatingSurface.expandedOpticalClearance }
     }
 
     private let forms = [
@@ -185,8 +185,7 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
         for (schemeName, scheme, appearanceName) in schemes {
             var patch = DotistSettingsPatch()
             patch.theme = schemeName
-            patch.opacity = ProcessInfo.processInfo.environment["DOTIST_CAPTURE_OPACITY"].flatMap(UInt8.init) ?? 80
-            patch.frost = ProcessInfo.processInfo.environment["DOTIST_CAPTURE_FROST"].flatMap(UInt8.init) ?? 40
+            patch.panelMaterial = ProcessInfo.processInfo.environment["DOTIST_CAPTURE_MATERIAL"] ?? DotistPanelMaterial.regular.rawValue
             patch.alwaysOnTop = true
             model.updateSettings(patch)
 
@@ -491,15 +490,10 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
 
             if ProcessInfo.processInfo.environment["DOTIST_GLASS_LAYER_PROBE"] == "1" {
                 panel.setFrame(NSRect(origin: cardOrigin, size: cardSize), display: true)
-                let radius = DotistDesign.windowCornerRadius - ExpandedReadingMaterial.opticalClearance
+                let radius = DotistDesign.windowCornerRadius - FloatingSurface.expandedOpticalClearance
                 let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-                let amount = Double(model.settings.opacity) / 100
-                let reading = ExpandedReadingMaterial(opacity: model.settings.opacity, frost: model.settings.frost,
-                    color: .none, scheme: scheme, cornerRadius: radius)
                 let specimens: [(String, AnyView)] = [
-                    ("bare-material", AnyView(FloatingGlassBackdrop().clipShape(shape))),
-                    ("masked-material", AnyView(FloatingGlassBackdrop().clipShape(shape).opacity(amount))),
-                    ("reading-only", AnyView(reading.compositingGroup().opacity(amount)))
+                    ("bare-material", AnyView(FloatingGlassBackdrop().clipShape(shape)))
                 ]
                 for (label, specimen) in specimens {
                     let probeHost = NSHostingView(rootView: specimen
@@ -564,8 +558,7 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
         let model = try AppModel(store: store)
         var patch = DotistSettingsPatch()
         patch.theme = "light"
-        patch.opacity = UInt8(ProcessInfo.processInfo.environment["DOTIST_CAPTURE_OPACITY"].flatMap(Int.init) ?? 100)
-        patch.frost = UInt8(ProcessInfo.processInfo.environment["DOTIST_CAPTURE_FROST"].flatMap(Int.init) ?? 31)
+        patch.panelMaterial = ProcessInfo.processInfo.environment["DOTIST_CAPTURE_MATERIAL"] ?? DotistPanelMaterial.regular.rawValue
         patch.alwaysOnTop = true
         model.updateSettings(patch)
         DotistDesign.registerFonts()
@@ -805,7 +798,7 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dbDir) }
 
         let store = try TaskStore(databasePath: dbDir.appendingPathComponent("tasks.sqlite").path)
-        _ = try store.addTask(title: "校准主表面透明度全量程遮底")
+        _ = try store.addTask(title: "校准两档原生玻璃材质通透度")
         _ = try store.addTask(title: "验证高透明与高磨砂正交响应")
         _ = try store.addTask(title: "检查密集文字与彩色底边缘光感")
         let model = try AppModel(store: store)

@@ -9,9 +9,7 @@ final class SettingsStore: @unchecked Sendable {
     private static let defaults = DotistSettings(
         theme: "system",
         language: "system",
-        opacity: 56,
         sideTabOpacity: 85,
-        frost: 35,
         toggleShortcut: "CommandOrControl+Alt+D",
         quickAddShortcut: "CommandOrControl+Alt+N",
         settingsShortcut: "Command+Comma",
@@ -58,7 +56,9 @@ final class SettingsStore: @unchecked Sendable {
         value = try decoder.decode(DotistSettings.self, from: JSONSerialization.data(withJSONObject: defaults.merging(stored) { _, new in new }))
         let hasStoredPanelMaterial = (stored["panel_material"] as? String).map { !$0.isEmpty } ?? false
         if !hasStoredPanelMaterial && (stored["opacity"] != nil || stored["frost"] != nil) {
-            value.panelMaterial = DotistPanelMaterial.inferredFromLegacy(opacity: value.opacity, frost: value.frost).rawValue
+            let legacyOpacity = Self.legacyPercent(stored["opacity"], fallback: 56)
+            let legacyFrost = Self.legacyPercent(stored["frost"], fallback: 35)
+            value.panelMaterial = DotistPanelMaterial.inferredFromLegacy(opacity: legacyOpacity, frost: legacyFrost).rawValue
         }
         // Loading must not turn previously accepted explicit aliases into a
         // startup failure, or silently change an explicitly stored binding.
@@ -78,9 +78,7 @@ final class SettingsStore: @unchecked Sendable {
         if let value = patch.fontSerifCjk { next.fontSerifCjk = value }
         if let value = patch.fontSansCjk { next.fontSansCjk = value }
         if let value = patch.panelMaterial { next.panelMaterial = value }
-        if let value = patch.opacity { next.opacity = value }
         if let value = patch.sideTabOpacity { next.sideTabOpacity = value }
-        if let value = patch.frost { next.frost = value }
         if let value = patch.alwaysOnTop { next.alwaysOnTop = value }
         if let value = patch.hoverExpand { next.hoverExpand = value }
         if let value = patch.hoverPreviewTaskId { next.hoverPreviewTaskId = value.isEmpty ? nil : value }
@@ -184,9 +182,7 @@ final class SettingsStore: @unchecked Sendable {
         if validateShortcuts, DotistShortcutIdentity.hasDuplicates(in: shortcuts) {
             throw TaskStoreError("不同的动作不能使用同一个快捷键")
         }
-        next.opacity = min(next.opacity, 100)
         next.sideTabOpacity = min(next.sideTabOpacity, 100)
-        next.frost = min(next.frost, 100)
         next.idleOpacity = min(max(next.idleOpacity, 20), 100)
         next.idleDelaySecs = min(max(next.idleDelaySecs, 1), 60)
         next.idleFadeSecs = min(max(next.idleFadeSecs, 1), 10)
@@ -199,5 +195,10 @@ final class SettingsStore: @unchecked Sendable {
         if next.filters.isEmpty { next.filters = filterIDs }
         if !next.autoCheckUpdates { next.autoInstallUpdates = false }
         return next
+    }
+
+    private static func legacyPercent(_ raw: Any?, fallback: UInt8) -> UInt8 {
+        guard let number = raw as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return fallback }
+        return UInt8(min(100, max(0, number.intValue)))
     }
 }

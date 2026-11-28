@@ -108,7 +108,7 @@ final class BubbleContentTests: XCTestCase {
 
         let reopened = try TaskStore(databasePath: store.databasePath())
         let reopenedModel = try AppModel(store: reopened)
-        XCTAssertEqual(reopenedModel.settings.opacity, 60)
+        XCTAssertEqual(reopenedModel.settings.resolvedPanelMaterial, .regular)
         XCTAssertEqual(BubbleContent(model: reopenedModel).task?.id, selected.id)
         XCTAssertEqual(BubbleContent(model: reopenedModel, groupID: "work").task?.id, selected.id)
         XCTAssertEqual(BubbleContent(model: reopenedModel, groupID: DotistGroup.inboxID).task?.id, first.id)

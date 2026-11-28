@@ -8,7 +8,6 @@ enum GlassTintMaterial {
     static let compactTintScale = 1.0 / 3
     static let expandedLightTint = 0.16
     static let expandedDarkTint = 0.18
-    static let expandedFrostScale = 0.12
     static let tabUnselectedTint = 0.06
     static let tabSelectedTint = 0.30
     static let tabHighContrastSelectedTint = 0.42
@@ -28,7 +27,7 @@ enum GlassTintMaterial {
 }
 
 /// One native optical surface for small floating controls and lifted content.
-/// Window tint density and frost preferences belong to the expanded reading surface; they
+/// Expanded panel material preferences belong to the main panel surface; they
 /// must not be stacked over transient glass or fade its contrast and light edge.
 struct TransientGlassSurface: View {
     let cornerRadius: CGFloat
@@ -164,36 +163,6 @@ struct GlassContour: View {
         shape.strokeBorder(contour, lineWidth: 0.5)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
-    }
-}
-
-/// Overlapping exterior strokes give the shadow one outward falloff.
-struct CompactGlassLiftShadow: View {
-    let cornerRadius: CGFloat
-    let scheme: ColorScheme
-
-    var body: some View {
-        let strength = scheme == .dark ? 0.055 : 0.028
-        let shade = LinearGradient(stops: [
-            .init(color: .clear, location: 0),
-            .init(color: .clear, location: 0.32),
-            .init(color: .black.opacity(strength * 0.35), location: 0.72),
-            .init(color: .black.opacity(strength), location: 1)
-        ], startPoint: .top, endPoint: .bottom)
-        ZStack {
-            shadowBand(shade, reach: 1.75).opacity(0.35)
-            shadowBand(shade, reach: 1.15).opacity(0.65)
-            shadowBand(shade, reach: 0.65)
-        }
-        .offset(y: 0.2)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
-    private func shadowBand(_ shade: LinearGradient, reach: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: cornerRadius + reach, style: .continuous)
-            .strokeBorder(shade, lineWidth: reach)
-            .padding(-reach)
     }
 }
 

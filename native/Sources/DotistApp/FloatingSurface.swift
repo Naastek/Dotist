@@ -5,6 +5,7 @@ import SwiftUI
 
 struct FloatingSurface: View, Animatable {
     static let compactOpticalInset: CGFloat = 2
+    static let expandedOpticalClearance: CGFloat = 2
     static func opticalInsets(compact: Bool, reduceTransparency: Bool, increasedContrast: Bool,
                               frameInsets: EdgeInsets? = nil) -> EdgeInsets {
         let inset = compact && !reduceTransparency && !increasedContrast ? compactOpticalInset : 0
@@ -20,7 +21,7 @@ struct FloatingSurface: View, Animatable {
                                    frameInsets: EdgeInsets? = nil) -> EdgeInsets {
         let outer = opticalInsets(compact: compact, reduceTransparency: reduceTransparency,
                                   increasedContrast: increasedContrast, frameInsets: frameInsets)
-        let inner = (!compact && !reduceTransparency && !increasedContrast) ? ExpandedReadingMaterial.opticalClearance : 0
+        let inner = (!compact && !reduceTransparency && !increasedContrast) ? expandedOpticalClearance : 0
         return EdgeInsets(top: outer.top + inner, leading: outer.leading + inner,
                           bottom: outer.bottom + inner, trailing: outer.trailing + inner)
     }
@@ -49,7 +50,7 @@ struct FloatingSurface: View, Animatable {
     }
 
     static func glassCornerRadius(for size: CGSize, compact: Bool, transitioning: Bool, solid: Bool) -> CGFloat {
-        let expandedRadius = solid ? DotistDesign.windowCornerRadius : DotistDesign.windowCornerRadius - ExpandedReadingMaterial.opticalClearance
+        let expandedRadius = solid ? DotistDesign.windowCornerRadius : DotistDesign.windowCornerRadius - expandedOpticalClearance
         if transitioning {
             let t = min(1, max(0, (min(size.width, size.height) - 48) / 80))
             return 24 + (expandedRadius - 24) * t
@@ -139,7 +140,7 @@ struct FloatingPanelSurface: View {
         } else if compact, let glassDebug {
             GlassDebugOpticalSurface(parameters: glassDebug, color: color, scheme: scheme)
         } else {
-            let inset: CGFloat = compact ? 0 : ExpandedReadingMaterial.opticalClearance
+            let inset: CGFloat = compact ? 0 : FloatingSurface.expandedOpticalClearance
             let radius = cornerRadius ?? (compact ? 24 : DotistDesign.windowCornerRadius - inset)
             NativeFloatingGlass(cornerRadius: radius, compact: compact, material: material, color: color, scheme: scheme)
                 .overlay {
@@ -383,62 +384,6 @@ private struct NativeFloatingGlass: NSViewRepresentable {
         view.material = material
         view.groupColor = color
         view.updateAppearance()
-    }
-}
-
-private struct GlassInteriorPaint<S: Shape>: View {
-    let opacity: UInt8
-    let frost: UInt8
-    let color: DotistGroupColor
-    let scheme: ColorScheme
-    let shape: S
-    var amount: Double = 1
-
-    var body: some View {
-        let pigment = GlassTintMaterial.neutral(scheme)
-        shape.fill(pigment.opacity(DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false) * amount))
-            .overlay(shape.fill(pigment.opacity(Double(frost) / 100 * GlassTintMaterial.expandedFrostScale * amount)))
-            .overlay(shape.fill(DotistTheme.swatch(color).opacity((scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint) * amount)))
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-    }
-}
-
-/// A readable interior inside the native optical band. Tight 0.75pt feather
-/// eliminates the double-rimmed moat at the top-right corner while keeping the
-/// outer 0.5pt hairline contour clear of reading pigment.
-struct ExpandedReadingMaterial: View {
-    static let opticalClearance: CGFloat = 2
-    private let rimInset: CGFloat = 0.75
-    let opacity: UInt8
-    let frost: UInt8
-    let color: DotistGroupColor
-    let scheme: ColorScheme
-    let cornerRadius: CGFloat
-
-    static func interiorMask(cornerRadius: CGFloat, inset: CGFloat = 0.75) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        // Confine the feather too: keep the outer 0.5pt hairline free of paint.
-        return shape.inset(by: inset).fill(.white).blur(radius: 0.45)
-            .clipShape(shape.inset(by: 0.5))
-    }
-
-    var body: some View {
-        paint(backgroundOpacity: 1)
-    }
-
-    /// Legacy full-background opacity multiplies every paint plane. Applying it
-    /// after the shaped mask would flatten those planes first and change density.
-    func applyingBackgroundOpacity(_ amount: Double) -> some View {
-        paint(backgroundOpacity: amount)
-    }
-
-    private func paint(backgroundOpacity amount: Double) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        return GlassInteriorPaint(opacity: opacity, frost: frost, color: color, scheme: scheme, shape: shape, amount: amount)
-            .mask {
-                Self.interiorMask(cornerRadius: cornerRadius, inset: rimInset)
-            }
     }
 }
 

@@ -175,13 +175,12 @@ final class GlassEdgePolishTests: XCTestCase {
         let size = CGSize(width: 364, height: 620)
         let shape = RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius, style: .continuous)
         for scheme in [ColorScheme.light, .dark] {
-            let amount = DotistDesign.materialOpacity(100, dark: scheme == .dark, highContrast: false)
             // b079d6a expanded production composition at full opacity, without the new edge.
             let control = Color.clear.glassEffect(.regular.tint(DotistTheme.tint(.orange, scheme)), in: shape)
-                .overlay(DotistDesign.paper.opacity(amount)
-                    .overlay(DotistDesign.paper.opacity(0.4 * GlassTintMaterial.expandedFrostScale)))
+                .overlay(DotistDesign.paper.opacity(1.0)
+                    .overlay(DotistDesign.paper.opacity(0.4 * 0.12)))
                 .overlay(DotistTheme.swatch(.orange).opacity(scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint))
-                .opacity(amount).clipShape(shape)
+                .clipShape(shape)
                 .frame(width: size.width, height: size.height).environment(\.colorScheme, scheme)
             let actual = FloatingPanelSurface(material: .regular, compact: false,
                 color: .orange, solid: false, scheme: scheme)
@@ -198,11 +197,10 @@ final class GlassEdgePolishTests: XCTestCase {
 
     func testExpandedEdgeObeysOpacityEndpointsWithoutNativeGlass() throws {
         for scheme in [ColorScheme.light, .dark] {
-            for opacity in [UInt8(0), 100] {
-                let amount = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
+            for amount in [0.0, 1.0] {
                 let edge = GlassEdge(cornerRadius: DotistDesign.windowCornerRadius, scheme: scheme)
                     .frame(width: 364, height: 620).opacity(amount)
-                try logRendererMetadata(edge, label: "edge-\(scheme)-\(opacity)")
+                try logRendererMetadata(edge, label: "edge-\(scheme)-\(Int(amount * 100))")
                 let image = try fixedBitmap(edge, size: CGSize(width: 364, height: 620))
                 var peak: CGFloat = 0
                 for y in 0..<8 {
@@ -210,7 +208,7 @@ final class GlassEdgePolishTests: XCTestCase {
                         peak = max(peak, try sample(image, x: x, y: y).alphaComponent)
                     }
                 }
-                if opacity == 0 { XCTAssertLessThan(peak, 0.01, "The controlled edge must disappear at zero opacity") }
+                if amount == 0 { XCTAssertLessThan(peak, 0.01, "The controlled edge must disappear at zero opacity") }
                 else { XCTAssertGreaterThan(peak, 0.1, "The controlled edge must be visible at full opacity") }
             }
         }

@@ -52,51 +52,6 @@ final class ExpandedGlassMaterialTests: XCTestCase {
         }
     }
 
-    func testExpandedInteriorRetainsDensityFrostAndTint() throws {
-        let size = CGSize(width: 260, height: 140)
-        for scheme in [ColorScheme.light, .dark] {
-            // Resolve the real production reading layer independently: native
-            // glass may already return alpha 1 on a rendering-capable host.
-            func center(_ opacity: UInt8, _ frost: UInt8, _ color: DotistGroupColor = .pink, composite: Bool = false) throws -> NSColor {
-                let image = try bitmap(ZStack {
-                    if composite { Color(red: 0.12, green: 0.32, blue: 0.58) }
-                    ExpandedReadingMaterial(opacity: opacity, frost: frost, color: color, scheme: scheme, cornerRadius: 18)
-                }, size: size, scheme: scheme)
-                if !composite {
-                    XCTAssertEqual(try XCTUnwrap(image.colorAt(x: 260, y: 0)).alphaComponent, 0,
-                        "Reading paint must leave the native optical band clear")
-                    XCTAssertEqual(try XCTUnwrap(image.colorAt(x: 0, y: 0)).alphaComponent, 0,
-                        "Reading layers must not create a rectangular plate")
-                }
-                return try XCTUnwrap(image.colorAt(x: 260, y: 140))
-            }
-            // Independent source-over formula catches ignored/clamped inputs,
-            // omitted frost/tint, or an accidental extra whole-layer fade.
-            for (opacity, frost): (UInt8, UInt8) in [(20, 0), (20, 100), (80, 40), (100, 100)] {
-                let expected = 1 - (1 - Double(opacity) / 100) * (1 - Double(frost) / 100 * 0.12) * (1 - (scheme == .dark ? 0.18 : 0.16))
-                XCTAssertEqual(try center(opacity, frost).alphaComponent, CGFloat(expected), accuracy: 2.0 / 255)
-            }
-            XCTAssertGreaterThan(try center(80, 40).alphaComponent, 0.8, "80/40 must retain the reading backing")
-            XCTAssertGreaterThan(try center(80, 40).alphaComponent, try center(20, 40).alphaComponent + 0.2)
-            XCTAssertGreaterThan(try center(20, 100).alphaComponent, try center(20, 0).alphaComponent + 0.04)
-            let pink = try XCTUnwrap(center(80, 40).usingColorSpace(.deviceRGB))
-            let neutral = try XCTUnwrap(center(80, 40, .none).usingColorSpace(.deviceRGB))
-            XCTAssertGreaterThan(abs(pink.redComponent - neutral.redComponent)
-                + abs(pink.greenComponent - neutral.greenComponent), 0.01)
-
-            func rgbDistance(_ a: NSColor, _ b: NSColor) throws -> CGFloat {
-                let a = try XCTUnwrap(a.usingColorSpace(.deviceRGB)), b = try XCTUnwrap(b.usingColorSpace(.deviceRGB))
-                XCTAssertEqual(a.alphaComponent, 1); XCTAssertEqual(b.alphaComponent, 1)
-                return abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent) + abs(a.blueComponent - b.blueComponent)
-            }
-            // RGB must still change when destination alpha is saturated. The
-            // guarded desktop fixture separately checks the full native surface.
-            XCTAssertGreaterThan(try rgbDistance(center(20, 40, composite: true), center(80, 40, composite: true)), 0.1)
-            XCTAssertGreaterThan(try rgbDistance(center(20, 0, composite: true), center(20, 100, composite: true)), 0.02)
-            XCTAssertGreaterThan(try rgbDistance(center(80, 40, composite: true), center(80, 40, .none, composite: true)), 0.01)
-        }
-    }
-
     /// An independent plain silhouette supplies the raster allowance. Any alpha
     /// beyond its one-pixel neighborhood is a real exterior plate, not rounding.
     private func exteriorAlpha(_ image: NSBitmapImageRep, size: CGSize, compact: Bool, transitioning: Bool = false, scale: CGFloat) throws -> CGFloat {

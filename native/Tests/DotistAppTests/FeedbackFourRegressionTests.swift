@@ -23,7 +23,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
         let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
         var patch = DotistSettingsPatch()
         patch.language = language
-        patch.opacity = 4; patch.frost = 0; patch.sideTabOpacity = 100; patch.idleOpacity = 77
+        patch.panelMaterial = DotistPanelMaterial.clear.rawValue; patch.sideTabOpacity = 100; patch.idleOpacity = 77
         patch.fontSerifLatin = system ? "system" : "source-serif-4"
         patch.fontSansLatin = system ? "system" : "atkinson-next"
         patch.fontSerifCjk = system ? "system" : "noto-serif"
@@ -643,20 +643,13 @@ final class FeedbackFourRegressionTests: XCTestCase {
         XCTAssertEqual(DotistTransparency.value(opacity: 100), 0)
         XCTAssertEqual(DotistTransparency.opacity(value: 100), 0)
         let model = try model()
-        var patch = DotistSettingsPatch(); patch.opacity = 4; patch.sideTabOpacity = 100; patch.idleOpacity = 77
+        var patch = DotistSettingsPatch(); patch.sideTabOpacity = 100; patch.idleOpacity = 77
         _ = try model.core.updateSettings(patch)
         let settings = try model.core.settings()
-        XCTAssertEqual(settings.opacity, 4); XCTAssertEqual(settings.sideTabOpacity, 100); XCTAssertEqual(settings.idleOpacity, 77)
-        patch.opacity = 0; patch.sideTabOpacity = 0; patch.idleOpacity = 100
+        XCTAssertEqual(settings.sideTabOpacity, 100); XCTAssertEqual(settings.idleOpacity, 77)
+        patch.sideTabOpacity = 0; patch.idleOpacity = 100
         let extended = try model.core.updateSettings(patch)
-        XCTAssertEqual(extended.opacity, 0); XCTAssertEqual(extended.sideTabOpacity, 0); XCTAssertEqual(extended.idleOpacity, 100)
-    }
-    func testMaterialOpacityHasNoDarkAlphaFloor() {
-        for dark in [false, true] {
-            XCTAssertLessThan(DotistDesign.materialOpacity(4, dark: dark, highContrast: false), 0.06)
-            XCTAssertGreaterThan(DotistDesign.materialOpacity(95, dark: dark, highContrast: false), 0.9)
-            XCTAssertGreaterThanOrEqual(DotistDesign.materialOpacity(4, dark: dark, highContrast: true), 0.96)
-        }
+        XCTAssertEqual(extended.sideTabOpacity, 0); XCTAssertEqual(extended.idleOpacity, 100)
     }
 }
 

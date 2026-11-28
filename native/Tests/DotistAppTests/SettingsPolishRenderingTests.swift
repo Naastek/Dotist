@@ -128,7 +128,7 @@ final class SettingsPolishRenderingTests: XCTestCase {
                 }
                 let first = try XCTUnwrap(painted.first)
                 let last = try XCTUnwrap(painted.last)
-                let hiddenOverlap = SideTabGeometry.connectionOverlap - ExpandedReadingMaterial.opticalClearance
+                let hiddenOverlap = SideTabGeometry.connectionOverlap - FloatingSurface.expandedOpticalClearance
                 let visibleWidth = production.tabs[index].width - hiddenOverlap
                 XCTAssertEqual(rect.width, visibleWidth, accuracy: 0.001)
                 XCTAssertEqual(CGFloat(last - first + 1) / scale, visibleWidth, accuracy: 1.5,
