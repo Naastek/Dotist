@@ -92,6 +92,10 @@ extension VerticalAlignment {
         measure(Image(systemName: name).font(.system(size: size, weight: weight)).imageScale(.medium),
                 key: "symbol|\(name)|\(size)|\(weight)")
     }
+    static func svgIcon(_ name: String, size: CGFloat) -> Measurement {
+        measure(SVGIconView(name: name, size: size),
+                key: "svg|\(name)|\(size)")
+    }
 }
 
 /// The visual correction stays inside the original layout and hit-test box.
@@ -125,6 +129,16 @@ struct OpticalSymbol: View {
     var body: some View {
         Image(systemName: name).font(.system(size: size, weight: weight)).imageScale(.medium)
             .offset(y: OpticalMetrics.symbol(name, size: size, weight: weight).correction)
+            .alignmentGuide(.opticalCenter) { $0[VerticalAlignment.center] }
+    }
+}
+
+struct OpticalSVGIcon: View {
+    let name: String
+    var size: CGFloat = 15
+    var body: some View {
+        SVGIconView(name: name, size: size)
+            .offset(y: OpticalMetrics.svgIcon(name, size: size).correction)
             .alignmentGuide(.opticalCenter) { $0[VerticalAlignment.center] }
     }
 }

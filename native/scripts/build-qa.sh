@@ -8,6 +8,12 @@ for resource in locales.json native-locales.json; do
     exit 1
   fi
 done
+for module in appearance general filters menubar toolbar shortcuts mcp data about; do
+  if [[ ! -f "native/Sources/DotistApp/Resources/settings-$module.svg" ]]; then
+    printf 'Missing required settings sidebar SVG icon: settings-%s.svg\n' "$module" >&2
+    exit 1
+  fi
+done
 cache_dir="$project_dir/.cache/native-migration"
 scratch_dir="$project_dir/.cache/native-consolidation/swift-build"
 sdk_path="${DOTIST_MACOS_SDK:-$(xcrun --sdk macosx --show-sdk-path)}"
@@ -41,7 +47,7 @@ cp LICENSE "$app/Contents/Resources/Licenses/Dotist-LICENSE.txt"
 cp THIRD_PARTY_NOTICES.md "$app/Contents/Resources/Licenses/THIRD_PARTY_NOTICES.md"
 cp third_party/Tic-LICENSE.txt "$app/Contents/Resources/Licenses/Tic-LICENSE.txt"
 cp "$product/DotistNative" "$app/Contents/MacOS/dotist"
-cp native/Sources/DotistApp/Resources/locales.json native/Sources/DotistApp/Resources/native-locales.json "$app/Contents/Resources/"
+cp native/Sources/DotistApp/Resources/locales.json native/Sources/DotistApp/Resources/native-locales.json native/Sources/DotistApp/Resources/settings-*.svg "$app/Contents/Resources/"
 cp native/Assets/menubar.png "$app/Contents/Resources/menubar.png"
 cp native/Assets/icon.icns "$app/Contents/Resources/icon.icns"
 while read -r name checksum path license_checksum license_url; do

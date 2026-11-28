@@ -306,6 +306,37 @@ import XCTest
             XCTAssertEqual(geometry.inkBounds.midY, 15, accuracy: 0.01)
         }
     }
+
+    func testSettingsNavRowSVGIconAndTextInkAlignment() throws {
+        let localizedTitles: [String: [SettingsModule: String]] = [
+            "zh-CN": [.appearance: "外观", .general: "通用", .filters: "筛选器", .menubar: "菜单栏", .toolbar: "工具栏", .shortcuts: "快捷键", .mcp: "MCP", .data: "数据", .about: "关于"],
+            "zh-TW": [.appearance: "外觀", .general: "一般", .filters: "篩選器", .menubar: "選單列", .toolbar: "工具列", .shortcuts: "快速鍵", .mcp: "MCP", .data: "資料", .about: "關於"],
+            "en": [.appearance: "Appearance", .general: "General", .filters: "Filters", .menubar: "Menu bar", .toolbar: "Toolbar", .shortcuts: "Shortcuts", .mcp: "MCP", .data: "Data", .about: "About"],
+            "fr": [.appearance: "Apparence", .general: "Général", .filters: "Filtres", .menubar: "Barre des menus", .toolbar: "Barre d’outils", .shortcuts: "Raccourcis", .mcp: "MCP", .data: "Données", .about: "À propos"],
+            "de": [.appearance: "Erscheinungsbild", .general: "Allgemein", .filters: "Filter", .menubar: "Menüleiste", .toolbar: "Symbolleiste", .shortcuts: "Tastenkürzel", .mcp: "MCP", .data: "Daten", .about: "Info"],
+        ]
+        for (language, titles) in localizedTitles {
+            for module in SettingsModule.allCases {
+                let title = try XCTUnwrap(titles[module])
+                for selected in [false, true] {
+                    let row = IconTextRow(spacing: 8) {
+                        OpticalSVGIcon(name: module.iconResourceName, size: 15)
+                            .frame(width: 16, height: 16)
+                        OpticalText(title: title, size: 13, weight: selected ? .semibold : .regular, language: language)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.leading, 26).padding(.trailing, 24).frame(width: 214, height: 34)
+                    let rep = try render(row, width: 214, height: 34)
+                    let iconCenter = try inkVerticalCenter(of: rep, in: CGRect(x: 24, y: 0, width: 20, height: 34))
+                    let textCenter = try inkVerticalCenter(of: rep, in: CGRect(x: 48, y: 0, width: 156, height: 34))
+                    XCTAssertEqual(iconCenter, 17, accuracy: 1.0, "Icon center \(language) \(module.rawValue) selected=\(selected)")
+                    XCTAssertEqual(textCenter, 17, accuracy: 1.0, "Text center \(language) \(module.rawValue) selected=\(selected)")
+                    XCTAssertLessThanOrEqual(abs(iconCenter - textCenter), 0.5, "SVG icon/text ink delta \(language) \(module.rawValue) selected=\(selected): icon=\(iconCenter), text=\(textCenter)")
+                }
+            }
+        }
+    }
 }
 
 private struct OpticalControlRectKey: PreferenceKey {

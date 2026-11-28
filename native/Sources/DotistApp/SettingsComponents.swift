@@ -6,6 +6,7 @@ import SwiftUI
 enum SettingsModule: String, CaseIterable, Identifiable {
     case appearance, general, filters, menubar, toolbar, shortcuts, mcp, data, about
     var id: String { rawValue }
+    var iconResourceName: String { "settings-" + rawValue }
     var title: String {
         switch self {
         case .appearance: return "外观"

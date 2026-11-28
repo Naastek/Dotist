@@ -93,7 +93,7 @@ struct SettingsWindow: View {
                             Button {
                                 searchFeedback.cancel(); active = module
                             } label: {
-                                SettingsNavRow(title: model.text(module.title), language: model.language, selected: active == module)
+                                SettingsNavRow(iconName: module.iconResourceName, title: model.text(module.title), language: model.language, selected: active == module)
                             }.buttonStyle(.plain).modifier(DotistFocusRing())
                                 .accessibilityAddTraits(active == module ? .isSelected : [])
                                 .accessibilityIdentifier("settings-module-" + module.rawValue)
@@ -578,20 +578,25 @@ struct SettingsWindow: View {
 }
 
 
-/// Sidebar row with an affordance: a soft plate on hover and a firmer one when selected.
-private struct SettingsNavRow: View {
+/// Sidebar row with an SVG module icon and an affordance plate on hover/selection.
+struct SettingsNavRow: View {
+    let iconName: String
     let title: String
     let language: String
     let selected: Bool
     @State private var hovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        HStack(spacing: 0) {
+        IconTextRow(spacing: 8) {
+            OpticalSVGIcon(name: iconName, size: 15)
+                .frame(width: 16, height: 16)
+                .foregroundStyle(selected || hovering ? DotistDesign.ink : DotistDesign.muted)
             OpticalText(title: title, size: 13, weight: selected ? .semibold : .regular, language: language)
+                .lineLimit(1)
                 .foregroundStyle(selected || hovering ? DotistDesign.ink : DotistDesign.muted)
             Spacer(minLength: 0)
         }
-        .padding(.leading, 24).padding(.trailing, 12).frame(height: 34)
+        .padding(.leading, 12).padding(.trailing, 10).frame(height: 34)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(DotistDesign.rule.opacity(selected ? 0.22 : hovering ? 0.12 : 0)))
         .padding(.horizontal, 14)
         .contentShape(Rectangle())

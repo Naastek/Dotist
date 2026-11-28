@@ -75,7 +75,10 @@ for row in Path('native/scripts/fonts.tsv').read_text().splitlines():
         raise SystemExit(f'Missing or invalid packaged font license: {name}; rebuild the QA application')
 for relative in ("Contents/MacOS/dotist", "Contents/Resources/locales.json",
                  "Contents/Resources/native-locales.json", "Contents/Resources/icon.icns",
-                 "Contents/Frameworks/Sparkle.framework"):
+                 "Contents/Frameworks/Sparkle.framework") + tuple(
+                     f"Contents/Resources/settings-{m}.svg"
+                     for m in ("appearance", "general", "filters", "menubar", "toolbar", "shortcuts", "mcp", "data", "about")
+                 ):
     if not (app / relative).exists():
         raise SystemExit(f"Missing QA bundle resource: {relative}")
 print(app)

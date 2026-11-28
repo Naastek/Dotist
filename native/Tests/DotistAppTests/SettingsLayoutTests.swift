@@ -73,6 +73,31 @@ final class SettingsLayoutTests: XCTestCase {
         }
     }
 
+    func testSidebarNavLabelsFitWithSVGIconInAllFiveLanguages() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dotist-nav-fit-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try TaskStore(databasePath: directory.appendingPathComponent("tasks.sqlite").path)
+        let availableTextWidth: CGFloat = 214 - 14 - 12 - 16 - 8 - 10 - 14
+        for language in ["zh-CN", "zh-TW", "en", "fr", "de"] {
+            var patch = DotistSettingsPatch(); patch.language = language
+            _ = try store.updateSettings(patch)
+            let model = try AppModel(store: store)
+            let font = DotistDesign.nativeFont(13, weight: .semibold, language: language)
+            for module in SettingsModule.allCases {
+                let title = model.text(module.title)
+                let width = (title as NSString).size(withAttributes: [.font: font]).width
+                XCTAssertLessThanOrEqual(width, availableTextWidth, "Sidebar label overflows with SVG icon: \(language) \(module.rawValue) '\(title)' (\(width) > \(availableTextWidth))")
+                let row = SettingsNavRow(iconName: module.iconResourceName, title: title, language: language, selected: true)
+                    .frame(width: 214, height: 34)
+                let host = NSHostingView(rootView: row)
+                host.layoutSubtreeIfNeeded()
+                XCTAssertLessThanOrEqual(host.fittingSize.width, 214.5, "\(language) \(module.rawValue)")
+                XCTAssertLessThanOrEqual(host.fittingSize.height, 34.5, "\(language) \(module.rawValue)")
+            }
+        }
+    }
+
     func testGroupedRowKeepsColorPaletteAndSwitchInsideMinimumContentWidth() {
         _ = NSApplication.shared
         let content = SettingsGroup("Color theme", language: "en") {
