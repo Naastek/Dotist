@@ -65,7 +65,7 @@ struct FloatingSurface: View, Animatable {
         let radius = Self.glassCornerRadius(for: size, compact: compact, transitioning: transitioning, solid: solid)
         let width = compact && !transitioning ? base + (size.width - base) * min(1, max(0, reveal)) : size.width
         let material = FloatingPanelMaterial(opacity: opacity, frost: frost, compact: compact, color: color,
-                                             cornerRadius: radius)
+                                             cornerRadius: radius, transitioning: transitioning)
             .padding(opticalInset)
             .frame(width: width, height: size.height)
             .frame(width: size.width, height: size.height, alignment: onRight ? .topTrailing : .topLeading)
@@ -107,6 +107,7 @@ struct FloatingPanelMaterial: View {
     let compact: Bool
     let color: DotistGroupColor
     var cornerRadius: CGFloat? = nil
+    var transitioning: Bool = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
@@ -115,7 +116,7 @@ struct FloatingPanelMaterial: View {
     var body: some View {
         FloatingPanelSurface(opacity: opacity, frost: frost, compact: compact, color: color,
                              solid: reduceTransparency || contrast == .increased, scheme: scheme,
-                             cornerRadius: cornerRadius)
+                             cornerRadius: cornerRadius, transitioning: transitioning)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: color)
     }
 }
@@ -130,6 +131,7 @@ struct FloatingPanelSurface: View {
     let solid: Bool
     let scheme: ColorScheme
     var cornerRadius: CGFloat? = nil
+    var transitioning: Bool = false
 
     var body: some View {
         if solid {
@@ -143,9 +145,12 @@ struct FloatingPanelSurface: View {
             let inset: CGFloat = compact ? 0 : ExpandedReadingMaterial.opticalClearance
             let radius = cornerRadius ?? (compact ? 24 : DotistDesign.windowCornerRadius - inset)
             let amount = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
-            NativeFloatingGlass(cornerRadius: radius, color: color, scheme: scheme,
-                density: amount, frost: Double(frost) / 100 * GlassTintMaterial.expandedFrostScale)
-                .opacity(amount)
+            NativeFloatingGlass(cornerRadius: radius, compact: compact, color: color, scheme: scheme,
+                density: amount, frost: Double(frost) / 100.0)
+                .overlay {
+                    PhysicalLiquidGlassRim(cornerRadius: radius, compact: compact, scheme: scheme,
+                                           transitioning: transitioning)
+                }
                 .padding(inset)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
@@ -153,22 +158,81 @@ struct FloatingPanelSurface: View {
     }
 }
 
-/// One system material persists through the panel's three geometries. AppKit
-/// owns refraction, the optical rim and the user's Liquid Glass appearance.
+/// Calibrated orthogonal mapping for the expanded floating panel's
+/// transparency (`opacity = 100 - transparency`) and frost sliders.
+struct ExpandedGlassCalibration: Equatable {
+    let washAlpha: Double
+    let glassAlpha: Double
+    let frostAlpha: Double
+    let tintAlpha: Double
+    let maskInsetPt: CGFloat
+    let maskFeatherPt: CGFloat
+
+    var showsFrost: Bool { frostAlpha > 0.005 }
+
+    static func resolve(opacity: Double, frost: Double, dark: Bool, hasGroupColor: Bool) -> ExpandedGlassCalibration {
+        let d = max(0.0, min(1.0, opacity))
+        let f = max(0.0, min(1.0, frost))
+
+        // 1. Neutral backing wash: purely driven by opacity (100 - transparency),
+        //    spanning [0, 1] so 0% transparency solidly blocks backdrops while
+        //    preserving airy clarity across standard/clear/ultra presets.
+        let washAlpha = d < 0.005 ? 0.0 : pow(d, dark ? 1.45 : 1.55)
+
+        // 2. Two-stage behind-window optical diffusion: purely driven by frost (independent of opacity).
+        //    - Stage A (`NSGlassEffectView .clear`): 0 at frost=0 (truly crisp clear glass),
+        //      ramps to 1.0 by frost=50% so airy presets retain live Liquid Glass refraction.
+        //    - Stage B (`NSVisualEffectView`): adds deep Gaussian diffusion across 12%..100%
+        //      so 100% frost fully softens dense text & bold stripes.
+        let glassAlpha = f < 0.005 ? 0.0 : min(1.0, 0.22 + 1.56 * f)
+        let frostAlpha: Double
+        if f <= 0.12 {
+            frostAlpha = 0.0
+        } else {
+            frostAlpha = pow((f - 0.12) / 0.88, 1.15)
+        }
+
+        // 3. Group tint: follows docs/ui-decisions.md (16% light / 18% dark) scaled by opacity.
+        let tintBase = dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint
+        let tintAlpha = hasGroupColor ? tintBase * d : 0.0
+
+        // 4. Dynamic optical rim feathering: keeps a generous refractive bezel on airy settings,
+        //    and tightens smoothly as solid wash or heavy frost approaches 100% so edges never leak.
+        let coverage = max(washAlpha, frostAlpha)
+        let quantized = (coverage * 20.0).rounded() / 20.0
+        let maskInsetPt = CGFloat(((1.75 - 1.25 * quantized) * 4.0).rounded() / 4.0)
+        let maskFeatherPt = CGFloat(((10.5 - 9.0 * quantized) * 4.0).rounded() / 4.0)
+
+        return ExpandedGlassCalibration(
+            washAlpha: washAlpha,
+            glassAlpha: glassAlpha,
+            frostAlpha: frostAlpha,
+            tintAlpha: tintAlpha,
+            maskInsetPt: maskInsetPt,
+            maskFeatherPt: maskFeatherPt
+        )
+    }
+}
+
+/// One system `.clear` Liquid Glass surface persists through the panel's three geometries.
+/// AppKit/WindowServer owns live behind-window refraction and macOS 27 interactive response,
+/// while behind-window frost and pigment wash sit in strictly ordered sibling views so
+/// opacity (wash/tint) and frost (blur) stay 100% orthogonal without overwriting each other.
 private struct NativeFloatingGlass: NSViewRepresentable {
     let cornerRadius: CGFloat
+    let compact: Bool
     let color: DotistGroupColor
     let scheme: ColorScheme
     let density: Double
     let frost: Double
 
     final class GlassView: NSGlassEffectView {
-        let interior = GlassInteriorView()
-
         override init(frame: NSRect) {
             super.init(frame: frame)
-            contentView = interior
-            style = .regular
+            style = .clear
+            if #available(macOS 27.0, *) {
+                effectIsInteractive = true
+            }
         }
 
         required init?(coder: NSCoder) { nil }
@@ -176,59 +240,206 @@ private struct NativeFloatingGlass: NSViewRepresentable {
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 
-    // The paint follows AppKit's glass bounds during resize. There is no
-    // second SwiftUI hosting tree to lay out for each window frame.
-    final class GlassInteriorView: NSView {
-        let paper = CALayer()
-        let tint = CALayer()
-        var radius: CGFloat = 0 {
-            didSet { if radius != oldValue { needsLayout = true } }
-        }
+    final class PigmentView: NSView {
+        let washLayer = CALayer()
+        let washMaskLayer = CALayer()
+        let tintLayer = CALayer()
+        let tintMaskLayer = CALayer()
 
         override init(frame: NSRect) {
             super.init(frame: frame)
             wantsLayer = true
-            paper.cornerCurve = .continuous
-            tint.cornerCurve = .continuous
-            layer?.addSublayer(paper)
-            layer?.addSublayer(tint)
+            washLayer.name = "dotist.wash"
+            tintLayer.name = "dotist.tint"
+            washLayer.mask = washMaskLayer
+            tintLayer.mask = tintMaskLayer
+            layer?.addSublayer(washLayer)
+            layer?.addSublayer(tintLayer)
         }
 
         required init?(coder: NSCoder) { nil }
 
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
         override func layout() {
             super.layout()
-            let rect = bounds.insetBy(dx: 0.75, dy: 0.75)
-            let rounded = max(0, min(radius - 0.75, min(rect.width, rect.height) / 2))
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            paper.frame = rect
-            tint.frame = rect
-            paper.cornerRadius = rounded
-            tint.cornerRadius = rounded
+            washLayer.frame = bounds
+            tintLayer.frame = bounds
+            washMaskLayer.frame = bounds
+            tintMaskLayer.frame = bounds
             CATransaction.commit()
         }
     }
 
-    func makeNSView(context: Context) -> GlassView {
-        let view = GlassView(frame: .zero)
+    // Layered host inside NativeFloatingGlass (bottom -> top):
+    // 1. `glassView` (`NSGlassEffectView .clear`): live WindowServer Liquid Glass refraction
+    // 2. `frostView` (`NSVisualEffectView .behindWindow`): deep Gaussian frost diffusion
+    // 3. `pigmentView` (`washLayer` + `tintLayer`): strictly above frostView so 0% transparency
+    //    always blocks backdrops cleanly regardless of frost level.
+    final class HostView: NSView {
+        let glassView = GlassView()
+        let frostView = NSVisualEffectView()
+        let frostMaskLayer = CALayer()
+        let pigmentView = PigmentView()
+
+        var radius: CGFloat = 0 {
+            didSet { if radius != oldValue { needsLayout = true } }
+        }
+        var compact: Bool = false {
+            didSet { if compact != oldValue { needsLayout = true } }
+        }
+        var isDark: Bool = false {
+            didSet {
+                if isDark != oldValue {
+                    frostView.material = isDark ? .hudWindow : .popover
+                    needsLayout = true
+                }
+            }
+        }
+        var density: Double = 0.6 {
+            didSet { if density != oldValue { updateAppearance() } }
+        }
+        var frost: Double = 0.4 {
+            didSet { if frost != oldValue { updateAppearance() } }
+        }
+        var groupColor: DotistGroupColor = .none {
+            didSet { if groupColor != oldValue { updateAppearance() } }
+        }
+
+        private var lastMaskSize: CGSize = .zero
+        private var lastMaskRadius: CGFloat = -1
+        private var lastMaskCompact: Bool = false
+        private var lastMaskInset: CGFloat = -1
+        private var lastMaskFeather: CGFloat = -1
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            wantsLayer = true
+            addSubview(glassView)
+
+            frostView.blendingMode = .behindWindow
+            frostView.state = .active
+            frostView.material = .popover
+            frostView.wantsLayer = true
+            frostView.layer?.mask = frostMaskLayer
+            addSubview(frostView)
+
+            addSubview(pigmentView)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        private func updateInteriorMask(insetPt: CGFloat, featherPt: CGFloat) {
+            let size = bounds.size
+            guard size.width > 1, size.height > 1 else { return }
+            let sizeChanged = abs(size.width - lastMaskSize.width) > 0.5 || abs(size.height - lastMaskSize.height) > 0.5
+            let geometryChanged = sizeChanged
+                || abs(radius - lastMaskRadius) > 0.5
+                || compact != lastMaskCompact
+                || abs(insetPt - lastMaskInset) > 0.01
+                || abs(featherPt - lastMaskFeather) > 0.01
+            guard geometryChanged else { return }
+            let mask = LiquidGlassOpticsRenderer.featheredInteriorMask(
+                size: size, cornerRadius: radius, insetPt: insetPt, featherPt: featherPt, scale: 1.0
+            )
+            frostMaskLayer.contents = mask
+            pigmentView.washMaskLayer.contents = mask
+            pigmentView.tintMaskLayer.contents = mask
+            lastMaskSize = size
+            lastMaskRadius = radius
+            lastMaskCompact = compact
+            lastMaskInset = insetPt
+            lastMaskFeather = featherPt
+        }
+
+        override func layout() {
+            super.layout()
+            let size = bounds.size
+            guard size.width > 1, size.height > 1 else { return }
+
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            glassView.frame = bounds
+            frostView.frame = bounds
+            frostMaskLayer.frame = bounds
+            pigmentView.frame = bounds
+            CATransaction.commit()
+            updateAppearance()
+        }
+
+        func updateAppearance() {
+            let isBubble = compact && bounds.width <= 60
+            let isStrip = compact && bounds.width > 60
+
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+
+            if isBubble {
+                // 100% pure crystal .clear Liquid Glass droplet: zero blur slab, zero milky wash.
+                glassView.alphaValue = 1.0
+                frostView.isHidden = true
+                frostView.alphaValue = 0
+                pigmentView.washLayer.backgroundColor = NSColor.clear.cgColor
+                pigmentView.tintLayer.backgroundColor = NSColor.clear.cgColor
+            } else if isStrip {
+                // Hover capsule: independent of expanded opacity/frost; full .clear glass + airy text veil.
+                updateInteriorMask(insetPt: 2.5, featherPt: 6.0)
+                glassView.alphaValue = 1.0
+                frostView.isHidden = true
+                frostView.alphaValue = 0
+                let stripWashAlpha: Double = isDark ? 0.22 : 0.14
+                let neutral = NSColor(GlassTintMaterial.neutral(isDark ? .dark : .light)).withAlphaComponent(stripWashAlpha)
+                pigmentView.washLayer.backgroundColor = neutral.cgColor
+                let stripTintAlpha: Double = groupColor == .none ? 0.0 : (isDark ? 0.05 : 0.04)
+                pigmentView.tintLayer.backgroundColor = NSColor(DotistTheme.swatch(groupColor)).withAlphaComponent(stripTintAlpha).cgColor
+            } else {
+                // Expanded panel: orthogonal full-range opacity wash + two-stage frost + dynamic rim feather.
+                let cal = ExpandedGlassCalibration.resolve(
+                    opacity: density,
+                    frost: frost,
+                    dark: isDark,
+                    hasGroupColor: groupColor != .none
+                )
+                updateInteriorMask(insetPt: cal.maskInsetPt, featherPt: cal.maskFeatherPt)
+
+                glassView.alphaValue = CGFloat(cal.glassAlpha)
+                frostView.isHidden = !cal.showsFrost
+                frostView.alphaValue = CGFloat(cal.frostAlpha)
+
+                let neutral = NSColor(GlassTintMaterial.neutral(isDark ? .dark : .light)).withAlphaComponent(cal.washAlpha)
+                pigmentView.washLayer.backgroundColor = neutral.cgColor
+
+                pigmentView.tintLayer.backgroundColor = NSColor(DotistTheme.swatch(groupColor)).withAlphaComponent(cal.tintAlpha).cgColor
+            }
+
+            CATransaction.commit()
+        }
+    }
+
+    func makeNSView(context: Context) -> HostView {
+        let view = HostView(frame: .zero)
         updateNSView(view, context: context)
         return view
     }
 
-    func updateNSView(_ view: GlassView, context: Context) {
-        if view.cornerRadius != cornerRadius { view.cornerRadius = cornerRadius }
-        view.interior.radius = cornerRadius
-        let materialTint = color == .none ? nil : NSColor(DotistTheme.tint(color, scheme))
-        if view.tintColor != materialTint { view.tintColor = materialTint }
-        let paper = NSColor(GlassTintMaterial.neutral(scheme)).withAlphaComponent(1 - (1 - density) * (1 - frost))
-        let tint = NSColor(DotistTheme.swatch(color)).withAlphaComponent(
-            color == .none ? 0 : (scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint))
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        if view.interior.paper.backgroundColor != paper.cgColor { view.interior.paper.backgroundColor = paper.cgColor }
-        if view.interior.tint.backgroundColor != tint.cgColor { view.interior.tint.backgroundColor = tint.cgColor }
-        CATransaction.commit()
+    func updateNSView(_ view: HostView, context: Context) {
+        if view.glassView.cornerRadius != cornerRadius { view.glassView.cornerRadius = cornerRadius }
+        if view.glassView.style != .clear { view.glassView.style = .clear }
+        let tintScale: Double = compact ? GlassTintMaterial.compactTintScale : 1.0
+        let materialTint = color == .none ? nil : NSColor(DotistTheme.tint(color, scheme).opacity(tintScale))
+        if view.glassView.tintColor != materialTint { view.glassView.tintColor = materialTint }
+
+        view.radius = cornerRadius
+        view.compact = compact
+        view.isDark = scheme == .dark
+        view.density = density
+        view.frost = frost
+        view.groupColor = color
+        view.updateAppearance()
     }
 }
 

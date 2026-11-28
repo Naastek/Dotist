@@ -194,38 +194,72 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
             let usePatternBackdrop = backdrop == "pattern"
             let useWarmBackdrop = backdrop == "warm"
             let useGridBackdrop = backdrop == "grid"
+            let useDenseTextBackdrop = backdrop == "denseText"
+            let useColorfulBackdrop = backdrop == "colorful"
             let backdropView = ZStack {
-                (useGridBackdrop ? (scheme == .dark ? Color(red: 0.14, green: 0.16, blue: 0.20) : Color.white)
-                 : useWarmBackdrop ? Color(red: 0.95, green: 0.93, blue: 0.90)
-                 : scheme == .dark ? Color(red: 0.14, green: 0.16, blue: 0.20)
-                 : Color(red: 0.24, green: 0.27, blue: 0.33))
-                if useGridBackdrop {
-                    Canvas { context, size in
-                        let lineColor = scheme == .dark
-                            ? Color.white.opacity(0.08)
-                            : Color(red: 226.0 / 255.0, green: 224.0 / 255.0, blue: 220.0 / 255.0)
-                        var path = Path()
-                        for x in stride(from: CGFloat(23), through: size.width, by: 56) {
-                            path.move(to: CGPoint(x: x, y: 0))
-                            path.addLine(to: CGPoint(x: x, y: size.height))
-                        }
-                        for y in stride(from: CGFloat(14), through: size.height, by: 19) {
-                            path.move(to: CGPoint(x: 0, y: y))
-                            path.addLine(to: CGPoint(x: size.width, y: y))
-                        }
-                        context.stroke(path, with: .color(lineColor), lineWidth: 1)
-                    }
-                }
-                if usePatternBackdrop {
-                    HStack(spacing: 18) {
-                        ForEach(0..<16, id: \.self) { index in
-                            Rectangle()
-                                .fill(index.isMultiple(of: 2) ? Color.orange.opacity(0.75) : Color.cyan.opacity(0.70))
-                                .frame(width: 14)
+                if useColorfulBackdrop {
+                    LinearGradient(
+                        colors: scheme == .dark
+                            ? [Color(red: 0.08, green: 0.14, blue: 0.28), Color(red: 0.26, green: 0.12, blue: 0.34), Color(red: 0.08, green: 0.28, blue: 0.26)]
+                            : [Color(red: 0.18, green: 0.46, blue: 0.88), Color(red: 0.92, green: 0.42, blue: 0.34), Color(red: 0.16, green: 0.72, blue: 0.58)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                    HStack(spacing: 22) {
+                        ForEach(0..<14, id: \.self) { index in
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(index.isMultiple(of: 2) ? Color.white.opacity(scheme == .dark ? 0.22 : 0.48) : Color.yellow.opacity(scheme == .dark ? 0.28 : 0.52))
+                                .frame(width: 18)
                         }
                     }
-                    .frame(width: backdropSize.width * 1.6, height: backdropSize.height * 1.6)
-                    .rotationEffect(.degrees(18))
+                    .frame(width: backdropSize.width * 1.5, height: backdropSize.height * 1.5)
+                    .rotationEffect(.degrees(-22))
+                } else if useDenseTextBackdrop {
+                    (scheme == .dark ? Color(red: 0.10, green: 0.11, blue: 0.13) : Color.white)
+                    VStack(alignment: .leading, spacing: 5) {
+                        ForEach(0..<38, id: \.self) { row in
+                            Text(String(format: "%02d  func compositeLiquidGlass(rim: CGFloat, blur: Double) -> Pixel { // 密集代码窗口对照 #%d", row + 1, row))
+                                .font(.system(size: 11.5, weight: .regular, design: .monospaced))
+                                .foregroundStyle(scheme == .dark
+                                    ? (row.isMultiple(of: 3) ? Color.cyan : Color.white.opacity(0.86))
+                                    : (row.isMultiple(of: 3) ? Color(red: 0.10, green: 0.28, blue: 0.68) : Color.black.opacity(0.85)))
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(10)
+                    .frame(width: backdropSize.width, height: backdropSize.height, alignment: .topLeading)
+                } else {
+                    (useGridBackdrop ? (scheme == .dark ? Color(red: 0.14, green: 0.16, blue: 0.20) : Color.white)
+                     : useWarmBackdrop ? Color(red: 0.95, green: 0.93, blue: 0.90)
+                     : scheme == .dark ? Color(red: 0.14, green: 0.16, blue: 0.20)
+                     : Color(red: 0.24, green: 0.27, blue: 0.33))
+                    if useGridBackdrop {
+                        Canvas { context, size in
+                            let lineColor = scheme == .dark
+                                ? Color.white.opacity(0.08)
+                                : Color(red: 226.0 / 255.0, green: 224.0 / 255.0, blue: 220.0 / 255.0)
+                            var path = Path()
+                            for x in stride(from: CGFloat(23), through: size.width, by: 56) {
+                                path.move(to: CGPoint(x: x, y: 0))
+                                path.addLine(to: CGPoint(x: x, y: size.height))
+                            }
+                            for y in stride(from: CGFloat(14), through: size.height, by: 19) {
+                                path.move(to: CGPoint(x: 0, y: y))
+                                path.addLine(to: CGPoint(x: size.width, y: y))
+                            }
+                            context.stroke(path, with: .color(lineColor), lineWidth: 1)
+                        }
+                    }
+                    if usePatternBackdrop {
+                        HStack(spacing: 18) {
+                            ForEach(0..<16, id: \.self) { index in
+                                Rectangle()
+                                    .fill(index.isMultiple(of: 2) ? Color.orange.opacity(0.75) : Color.cyan.opacity(0.70))
+                                    .frame(width: 14)
+                            }
+                        }
+                        .frame(width: backdropSize.width * 1.6, height: backdropSize.height * 1.6)
+                        .rotationEffect(.degrees(18))
+                    }
                 }
             }.frame(width: backdropSize.width, height: backdropSize.height).clipped()
             let backdropHost = NSHostingView(rootView: backdropView)
@@ -722,5 +756,298 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
         let reportText = lines.joined(separator: "\n") + "\n"
         try reportText.write(to: outDir.appendingPathComponent("silhouette-frames.txt"), atomically: true, encoding: .utf8)
         print("TOGGLE_SILHOUETTE_CAPTURE output=\(outDir.path)\n\(reportText)")
+    }
+
+    /// Opt-in desktop WindowServer capture of the three locked presets (standard 60/40, clear 38/22, ultra 8/4)
+    /// and the full (transparency 0%/50%/95%/100%) x (frost 0%/50%/100%) orthogonal matrix over dense-text and
+    /// colorful backdrops.
+    func testDesktopOpacityFrostCalibrationMatrix() throws {
+        guard ProcessInfo.processInfo.environment["DOTIST_OPACITY_FROST_MATRIX"] == "1" else {
+            throw XCTSkip("Set DOTIST_OPACITY_FROST_MATRIX=1 on a desktop host with Screen Recording permission")
+        }
+        let app = NSApplication.shared
+        guard CGPreflightScreenCaptureAccess() else {
+            throw CompactGlassDesktopEvidence.Failure("Screen Recording permission unavailable")
+        }
+        guard let screen = NSScreen.screens.first else {
+            throw CompactGlassDesktopEvidence.Failure("No display available")
+        }
+        let previousFrontmost = NSWorkspace.shared.frontmostApplication
+        let originalPolicy = app.activationPolicy()
+        app.setActivationPolicy(.regular)
+        app.finishLaunching()
+        func spin(_ seconds: TimeInterval) {
+            let deadline = Date().addingTimeInterval(seconds)
+            while Date() < deadline {
+                if let event = app.nextEvent(matching: .any, until: deadline, inMode: .default, dequeue: true) {
+                    app.sendEvent(event)
+                }
+            }
+        }
+        defer {
+            app.setActivationPolicy(originalPolicy)
+            previousFrontmost?.activate(options: [])
+        }
+
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let outDir: URL
+        if let custom = ProcessInfo.processInfo.environment["DOTIST_MATRIX_OUT"], !custom.isEmpty {
+            outDir = URL(fileURLWithPath: custom)
+        } else {
+            outDir = repoRoot.appendingPathComponent(".cache/opacity-frost-matrix/" + UUID().uuidString)
+        }
+        try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+
+        let dbDir = outDir.appendingPathComponent("fixture-db")
+        try FileManager.default.createDirectory(at: dbDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dbDir) }
+
+        let store = try TaskStore(databasePath: dbDir.appendingPathComponent("tasks.sqlite").path)
+        _ = try store.addTask(title: "校准主表面透明度全量程遮底")
+        _ = try store.addTask(title: "验证高透明与高磨砂正交响应")
+        _ = try store.addTask(title: "检查密集文字与彩色底边缘光感")
+        let model = try AppModel(store: store)
+        DotistDesign.registerFonts()
+
+        let backdropSize = NSSize(width: 440, height: 520)
+        let backdropFrame = NSRect(
+            x: (screen.visibleFrame.midX - backdropSize.width / 2).rounded(.down),
+            y: (screen.visibleFrame.midY - backdropSize.height / 2).rounded(.down),
+            width: backdropSize.width,
+            height: backdropSize.height
+        )
+        let background = NSPanel(contentRect: backdropFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        background.isReleasedWhenClosed = false
+        background.hasShadow = false
+        background.hidesOnDeactivate = false
+        background.level = .statusBar
+        background.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
+        background.ignoresMouseEvents = true
+        defer { background.close() }
+
+        let cardSize = NSSize(width: 340, height: 420)
+        let cardOrigin = NSPoint(
+            x: (backdropFrame.midX - cardSize.width / 2).rounded(.down),
+            y: (backdropFrame.midY - cardSize.height / 2).rounded(.down)
+        )
+        let panel = DotistPanel(
+            contentRect: NSRect(origin: cardOrigin, size: cardSize),
+            styleMask: [.borderless, .resizable, .nonactivatingPanel],
+            backing: .buffered, defer: false
+        )
+        panel.minSize = NSSize(width: 320, height: 400)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
+        defer { panel.close() }
+
+        let panelState = TaskPanelState()
+        var env = PanelMotion.Environment()
+        env.pointerEventsEnabled = false
+        env.visibleFrame = { _ in backdropFrame }
+        let motion = PanelMotion(
+            model: model, panel: panel, size: cardSize,
+            title: { "Dotist" },
+            bubbleContent: { BubbleContent(model: model, groupID: nil, fallbackTitle: "Dotist", state: panelState) },
+            environment: env
+        )
+        defer { motion.stop() }
+
+        func captureCard(name: String) throws -> NSBitmapImageRep {
+            panel.contentView?.layoutSubtreeIfNeeded()
+            panel.displayIfNeeded()
+            CATransaction.flush()
+            spin(0.28)
+            let captureFrame = panel.frame.insetBy(dx: -16, dy: -16).integral
+            let rect = CompactGlassDesktopEvidence.screenRect(captureFrame, primaryFrame: screen.frame)
+            let url = outDir.appendingPathComponent("raw-\(name).png")
+            defer { try? FileManager.default.removeItem(at: url) }
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            proc.arguments = ["-x", "-R\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.width)),\(Int(rect.height))", url.path]
+            try proc.run()
+            proc.waitUntilExit()
+            guard proc.terminationStatus == 0 else {
+                throw CompactGlassDesktopEvidence.Failure("screencapture failed for \(name)")
+            }
+            return try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: url)))
+        }
+
+        func renderGrid(cells: [[(label: String, image: NSBitmapImageRep)]], title: String, to url: URL) throws {
+            let rows = cells.count
+            let cols = cells.first?.count ?? 0
+            guard rows > 0, cols > 0 else { return }
+            // Downscale 2x retina captures to 0.5x (1x logical) so the composite matrix stays crisp and compact
+            let cellW = cells[0][0].image.pixelsWide / 2
+            let cellH = cells[0][0].image.pixelsHigh / 2
+            let pad = 18
+            let headerH = 44
+            let labelH = 26
+            let totalW = pad + cols * (cellW + pad)
+            let totalH = headerH + pad + rows * (cellH + labelH + pad)
+
+            let image = NSImage(size: NSSize(width: totalW, height: totalH))
+            image.lockFocus()
+            NSColor(srgbRed: 0.11, green: 0.12, blue: 0.15, alpha: 1).setFill()
+            NSRect(x: 0, y: 0, width: totalW, height: totalH).fill()
+
+            let titleAttrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 16, weight: .semibold),
+                .foregroundColor: NSColor.white
+            ]
+            NSString(string: title).draw(at: NSPoint(x: pad, y: totalH - 32), withAttributes: titleAttrs)
+
+            let labelAttrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .medium),
+                .foregroundColor: NSColor(white: 0.90, alpha: 1)
+            ]
+
+            for r in 0..<rows {
+                for c in 0..<cols {
+                    let item = cells[r][c]
+                    let x = pad + c * (cellW + pad)
+                    let topY = totalH - headerH - pad - r * (cellH + labelH + pad)
+                    let imgRect = NSRect(x: x, y: topY - labelH - cellH, width: cellW, height: cellH)
+                    NSString(string: item.label).draw(at: NSPoint(x: x + 2, y: topY - labelH + 5), withAttributes: labelAttrs)
+                    if let cg = item.image.cgImage {
+                        NSImage(cgImage: cg, size: NSSize(width: cellW, height: cellH)).draw(in: imgRect)
+                    }
+                }
+            }
+            image.unlockFocus()
+            guard let tiff = image.tiffRepresentation,
+                  let rep = NSBitmapImageRep(data: tiff),
+                  let png = rep.representation(using: .png, properties: [:]) else {
+                throw CompactGlassDesktopEvidence.Failure("Failed to encode grid PNG")
+            }
+            try png.write(to: url)
+        }
+
+        let setups: [(id: String, title: String, scheme: ColorScheme, appearance: NSAppearance.Name, themeName: String, colorful: Bool)] = [
+            ("light-densetext", "浅色 · 密集代码底", .light, .aqua, "light", false),
+            ("light-colorful", "浅色 · 彩色条纹底", .light, .aqua, "light", true),
+            ("dark-densetext", "深色 · 密集代码底", .dark, .darkAqua, "dark", false)
+        ]
+
+        var metricsLines: [String] = []
+        for setup in setups {
+            let backdropView = ZStack {
+                if setup.colorful {
+                    LinearGradient(
+                        colors: setup.scheme == .dark
+                            ? [Color(red: 0.08, green: 0.14, blue: 0.28), Color(red: 0.26, green: 0.12, blue: 0.34), Color(red: 0.08, green: 0.28, blue: 0.26)]
+                            : [Color(red: 0.18, green: 0.46, blue: 0.88), Color(red: 0.92, green: 0.42, blue: 0.34), Color(red: 0.16, green: 0.72, blue: 0.58)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                    HStack(spacing: 20) {
+                        ForEach(0..<14, id: \.self) { index in
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(index.isMultiple(of: 2) ? Color.white.opacity(0.48) : Color.yellow.opacity(0.55))
+                                .frame(width: 18)
+                        }
+                    }
+                    .frame(width: backdropSize.width * 1.5, height: backdropSize.height * 1.5)
+                    .rotationEffect(.degrees(-22))
+                } else {
+                    (setup.scheme == .dark ? Color(red: 0.10, green: 0.11, blue: 0.13) : Color.white)
+                    VStack(alignment: .leading, spacing: 5) {
+                        ForEach(0..<32, id: \.self) { row in
+                            Text(String(format: "%02d  func calibrateGlass(transp: %d%%, frost: %d%%) // 密集对照 #%d", row + 1, row * 3 % 100, row * 7 % 100, row))
+                                .font(.system(size: 11.5, weight: .regular, design: .monospaced))
+                                .foregroundStyle(setup.scheme == .dark
+                                    ? (row.isMultiple(of: 3) ? Color.cyan : Color.white.opacity(0.86))
+                                    : (row.isMultiple(of: 3) ? Color(red: 0.10, green: 0.28, blue: 0.68) : Color.black.opacity(0.85)))
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(10)
+                    .frame(width: backdropSize.width, height: backdropSize.height, alignment: .topLeading)
+                }
+            }.frame(width: backdropSize.width, height: backdropSize.height).clipped()
+
+            let bgHost = NSHostingView(rootView: backdropView)
+            bgHost.sizingOptions = []
+            bgHost.frame = NSRect(origin: .zero, size: backdropSize)
+            background.contentView = bgHost
+            background.setFrame(backdropFrame, display: true)
+            background.orderFrontRegardless()
+
+            panel.appearance = NSAppearance(named: setup.appearance)
+            let root = FloatingPanelView(
+                model: model, motion: motion, colorState: panelState,
+                title: "Dotist", remaining: 3, total: 3, groupName: nil,
+                contextMenu: { _, _ in },
+                content: MainWindow(
+                    model: model, state: panelState,
+                    showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in },
+                    collapse: {}, close: nil, primary: true
+                )
+            ).environment(\.colorScheme, setup.scheme)
+            let host = DotistHostingView(rootView: root)
+            host.sizingOptions = []
+            host.frame = NSRect(origin: .zero, size: cardSize)
+            host.autoresizingMask = [.width, .height]
+            let container = NSView(frame: host.frame)
+            container.addSubview(host)
+            panel.contentView = container
+            panel.setFrame(NSRect(origin: cardOrigin, size: cardSize), display: true)
+            panel.orderFrontRegardless()
+            spin(0.25)
+
+            func apply(opacity: UInt8, frost: UInt8) {
+                var patch = DotistSettingsPatch()
+                patch.theme = setup.themeName
+                patch.opacity = opacity
+                patch.frost = frost
+                patch.alwaysOnTop = true
+                model.updateSettings(patch)
+            }
+
+            // 1. Three locked presets
+            let presets: [(String, UInt8, UInt8)] = [
+                ("标准 (透明40% / 磨砂40%)", 60, 40),
+                ("透明玻璃 (透明62% / 磨砂22%)", 38, 22),
+                ("极致通透 (透明92% / 磨砂4%)", 8, 4)
+            ]
+            var presetRow: [(String, NSBitmapImageRep)] = []
+            for (label, op, fr) in presets {
+                apply(opacity: op, frost: fr)
+                let rep = try captureCard(name: "\(setup.id)-preset-\(op)-\(fr)")
+                presetRow.append((label, rep))
+                let cal = ExpandedGlassCalibration.resolve(opacity: Double(op) / 100, frost: Double(fr) / 100, dark: setup.scheme == .dark, hasGroupColor: false)
+                metricsLines.append(String(format: "%@ | %@ | wash=%.3f frost=%.3f inset=%.2f feather=%.2f",
+                    setup.id, label, cal.washAlpha, cal.frostAlpha, cal.maskInsetPt, cal.maskFeatherPt))
+            }
+            try renderGrid(cells: [presetRow], title: "三档预设实拍对照 — \(setup.title)",
+                to: outDir.appendingPathComponent("presets-\(setup.id).png"))
+
+            // 2. 4x3 orthogonal matrix: transparency [0%, 50%, 95%, 100%] x frost [0%, 50%, 100%]
+            let transparencies: [Int] = [0, 50, 95, 100]
+            let frosts: [UInt8] = [0, 50, 100]
+            var grid: [[(String, NSBitmapImageRep)]] = []
+            for tr in transparencies {
+                let op = UInt8(100 - tr)
+                var row: [(String, NSBitmapImageRep)] = []
+                for fr in frosts {
+                    apply(opacity: op, frost: fr)
+                    let rep = try captureCard(name: "\(setup.id)-t\(tr)-f\(fr)")
+                    row.append(("透明 \(tr)% · 磨砂 \(fr)%", rep))
+                }
+                grid.append(row)
+            }
+            try renderGrid(cells: grid, title: "透明度 × 磨砂 正交全量程实拍矩阵 — \(setup.title)",
+                to: outDir.appendingPathComponent("matrix-\(setup.id).png"))
+        }
+
+        try (metricsLines.joined(separator: "\n") + "\n").write(
+            to: outDir.appendingPathComponent("calibration-metrics.txt"), atomically: true, encoding: .utf8
+        )
+        print("OPACITY_FROST_MATRIX output=\(outDir.path)")
     }
 }

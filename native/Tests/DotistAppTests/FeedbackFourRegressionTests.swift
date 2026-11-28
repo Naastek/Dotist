@@ -616,9 +616,17 @@ final class FeedbackFourRegressionTests: XCTestCase {
                     for y in 45..<75 { for x in 60..<240 { maxText = max(maxText, bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) } }
                     rows.append("\(scheme),\(opacity),0,\(protection == 1),\(protection == 2),\(background.alphaComponent),\(maxText)")
                     if protection == 0 {
-                        XCTAssertLessThanOrEqual(background.alphaComponent, CGFloat(opacity) / 100 + 0.015)
                         let glass = try XCTUnwrap(fixture.descendants(NSGlassEffectView.self).first)
-                        XCTAssertNotNil(glass.contentView?.layer)
+                        let host = try XCTUnwrap(glass.superview)
+                        let pigmentView = try XCTUnwrap(host.subviews.last)
+                        let washLayer = try XCTUnwrap(pigmentView.layer?.sublayers?.first { $0.name == "dotist.wash" })
+                        let washAlpha = try XCTUnwrap(washLayer.backgroundColor).alpha
+                        let expected = ExpandedGlassCalibration.resolve(
+                            opacity: Double(opacity) / 100.0, frost: 0,
+                            dark: scheme == .dark, hasGroupColor: true
+                        )
+                        XCTAssertEqual(Double(washAlpha), expected.washAlpha, accuracy: 0.001)
+                        XCTAssertLessThanOrEqual(washAlpha, CGFloat(opacity) / 100 + 0.001)
                         if opacity >= 95, background.alphaComponent > 0 {
                             XCTAssertGreaterThan(background.alphaComponent, 0.85)
                         }

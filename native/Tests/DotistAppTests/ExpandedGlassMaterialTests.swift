@@ -14,7 +14,7 @@ final class ExpandedGlassMaterialTests: XCTestCase {
         return NSBitmapImageRep(cgImage: try XCTUnwrap(image))
     }
 
-    func testThreeFloatingShapesShareOpacity() throws {
+    func testThreeFloatingShapesPreserveNativeGlassAcrossOpacityRange() throws {
         let forms = [(CGSize(width: 260, height: 140), false),
                      (CGSize(width: 44, height: 44), true),
                      (CGSize(width: 178, height: 44), true)]
@@ -26,14 +26,88 @@ final class ExpandedGlassMaterialTests: XCTestCase {
                     return try XCTUnwrap(image.colorAt(x: image.pixelsWide / 2, y: image.pixelsHigh / 2)).alphaComponent
                 }
             }
+            // Native .clear Liquid Glass stays mounted across the full opacity range,
+            // including opacity=0 (100% transparency) so frosted glass and compact forms never vanish.
             let clear = try centers(opacity: 0, frost: 68)
             let muted = try centers(opacity: 44, frost: 68)
             let frosted = try centers(opacity: 82, frost: 68)
             for index in forms.indices {
-                XCTAssertLessThan(clear[index], 1.0 / 255)
-                XCTAssertGreaterThan(frosted[index], muted[index] + 0.1)
+                XCTAssertGreaterThan(clear[index], 0.95)
+                XCTAssertGreaterThan(muted[index], 0.95)
                 XCTAssertEqual(frosted[index], frosted[0], accuracy: 1.0 / 255)
             }
+        }
+    }
+
+    func testExpandedGlassCalibrationIsFullRangeOrthogonalAndConvergesFeather() {
+        for dark in [false, true] {
+            // 1. Endpoints
+            let fullTransparentNoFrost = ExpandedGlassCalibration.resolve(opacity: 0, frost: 0, dark: dark, hasGroupColor: true)
+            XCTAssertEqual(fullTransparentNoFrost.washAlpha, 0, accuracy: 0.001)
+            XCTAssertEqual(fullTransparentNoFrost.glassAlpha, 0, accuracy: 0.001)
+            XCTAssertEqual(fullTransparentNoFrost.frostAlpha, 0, accuracy: 0.001)
+            XCTAssertFalse(fullTransparentNoFrost.showsFrost)
+            XCTAssertEqual(fullTransparentNoFrost.tintAlpha, 0, accuracy: 0.001)
+            XCTAssertEqual(fullTransparentNoFrost.maskInsetPt, 1.75, accuracy: 0.01)
+            XCTAssertEqual(fullTransparentNoFrost.maskFeatherPt, 10.5, accuracy: 0.01)
+
+            let fullOpaqueNoFrost = ExpandedGlassCalibration.resolve(opacity: 1, frost: 0, dark: dark, hasGroupColor: true)
+            XCTAssertEqual(fullOpaqueNoFrost.washAlpha, 1.0, accuracy: 0.001)
+            XCTAssertEqual(fullOpaqueNoFrost.glassAlpha, 0, accuracy: 0.001)
+            XCTAssertEqual(fullOpaqueNoFrost.frostAlpha, 0, accuracy: 0.001)
+            XCTAssertFalse(fullOpaqueNoFrost.showsFrost)
+            XCTAssertEqual(fullOpaqueNoFrost.tintAlpha, dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint, accuracy: 0.001)
+            XCTAssertEqual(fullOpaqueNoFrost.maskInsetPt, 0.5, accuracy: 0.01)
+            XCTAssertEqual(fullOpaqueNoFrost.maskFeatherPt, 1.5, accuracy: 0.01)
+
+            // 2. High transparency (100% transparent, opacity=0) + full frost (100%) yields pure colorless frost
+            let pureFrost = ExpandedGlassCalibration.resolve(opacity: 0, frost: 1, dark: dark, hasGroupColor: true)
+            XCTAssertEqual(pureFrost.washAlpha, 0, accuracy: 0.001)
+            XCTAssertEqual(pureFrost.tintAlpha, 0, accuracy: 0.001)
+            XCTAssertEqual(pureFrost.glassAlpha, 1.0, accuracy: 0.001)
+            XCTAssertTrue(pureFrost.showsFrost)
+            XCTAssertEqual(pureFrost.frostAlpha, 1.0, accuracy: 0.001)
+            XCTAssertEqual(pureFrost.maskInsetPt, 0.5, accuracy: 0.01)
+            XCTAssertEqual(pureFrost.maskFeatherPt, 1.5, accuracy: 0.01)
+
+            // 3. Strict orthogonality: changing frost never alters washAlpha or tintAlpha
+            for opacity in [0.0, 0.08, 0.38, 0.5, 0.6, 1.0] {
+                let f0 = ExpandedGlassCalibration.resolve(opacity: opacity, frost: 0, dark: dark, hasGroupColor: true)
+                let f50 = ExpandedGlassCalibration.resolve(opacity: opacity, frost: 0.5, dark: dark, hasGroupColor: true)
+                let f100 = ExpandedGlassCalibration.resolve(opacity: opacity, frost: 1.0, dark: dark, hasGroupColor: true)
+                XCTAssertEqual(f0.washAlpha, f50.washAlpha, accuracy: 0.0001)
+                XCTAssertEqual(f0.washAlpha, f100.washAlpha, accuracy: 0.0001)
+                XCTAssertEqual(f0.tintAlpha, f100.tintAlpha, accuracy: 0.0001)
+            }
+
+            // 4. Strict orthogonality: changing opacity never alters glassAlpha, frostAlpha, or showsFrost
+            for frost in [0.0, 0.04, 0.22, 0.4, 0.5, 1.0] {
+                let o0 = ExpandedGlassCalibration.resolve(opacity: 0, frost: frost, dark: dark, hasGroupColor: false)
+                let o50 = ExpandedGlassCalibration.resolve(opacity: 0.5, frost: frost, dark: dark, hasGroupColor: false)
+                let o100 = ExpandedGlassCalibration.resolve(opacity: 1.0, frost: frost, dark: dark, hasGroupColor: false)
+                XCTAssertEqual(o0.glassAlpha, o50.glassAlpha, accuracy: 0.0001)
+                XCTAssertEqual(o0.glassAlpha, o100.glassAlpha, accuracy: 0.0001)
+                XCTAssertEqual(o0.frostAlpha, o50.frostAlpha, accuracy: 0.0001)
+                XCTAssertEqual(o0.frostAlpha, o100.frostAlpha, accuracy: 0.0001)
+                XCTAssertEqual(o0.showsFrost, o100.showsFrost)
+            }
+
+            // 5. Monotonic progression across locked presets (ultra 8/4 < clear 38/22 < standard 60/40 < solid 100/100)
+            let ultra = ExpandedGlassCalibration.resolve(opacity: 0.08, frost: 0.04, dark: dark, hasGroupColor: false)
+            let clear = ExpandedGlassCalibration.resolve(opacity: 0.38, frost: 0.22, dark: dark, hasGroupColor: false)
+            let standard = ExpandedGlassCalibration.resolve(opacity: 0.60, frost: 0.40, dark: dark, hasGroupColor: false)
+            XCTAssertLessThan(ultra.washAlpha, clear.washAlpha)
+            XCTAssertLessThan(clear.washAlpha, standard.washAlpha)
+            XCTAssertLessThan(standard.washAlpha, fullOpaqueNoFrost.washAlpha)
+            XCTAssertLessThan(ultra.glassAlpha, clear.glassAlpha)
+            XCTAssertLessThan(clear.glassAlpha, standard.glassAlpha)
+            XCTAssertLessThan(ultra.frostAlpha, clear.frostAlpha)
+            XCTAssertLessThan(clear.frostAlpha, standard.frostAlpha)
+            XCTAssertLessThan(standard.frostAlpha, pureFrost.frostAlpha)
+            // Airy presets keep generous refractive feathering
+            XCTAssertGreaterThanOrEqual(ultra.maskFeatherPt, 9.0)
+            XCTAssertGreaterThanOrEqual(clear.maskFeatherPt, 7.5)
+            XCTAssertGreaterThan(standard.maskFeatherPt, fullOpaqueNoFrost.maskFeatherPt)
         }
     }
 

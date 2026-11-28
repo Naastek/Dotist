@@ -26,7 +26,7 @@ final class NativeFloatingGlassTests: XCTestCase {
 
         _ = try await fixture.capture(scale: 1)
         let glass = try installedGlass()
-        XCTAssertEqual(glass.style, .regular)
+        XCTAssertEqual(glass.style, .clear)
         XCTAssertNotNil(glass.tintColor)
         XCTAssertNil(glass.hitTest(CGPoint(x: 20, y: 20)))
 

@@ -45,6 +45,13 @@ private final class BubbleTextView: NSView {
         let gap: CGFloat = 6
         let height = runs.reduce(CGFloat(0)) { $0 + $1.1.height } + CGFloat(max(0, runs.count - 1)) * gap
         var top = bounds.midY + height / 2
+        // Subtle optical contrast halo keeps ink crisp over crystal-clear refracting glass
+        // without adding any milky backing layer or shifting optical ink bounds.
+        let isDark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let haloColor = isDark
+            ? CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.36)
+            : CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.32)
+        context.setShadow(offset: .zero, blur: 1.5, color: haloColor)
         for (line, ink) in runs {
             context.textPosition = CGPoint(x: centered ? bounds.midX - ink.midX : 0, y: top - ink.maxY)
             CTLineDraw(line, context)
@@ -64,6 +71,10 @@ struct FloatingBubble: View {
     let reveal: CGFloat
     var extra: CGFloat = 0
     var filter: [String] = []
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.colorScheme) private var scheme
 
     private func label(_ text: String, size: CGFloat, weight: NSFont.Weight = .regular, serif: Bool = false, color: Color) -> NSAttributedString {
         NSAttributedString(string: text, attributes: [

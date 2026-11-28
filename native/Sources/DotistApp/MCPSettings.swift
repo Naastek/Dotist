@@ -32,7 +32,10 @@ struct MCPSettings: View {
                     })).labelsHidden().toggleStyle(.switch).controlSize(.small).tint(DotistDesign.accent)
                         .accessibilityIdentifier("settings-mcp-enabled")
                 }.settingsSearchAnchor("mcp.启用本地 MCP")
-                HStack(spacing: 7) {
+                HStack(spacing: 8) {
+                    if service.running {
+                        MCPMicroMatrixPulse()
+                    }
                     Text(model.text(service.running ? "运行中" : service.starting ? "启动中…" : "已停止"))
                     Spacer()
                     if service.running {
@@ -40,6 +43,11 @@ struct MCPSettings: View {
                     }
                 }.font(DotistDesign.font(12, language: model.language)).foregroundStyle(DotistDesign.muted)
                     .padding(.horizontal, 14).frame(minHeight: 44)
+                    .overlay(alignment: .top) {
+                        if service.running || service.starting {
+                            SyncLightRail(active: service.starting || service.connections > 0)
+                        }
+                    }
                 if let error = service.error {
                     Text(error).foregroundStyle(DotistDesign.danger).font(DotistDesign.font(12, language: model.language)).padding(14)
                 }
@@ -70,5 +78,65 @@ struct MCPSettings: View {
             }
         }.font(DotistDesign.font(13, language: model.language))
             .onChange(of: client) { _, _ in copied = false }
+    }
+}
+
+/// Restrained 5x3 micro-dot matrix breath for active MCP connection.
+private struct MCPMicroMatrixPulse: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pulse = false
+
+    var body: some View {
+        VStack(spacing: 2) {
+            ForEach(0..<3, id: \.self) { row in
+                HStack(spacing: 2) {
+                    ForEach(0..<5, id: \.self) { col in
+                        let active = (row + col).isMultiple(of: 2)
+                        Circle()
+                            .fill(DotistDesign.accent.opacity(active ? 0.85 : 0.45))
+                            .frame(width: 2.2, height: 2.2)
+                            .opacity(active ? (pulse ? 1.0 : 0.45) : (pulse ? 0.55 : 1.0))
+                    }
+                }
+            }
+        }
+        .accessibilityHidden(true)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 2.4).repeatForever(autoreverses: true)) { pulse = true }
+        }
+    }
+}
+
+/// Restrained 1.5 pt accent light rail for live sync / MCP activity.
+struct SyncLightRail: View {
+    let active: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var sweep: CGFloat = -0.35
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(DotistDesign.accent.opacity(0.14))
+                if active && !reduceMotion {
+                    Capsule()
+                        .fill(LinearGradient(
+                            colors: [.clear, DotistDesign.accent.opacity(0.75), .clear],
+                            startPoint: .leading, endPoint: .trailing
+                        ))
+                        .frame(width: max(48, geo.size.width * 0.34))
+                        .offset(x: sweep * geo.size.width)
+                        .onAppear {
+                            withAnimation(.easeInOut(duration: 2.2).repeatForever(autoreverses: false)) {
+                                sweep = 1.05
+                            }
+                        }
+                }
+            }
+            .clipShape(Capsule())
+        }
+        .frame(height: 1.5)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }

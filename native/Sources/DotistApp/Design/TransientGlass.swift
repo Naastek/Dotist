@@ -50,13 +50,9 @@ struct TransientGlassSurface: View {
         } else {
             let tint = color == .none ? nil : DotistTheme.tint(color, scheme).opacity(compact ? GlassTintMaterial.compactTintScale : 1)
             if compact {
-                FloatingGlassBackdrop()
-                    .overlay(shape.fill(tint ?? .clear))
-                    .overlay { CompactGlassGlaze(cornerRadius: cornerRadius, scheme: scheme) }
-                    .clipShape(shape)
-                    .overlay { GlassEdge(cornerRadius: cornerRadius, scheme: scheme) }
-                    .overlay { GlassContour(cornerRadius: cornerRadius, scheme: scheme) }
-                    .background { CompactGlassLiftShadow(cornerRadius: cornerRadius, scheme: scheme) }
+                Color.clear
+                    .glassEffect(Glass.clear.tint(tint).interactive(interactive), in: shape)
+                    .overlay { PhysicalLiquidGlassRim(cornerRadius: cornerRadius, compact: true, scheme: scheme) }
             } else {
                 Color.clear.glassEffect(Glass.regular.tint(tint).interactive(interactive), in: shape)
             }
