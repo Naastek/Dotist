@@ -235,6 +235,9 @@ import XCTest
                 print("EDITOR \(title): geometry=\(TextLineGeometry(font: font, in: CGRect(x: 0, y: 0, width: 200, height: 20), sample: title)), glyph=\(glyph), origin=\(editor.textContainerOrigin), read=\(readCenter), edit=\(editCenter)")
             }
             XCTAssertEqual(readCenter, editCenter, accuracy: 0.5, "Reading/editing: \(title)")
+            let reading1x = try render(OpticalText(title: title, size: 13, language: "zh-CN"), width: 200, height: 20, scale: 1)
+            let readCenter1x = try inkVerticalCenter(of: reading1x, in: CGRect(x: 0, y: 0, width: 200, height: 20))
+            XCTAssertEqual(readCenter1x, 10, accuracy: 0.5, "Reading 1x optical center: \(title)")
         }
         for title in ["写下一件小事", "Inbox"] {
             let (quick, _) = try await native(QuickInput(text: .constant(""), placeholder: title, label: title, font: DotistDesign.nativeFont(22, language: "zh-CN"), commit: {}, cancel: {}, cycle: { _ in }), width: 300, height: 30)

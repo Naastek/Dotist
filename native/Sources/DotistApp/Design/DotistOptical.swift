@@ -111,9 +111,10 @@ struct OpticalText: View {
         let font = DotistDesign.nativeFont(size, weight: weight, serif: serif, language: language)
         let sample = title.isEmpty ? " " : title
         let baseline = OpticalMetrics.attributedBaseline(font, sample: sample)
-        // Snap the residual to the active display's physical pixel grid (1x -> 1pt,
-        // 2x -> 0.5pt, etc.) so 1x monitors never receive a half-pixel vertical shift.
-        let grid = max(1, displayScale)
+        // baselineText() is measured at 2x (0.5pt precision). Keeping at least a 2x
+        // quantization grid avoids double-rounding drift on 1x displays while still
+        // adapting to denser physical pixel grids (e.g. 3x).
+        let grid = max(2, displayScale)
         let residual = (OpticalMetrics.baselineText(font, sample: sample, baseline: baseline).correction * grid).rounded(.down) / grid
         Text(title).font(Font(font))
             // Native Menu extracts an attributed title and discards view offsets.
