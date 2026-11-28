@@ -454,7 +454,8 @@ struct SettingsWindow: View {
         if updater.state == .available || updater.state == .downloaded {
             Text(model.text("发现新版本 {version}").replacingOccurrences(of: "{version}", with: updater.version))
             if updater.state == .downloaded && model.settings.autoInstallUpdates { Text(model.text("更新已下载，退出 Dotist 时安装。")) }
-            if !updater.notes.isEmpty { Text(String(updater.notes.prefix(500))) }
+            let releaseNotes = updater.notes(for: model.language)
+            if !releaseNotes.isEmpty { Text(String(releaseNotes.prefix(1600))) }
             HStack(spacing: 16) {
                 Button(model.text("立即更新"), action: updater.install)
                 Button(model.text("跳过此版本"), action: updater.skip)

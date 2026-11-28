@@ -5,12 +5,15 @@ import Sparkle
 @MainActor
 final class NativeUpdater: NSObject, ObservableObject, SPUUserDriver, SPUUpdaterDelegate {
     enum State { case idle, unconfigured, checking, upToDate, available, downloaded, downloading, installing, error }
+    nonisolated static let supportedNoteLanguages = ["en", "zh-CN", "zh-TW", "fr", "de"]
     @Published private(set) var state: State = .idle
     @Published private(set) var version = ""
     @Published private(set) var notes = ""
+    @Published private(set) var localizedNotes: [String: String] = [:]
     @Published private(set) var message = ""
     @Published private(set) var progress: Double?
     private let model: AppModel
+    private var fallbackNotes = ""
     private var updater: SPUUpdater?
     private var decision: ((SPUUserUpdateChoice) -> Void)?
     private var cancellation: (() -> Void)?
@@ -62,7 +65,51 @@ final class NativeUpdater: NSObject, ObservableObject, SPUUserDriver, SPUUpdater
     }
 
     var busy: Bool { state == .checking || state == .downloading || state == .installing }
+
+    nonisolated static func canonicalNoteLanguage(_ code: String) -> String {
+        let lower = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lower.hasPrefix("zh") {
+            return lower.contains("hant") || lower.contains("-tw") || lower.contains("-hk") || lower.contains("-mo") ? "zh-TW" : "zh-CN"
+        }
+        if lower.hasPrefix("fr") { return "fr" }
+        if lower.hasPrefix("de") { return "de" }
+        return "en"
+    }
+
+    nonisolated static func extractLocalizedNotes(from properties: [AnyHashable: Any]) -> [String: String] {
+        var result: [String: String] = [:]
+        for (rawKey, rawValue) in properties {
+            guard let key = rawKey as? String,
+                  let text = (rawValue as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else { continue }
+            let suffix: String?
+            if key.hasPrefix("dotist:notes-") {
+                suffix = String(key.dropFirst("dotist:notes-".count))
+            } else if key.hasPrefix("notes-") {
+                suffix = String(key.dropFirst("notes-".count))
+            } else {
+                suffix = nil
+            }
+            guard let suffix, supportedNoteLanguages.contains(suffix) else { continue }
+            result[suffix] = text
+        }
+        return result
+    }
+
+    nonisolated static func resolveNotes(localized: [String: String], fallback: String, language: String) -> String {
+        let canonical = canonicalNoteLanguage(language)
+        if let matched = localized[canonical], !matched.isEmpty { return matched }
+        if let english = localized["en"], !english.isEmpty { return english }
+        return fallback
+    }
+
+    func notes(for language: String) -> String {
+        Self.resolveNotes(localized: localizedNotes, fallback: fallbackNotes, language: language)
+    }
+
     func apply(_ settings: DotistSettings) {
+        let resolved = notes(for: model.language)
+        if notes != resolved { notes = resolved }
         guard let updater else { return }
         if updater.automaticallyChecksForUpdates != settings.autoCheckUpdates { updater.automaticallyChecksForUpdates = settings.autoCheckUpdates }
         if updater.automaticallyDownloadsUpdates != settings.autoInstallUpdates { updater.automaticallyDownloadsUpdates = settings.autoInstallUpdates }
@@ -157,13 +204,20 @@ final class NativeUpdater: NSObject, ObservableObject, SPUUserDriver, SPUUpdater
             reply(pendingChoice)
             return
         }
-        notes = appcastItem.itemDescription ?? ""
+        fallbackNotes = appcastItem.itemDescription?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        localizedNotes = Self.extractLocalizedNotes(from: appcastItem.propertiesDictionary)
+        notes = notes(for: model.language)
         informationURL = appcastItem.isInformationOnlyUpdate ? appcastItem.infoURL : nil
         decision = reply
         state = updateState.stage == .notDownloaded ? .available : .downloaded
         message = ""; progress = nil
     }
-    func showUpdateReleaseNotes(with downloadData: SPUDownloadData) { notes = String(data: downloadData.data, encoding: .utf8) ?? notes }
+    func showUpdateReleaseNotes(with downloadData: SPUDownloadData) {
+        if let downloaded = String(data: downloadData.data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !downloaded.isEmpty {
+            fallbackNotes = downloaded
+            notes = notes(for: model.language)
+        }
+    }
     func showUpdateReleaseNotesFailedToDownloadWithError(_ error: Error) { message = error.localizedDescription }
     func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) { state = .upToDate; message = ""; acknowledgement() }
     func showUpdaterError(_ error: Error, acknowledgement: @escaping () -> Void) {

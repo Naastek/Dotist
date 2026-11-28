@@ -9,6 +9,8 @@ import plistlib
 import subprocess
 import xml.etree.ElementTree as ET
 
+from release_notes import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES, load_release_notes
+
 update_config = importlib.import_module('update-config').update_config
 parser = argparse.ArgumentParser()
 parser.add_argument('app', type=Path)
@@ -39,9 +41,12 @@ signature = result.stdout.strip()
 subprocess.run(['swift', str(project / 'native/scripts/verify-ed25519.swift'), config['SUPublicEDKey'], signature, str(archive)], check=True)
 prefix = args.download_prefix or f'https://github.com/Naastek/Dotist/releases/download/v{version}'
 url = prefix.rstrip('/') + '/' + archive.name
-notes = (project / 'docs/release-notes.md').read_text().strip().replace('**', '')
-namespace = 'http://www.andymatuschak.org/xml-namespaces/sparkle'
-ET.register_namespace('sparkle', namespace)
+localized_notes = load_release_notes(project / 'docs/release-notes.md')
+sparkle_ns = 'http://www.andymatuschak.org/xml-namespaces/sparkle'
+dotist_ns = 'https://dotist.app/ns/appcast'
+xml_ns = 'http://www.w3.org/XML/1998/namespace'
+ET.register_namespace('sparkle', sparkle_ns)
+ET.register_namespace('dotist', dotist_ns)
 rss = ET.Element('rss', {'version': '2.0'})
 channel = ET.SubElement(rss, 'channel')
 ET.SubElement(channel, 'title').text = 'Dotist native updates'
@@ -49,9 +54,17 @@ item = ET.SubElement(channel, 'item')
 ET.SubElement(item, 'title').text = f'Dotist {version}'
 ET.SubElement(item, 'pubDate').text = datetime.datetime.now(datetime.timezone.utc).strftime('%a, %d %b %Y %H:%M:%S %z')
 for name, value in [('version', version), ('shortVersionString', version), ('minimumSystemVersion', info['LSMinimumSystemVersion'])]:
-    ET.SubElement(item, '{' + namespace + '}' + name).text = value
-ET.SubElement(item, 'description').text = notes
-ET.SubElement(item, 'enclosure', {'url': url, 'length': str(archive.stat().st_size), 'type': 'application/octet-stream', '{' + namespace + '}edSignature': signature})
+    ET.SubElement(item, '{' + sparkle_ns + '}' + name).text = value
+# Standard Sparkle localized descriptions (selected by Sparkle using system preferred languages)
+# plus a default untagged fallback description for older or non-matching clients.
+ET.SubElement(item, 'description').text = localized_notes[DEFAULT_LANGUAGE]
+for lang in SUPPORTED_LANGUAGES:
+    ET.SubElement(item, 'description', {'{' + xml_ns + '}lang': lang}).text = localized_notes[lang]
+# Non-xml:lang namespaced elements so Sparkle preserves every language in SUAppcastItem.propertiesDictionary,
+# allowing Dotist to switch release notes dynamically with its in-app language setting.
+for lang in SUPPORTED_LANGUAGES:
+    ET.SubElement(item, '{' + dotist_ns + '}notes-' + lang).text = localized_notes[lang]
+ET.SubElement(item, 'enclosure', {'url': url, 'length': str(archive.stat().st_size), 'type': 'application/octet-stream', '{' + sparkle_ns + '}edSignature': signature})
 ET.indent(rss)
 ET.ElementTree(rss).write(args.output / 'appcast.xml', encoding='utf-8', xml_declaration=True)
 print(f'Signed native Sparkle update: {args.output}')
