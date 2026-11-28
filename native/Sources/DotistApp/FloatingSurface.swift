@@ -231,7 +231,12 @@ private struct NativeFloatingGlass: NSViewRepresentable {
             super.init(frame: frame)
             style = .clear
             if #available(macOS 27.0, *) {
-                effectIsInteractive = true
+                // Guard with dynamic selector check so macOS 26 SDK (CI runner) compiles cleanly
+                // while macOS 27+ runtimes still enable interactive Liquid Glass response.
+                let selector = NSSelectorFromString("setEffectIsInteractive:")
+                if responds(to: selector) {
+                    setValue(true, forKey: "effectIsInteractive")
+                }
             }
         }
 
