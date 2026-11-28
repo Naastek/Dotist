@@ -22,7 +22,7 @@ final class NativePixelPathDiagnosticsTests: XCTestCase {
         let candidates: [(String, AnyView)] = [
             ("reference-fill", AnyView(shape.fill(Color.white).frame(width: size.width, height: size.height))),
             ("reference-clip", AnyView(Color.white.clipShape(shape).frame(width: size.width, height: size.height))),
-            ("production-solid", AnyView(FloatingSurface(opacity: 73, frost: 22, compact: true, transitioning: false, onRight: false, size: size, reveal: 0, color: .orange).environment(\._accessibilityReduceTransparency, true)))
+            ("production-solid", AnyView(FloatingSurface(material: .regular, compact: true, transitioning: false, onRight: false, size: size, reveal: 0, color: .orange).environment(\._accessibilityReduceTransparency, true)))
         ]
         for (name, view) in candidates {
             let host = DotistHostingView(rootView: view); host.sizingOptions = []; panel.contentView = host

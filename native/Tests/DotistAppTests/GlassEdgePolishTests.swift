@@ -1,4 +1,5 @@
 import AppKit
+import DotistCore
 import SwiftUI
 import XCTest
 @testable import DotistApp
@@ -147,24 +148,22 @@ final class GlassEdgePolishTests: XCTestCase {
         }
     }
 
-    func testExpandedOpacityEndpointsAndOpaqueAccessibilityFallback() throws {
+    func testExpandedMaterialModesAndOpaqueAccessibilityFallback() throws {
         for scheme in [ColorScheme.light, .dark] {
             for compact in [false, true] {
                 let size = compact ? CGSize(width: 240, height: 48) : CGSize(width: 364, height: 620)
-                for opacity in [UInt8(0), 100] {
+                for material in DotistPanelMaterial.allCases {
                     for solid in [false, true] {
-                        let image = try fixedBitmap(FloatingPanelSurface(opacity: opacity, frost: 40, compact: compact,
+                        let image = try fixedBitmap(FloatingPanelSurface(material: material, compact: compact,
                             color: .orange, solid: solid, scheme: scheme)
                             .frame(width: size.width, height: size.height).environment(\.colorScheme, scheme), size: size)
                         let center = try sample(image, x: image.pixelsWide / 2, y: image.pixelsHigh / 2)
                         if solid { XCTAssertEqual(center.alphaComponent, 1, accuracy: 0.01) }
                         if !compact && !solid {
-                            // Native .clear glass stays mounted at both opacity=0 (pure frost/clear glass)
-                            // and opacity=100 (solid backing); interior washAlpha carries the opacity range.
                             XCTAssertGreaterThan(center.alphaComponent, 0.1)
-                            let cal = ExpandedGlassCalibration.resolve(opacity: Double(opacity) / 100, frost: 0.4,
+                            let profile = ExpandedGlassProfile.resolve(material: material,
                                 dark: scheme == .dark, hasGroupColor: true)
-                            XCTAssertEqual(cal.washAlpha, opacity == 0 ? 0.0 : 1.0, accuracy: 0.001)
+                            XCTAssertEqual(profile.glassStyle, material == .clear ? .clear : .regular)
                         }
                     }
                 }
@@ -184,14 +183,14 @@ final class GlassEdgePolishTests: XCTestCase {
                 .overlay(DotistTheme.swatch(.orange).opacity(scheme == .dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint))
                 .opacity(amount).clipShape(shape)
                 .frame(width: size.width, height: size.height).environment(\.colorScheme, scheme)
-            let actual = FloatingPanelSurface(opacity: 100, frost: 40, compact: false,
+            let actual = FloatingPanelSurface(material: .regular, compact: false,
                 color: .orange, solid: false, scheme: scheme)
                 .frame(width: size.width, height: size.height).environment(\.colorScheme, scheme)
             try logRendererMetadata(control, label: "baseline-\(scheme)-100")
-            try logRendererMetadata(actual, label: "current-\(scheme)-100")
+            try logRendererMetadata(actual, label: "current-\(scheme)-regular")
             let expectedAlpha = try sample(fixedBitmap(control, size: size), x: 364, y: 620).alphaComponent
             let actualAlpha = try sample(fixedBitmap(actual, size: size), x: 364, y: 620).alphaComponent
-            print("GLASS OPACITY CONTROL: scheme=\(scheme), opacity=100, baseline=\(expectedAlpha), current=\(actualAlpha)")
+            print("GLASS OPACITY CONTROL: scheme=\(scheme), material=regular, baseline=\(expectedAlpha), current=\(actualAlpha)")
             XCTAssertEqual(actualAlpha, expectedAlpha, accuracy: 0.01,
                 "The added edge must not alter the center; compare native offscreen glass with the pre-edge control")
         }
@@ -222,7 +221,7 @@ final class GlassEdgePolishTests: XCTestCase {
             for compact in [false, true] {
                 let size = compact ? CGSize(width: 48, height: 48) : CGSize(width: 364, height: 620)
                 for reducedTransparency in [false, true] {
-                    let image = try bitmap(FloatingPanelMaterial(opacity: 0, frost: 0, compact: compact, color: .orange)
+                    let image = try bitmap(FloatingPanelMaterial(material: .clear, compact: compact, color: .orange)
                         .frame(width: size.width, height: size.height)
                         .environment(\.colorScheme, scheme)
                         .environment(\._accessibilityReduceTransparency, reducedTransparency)

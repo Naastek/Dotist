@@ -34,8 +34,7 @@ struct FloatingSurface: View, Animatable {
     }
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
-    let opacity: UInt8
-    let frost: UInt8
+    var material: DotistPanelMaterial = .regular
     let compact: Bool
     let transitioning: Bool
     let onRight: Bool
@@ -64,12 +63,12 @@ struct FloatingSurface: View, Animatable {
         let solid = reduceTransparency || contrast == .increased
         let radius = Self.glassCornerRadius(for: size, compact: compact, transitioning: transitioning, solid: solid)
         let width = compact && !transitioning ? base + (size.width - base) * min(1, max(0, reveal)) : size.width
-        let material = FloatingPanelMaterial(opacity: opacity, frost: frost, compact: compact, color: color,
-                                             cornerRadius: radius, transitioning: transitioning)
+        let surfaceMaterial = FloatingPanelMaterial(material: material, compact: compact, color: color,
+                                                    cornerRadius: radius, transitioning: transitioning)
             .padding(opticalInset)
             .frame(width: width, height: size.height)
             .frame(width: size.width, height: size.height, alignment: onRight ? .topTrailing : .topLeading)
-        material.modifier(FloatingSurfaceClipping(
+        surfaceMaterial.modifier(FloatingSurfaceClipping(
             shape: FloatingPanelShape(compact: compact, transitioning: transitioning,
                 onRight: onRight, reveal: reveal, base: base),
             clipsSilhouette: !(compact && !transitioning && !solid)))
@@ -100,10 +99,9 @@ struct FloatingSurfaceClipShape: Shape {
     }
 }
 
-/// Floating task surfaces take their tint, frost and opacity from the model.
+/// Floating task surfaces take their tint and native glass style from the model.
 struct FloatingPanelMaterial: View {
-    let opacity: UInt8
-    let frost: UInt8
+    var material: DotistPanelMaterial = .regular
     let compact: Bool
     let color: DotistGroupColor
     var cornerRadius: CGFloat? = nil
@@ -114,7 +112,7 @@ struct FloatingPanelMaterial: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        FloatingPanelSurface(opacity: opacity, frost: frost, compact: compact, color: color,
+        FloatingPanelSurface(material: material, compact: compact, color: color,
                              solid: reduceTransparency || contrast == .increased, scheme: scheme,
                              cornerRadius: cornerRadius, transitioning: transitioning)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: color)
@@ -124,8 +122,7 @@ struct FloatingPanelMaterial: View {
 /// Resolved material inputs also let previews inspect the opaque accessibility surface.
 struct FloatingPanelSurface: View {
     @Environment(\.glassDebugParameters) private var glassDebug
-    let opacity: UInt8
-    let frost: UInt8
+    var material: DotistPanelMaterial = .regular
     let compact: Bool
     let color: DotistGroupColor
     let solid: Bool
@@ -144,9 +141,7 @@ struct FloatingPanelSurface: View {
         } else {
             let inset: CGFloat = compact ? 0 : ExpandedReadingMaterial.opticalClearance
             let radius = cornerRadius ?? (compact ? 24 : DotistDesign.windowCornerRadius - inset)
-            let amount = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
-            NativeFloatingGlass(cornerRadius: radius, compact: compact, color: color, scheme: scheme,
-                density: amount, frost: Double(frost) / 100.0)
+            NativeFloatingGlass(cornerRadius: radius, compact: compact, material: material, color: color, scheme: scheme)
                 .overlay {
                     PhysicalLiquidGlassRim(cornerRadius: radius, compact: compact, scheme: scheme,
                                            transitioning: transitioning)
@@ -158,73 +153,46 @@ struct FloatingPanelSurface: View {
     }
 }
 
-/// Calibrated orthogonal mapping for the expanded floating panel's
-/// transparency (`opacity = 100 - transparency`) and frost sliders.
-struct ExpandedGlassCalibration: Equatable {
-    let washAlpha: Double
-    let glassAlpha: Double
-    let frostAlpha: Double
+/// Native two-tier glass profile for the expanded floating panel.
+/// - `.clear`: crystal-clear Liquid Glass droplet (`NSGlassEffectView.Style.clear`).
+/// - `.regular`: macOS native adaptive frosted glass (`NSGlassEffectView.Style.regular`),
+///   automatically adjusting blur and contrast against the content behind the window.
+struct ExpandedGlassProfile: Equatable {
+    let glassStyle: NSGlassEffectView.Style
     let tintAlpha: Double
     let maskInsetPt: CGFloat
     let maskFeatherPt: CGFloat
 
-    var showsFrost: Bool { frostAlpha > 0.005 }
-
-    static func resolve(opacity: Double, frost: Double, dark: Bool, hasGroupColor: Bool) -> ExpandedGlassCalibration {
-        let d = max(0.0, min(1.0, opacity))
-        let f = max(0.0, min(1.0, frost))
-
-        // 1. Neutral backing wash: purely driven by opacity (100 - transparency),
-        //    spanning [0, 1] so 0% transparency solidly blocks backdrops while
-        //    preserving airy clarity across standard/clear/ultra presets.
-        let washAlpha = d < 0.005 ? 0.0 : pow(d, dark ? 1.45 : 1.55)
-
-        // 2. Two-stage behind-window optical diffusion: purely driven by frost (independent of opacity).
-        //    - Stage A (`NSGlassEffectView .clear`): 0 at frost=0 (truly crisp clear glass),
-        //      ramps to 1.0 by frost=50% so airy presets retain live Liquid Glass refraction.
-        //    - Stage B (`NSVisualEffectView`): adds deep Gaussian diffusion across 12%..100%
-        //      so 100% frost fully softens dense text & bold stripes.
-        let glassAlpha = f < 0.005 ? 0.0 : min(1.0, 0.22 + 1.56 * f)
-        let frostAlpha: Double
-        if f <= 0.12 {
-            frostAlpha = 0.0
-        } else {
-            frostAlpha = pow((f - 0.12) / 0.88, 1.15)
+    static func resolve(material: DotistPanelMaterial, dark: Bool, hasGroupColor: Bool) -> ExpandedGlassProfile {
+        switch material {
+        case .clear:
+            return ExpandedGlassProfile(
+                glassStyle: .clear,
+                tintAlpha: hasGroupColor ? (dark ? 0.10 : 0.08) : 0.0,
+                maskInsetPt: 1.75,
+                maskFeatherPt: 10.0
+            )
+        case .regular:
+            return ExpandedGlassProfile(
+                glassStyle: .regular,
+                tintAlpha: hasGroupColor ? (dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint) : 0.0,
+                maskInsetPt: 1.75,
+                maskFeatherPt: 10.0
+            )
         }
-
-        // 3. Group tint: follows docs/ui-decisions.md (16% light / 18% dark) scaled by opacity.
-        let tintBase = dark ? GlassTintMaterial.expandedDarkTint : GlassTintMaterial.expandedLightTint
-        let tintAlpha = hasGroupColor ? tintBase * d : 0.0
-
-        // 4. Dynamic optical rim feathering: keeps a generous refractive bezel on airy settings,
-        //    and tightens smoothly as solid wash or heavy frost approaches 100% so edges never leak.
-        let coverage = max(washAlpha, frostAlpha)
-        let quantized = (coverage * 20.0).rounded() / 20.0
-        let maskInsetPt = CGFloat(((1.75 - 1.25 * quantized) * 4.0).rounded() / 4.0)
-        let maskFeatherPt = CGFloat(((10.5 - 9.0 * quantized) * 4.0).rounded() / 4.0)
-
-        return ExpandedGlassCalibration(
-            washAlpha: washAlpha,
-            glassAlpha: glassAlpha,
-            frostAlpha: frostAlpha,
-            tintAlpha: tintAlpha,
-            maskInsetPt: maskInsetPt,
-            maskFeatherPt: maskFeatherPt
-        )
     }
 }
 
-/// One system `.clear` Liquid Glass surface persists through the panel's three geometries.
-/// AppKit/WindowServer owns live behind-window refraction and macOS 27 interactive response,
-/// while behind-window frost and pigment wash sit in strictly ordered sibling views so
-/// opacity (wash/tint) and frost (blur) stay 100% orthogonal without overwriting each other.
+/// One system `NSGlassEffectView` persists through the panel's three geometries.
+/// Compact forms always render with `.clear` crystal Liquid Glass, while the
+/// expanded panel switches directly between `.clear` and `.regular` native glass
+/// without stacking a separate `NSVisualEffectView` or manual wash plane.
 private struct NativeFloatingGlass: NSViewRepresentable {
     let cornerRadius: CGFloat
     let compact: Bool
+    let material: DotistPanelMaterial
     let color: DotistGroupColor
     let scheme: ColorScheme
-    let density: Double
-    let frost: Double
 
     final class GlassView: NSGlassEffectView {
         override init(frame: NSRect) {
@@ -279,14 +247,10 @@ private struct NativeFloatingGlass: NSViewRepresentable {
     }
 
     // Layered host inside NativeFloatingGlass (bottom -> top):
-    // 1. `glassView` (`NSGlassEffectView .clear`): live WindowServer Liquid Glass refraction
-    // 2. `frostView` (`NSVisualEffectView .behindWindow`): deep Gaussian frost diffusion
-    // 3. `pigmentView` (`washLayer` + `tintLayer`): strictly above frostView so 0% transparency
-    //    always blocks backdrops cleanly regardless of frost level.
+    // 1. `glassView` (`NSGlassEffectView`): `.clear` or `.regular` live WindowServer Liquid Glass
+    // 2. `pigmentView` (`washLayer` + `tintLayer`): hover-strip readability veil and optional group tint
     final class HostView: NSView {
         let glassView = GlassView()
-        let frostView = NSVisualEffectView()
-        let frostMaskLayer = CALayer()
         let pigmentView = PigmentView()
 
         var radius: CGFloat = 0 {
@@ -296,18 +260,10 @@ private struct NativeFloatingGlass: NSViewRepresentable {
             didSet { if compact != oldValue { needsLayout = true } }
         }
         var isDark: Bool = false {
-            didSet {
-                if isDark != oldValue {
-                    frostView.material = isDark ? .hudWindow : .popover
-                    needsLayout = true
-                }
-            }
+            didSet { if isDark != oldValue { needsLayout = true } }
         }
-        var density: Double = 0.6 {
-            didSet { if density != oldValue { updateAppearance() } }
-        }
-        var frost: Double = 0.4 {
-            didSet { if frost != oldValue { updateAppearance() } }
+        var material: DotistPanelMaterial = .regular {
+            didSet { if material != oldValue { updateAppearance() } }
         }
         var groupColor: DotistGroupColor = .none {
             didSet { if groupColor != oldValue { updateAppearance() } }
@@ -323,14 +279,6 @@ private struct NativeFloatingGlass: NSViewRepresentable {
             super.init(frame: frame)
             wantsLayer = true
             addSubview(glassView)
-
-            frostView.blendingMode = .behindWindow
-            frostView.state = .active
-            frostView.material = .popover
-            frostView.wantsLayer = true
-            frostView.layer?.mask = frostMaskLayer
-            addSubview(frostView)
-
             addSubview(pigmentView)
         }
 
@@ -351,7 +299,6 @@ private struct NativeFloatingGlass: NSViewRepresentable {
             let mask = LiquidGlassOpticsRenderer.featheredInteriorMask(
                 size: size, cornerRadius: radius, insetPt: insetPt, featherPt: featherPt, scale: 1.0
             )
-            frostMaskLayer.contents = mask
             pigmentView.washMaskLayer.contents = mask
             pigmentView.tintMaskLayer.contents = mask
             lastMaskSize = size
@@ -369,8 +316,6 @@ private struct NativeFloatingGlass: NSViewRepresentable {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             glassView.frame = bounds
-            frostView.frame = bounds
-            frostMaskLayer.frame = bounds
             pigmentView.frame = bounds
             CATransaction.commit()
             updateAppearance()
@@ -384,41 +329,34 @@ private struct NativeFloatingGlass: NSViewRepresentable {
             CATransaction.setDisableActions(true)
 
             if isBubble {
-                // 100% pure crystal .clear Liquid Glass droplet: zero blur slab, zero milky wash.
+                // 100% pure crystal .clear Liquid Glass droplet: zero milky wash.
                 glassView.alphaValue = 1.0
-                frostView.isHidden = true
-                frostView.alphaValue = 0
                 pigmentView.washLayer.backgroundColor = NSColor.clear.cgColor
                 pigmentView.tintLayer.backgroundColor = NSColor.clear.cgColor
             } else if isStrip {
-                // Hover capsule: independent of expanded opacity/frost; full .clear glass + airy text veil.
+                // Hover capsule: independent of expanded panel material; full .clear glass + airy text veil.
                 updateInteriorMask(insetPt: 2.5, featherPt: 6.0)
                 glassView.alphaValue = 1.0
-                frostView.isHidden = true
-                frostView.alphaValue = 0
                 let stripWashAlpha: Double = isDark ? 0.22 : 0.14
                 let neutral = NSColor(GlassTintMaterial.neutral(isDark ? .dark : .light)).withAlphaComponent(stripWashAlpha)
                 pigmentView.washLayer.backgroundColor = neutral.cgColor
                 let stripTintAlpha: Double = groupColor == .none ? 0.0 : (isDark ? 0.05 : 0.04)
                 pigmentView.tintLayer.backgroundColor = NSColor(DotistTheme.swatch(groupColor)).withAlphaComponent(stripTintAlpha).cgColor
             } else {
-                // Expanded panel: orthogonal full-range opacity wash + two-stage frost + dynamic rim feather.
-                let cal = ExpandedGlassCalibration.resolve(
-                    opacity: density,
-                    frost: frost,
+                // Expanded panel: native `.clear` or `.regular` Liquid Glass without manual wash or NSVisualEffectView.
+                let profile = ExpandedGlassProfile.resolve(
+                    material: material,
                     dark: isDark,
                     hasGroupColor: groupColor != .none
                 )
-                updateInteriorMask(insetPt: cal.maskInsetPt, featherPt: cal.maskFeatherPt)
-
-                glassView.alphaValue = CGFloat(cal.glassAlpha)
-                frostView.isHidden = !cal.showsFrost
-                frostView.alphaValue = CGFloat(cal.frostAlpha)
-
-                let neutral = NSColor(GlassTintMaterial.neutral(isDark ? .dark : .light)).withAlphaComponent(cal.washAlpha)
-                pigmentView.washLayer.backgroundColor = neutral.cgColor
-
-                pigmentView.tintLayer.backgroundColor = NSColor(DotistTheme.swatch(groupColor)).withAlphaComponent(cal.tintAlpha).cgColor
+                glassView.alphaValue = 1.0
+                pigmentView.washLayer.backgroundColor = NSColor.clear.cgColor
+                if profile.tintAlpha > 0 {
+                    updateInteriorMask(insetPt: profile.maskInsetPt, featherPt: profile.maskFeatherPt)
+                    pigmentView.tintLayer.backgroundColor = NSColor(DotistTheme.swatch(groupColor)).withAlphaComponent(profile.tintAlpha).cgColor
+                } else {
+                    pigmentView.tintLayer.backgroundColor = NSColor.clear.cgColor
+                }
             }
 
             CATransaction.commit()
@@ -432,8 +370,9 @@ private struct NativeFloatingGlass: NSViewRepresentable {
     }
 
     func updateNSView(_ view: HostView, context: Context) {
+        let targetStyle: NSGlassEffectView.Style = (compact || material == .clear) ? .clear : .regular
         if view.glassView.cornerRadius != cornerRadius { view.glassView.cornerRadius = cornerRadius }
-        if view.glassView.style != .clear { view.glassView.style = .clear }
+        if view.glassView.style != targetStyle { view.glassView.style = targetStyle }
         let tintScale: Double = compact ? GlassTintMaterial.compactTintScale : 1.0
         let materialTint = color == .none ? nil : NSColor(DotistTheme.tint(color, scheme).opacity(tintScale))
         if view.glassView.tintColor != materialTint { view.glassView.tintColor = materialTint }
@@ -441,8 +380,7 @@ private struct NativeFloatingGlass: NSViewRepresentable {
         view.radius = cornerRadius
         view.compact = compact
         view.isDark = scheme == .dark
-        view.density = density
-        view.frost = frost
+        view.material = material
         view.groupColor = color
         view.updateAppearance()
     }

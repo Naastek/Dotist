@@ -54,7 +54,7 @@ final class TransientGlassComparisonTests: XCTestCase {
         let material: AnyView
         switch variant.layer {
         case "production":
-            material = AnyView(FloatingSurface(opacity: 60, frost: 40, compact: true,
+            material = AnyView(FloatingSurface(material: .regular, compact: true,
                 transitioning: false, onRight: true, size: CGSize(width: width, height: 48), reveal: 1, color: .orange))
         case "paper": material = AnyView(bare.overlay(shape.fill(DotistDesign.paper.opacity(0.3))))
         case "double": material = AnyView(bare.glassEffect(glass, in: shape))

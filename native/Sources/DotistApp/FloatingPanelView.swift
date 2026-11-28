@@ -96,7 +96,7 @@ struct FloatingPanelView<Content: View>: View {
                         ? glassDebug.parameters : nil))
             }
             .background(alignment: .topLeading) {
-                ObservedFloatingSurface(surface: motion.surface, opacity: model.settings.opacity, frost: model.settings.frost,
+                ObservedFloatingSurface(surface: motion.surface, material: model.settings.resolvedPanelMaterial,
                     compact: motion.bubble, transitioning: motion.animationInProgress, onRight: motion.bubbleOnRight,
                     size: geometry.size, reveal: hoverReveal, color: model.themeColor(forGroup: colorState.groupID),
                     base: 48 + extra)
@@ -147,8 +147,7 @@ private struct FloatingContentMask: View {
 
 private struct ObservedFloatingSurface: View {
     @ObservedObject var surface: PanelSurfaceState
-    let opacity: UInt8
-    let frost: UInt8
+    let material: DotistPanelMaterial
     let compact: Bool
     let transitioning: Bool
     let onRight: Bool
@@ -159,7 +158,7 @@ private struct ObservedFloatingSurface: View {
 
     var body: some View {
         let frame = surface.transitionFrame ?? CGRect(origin: .zero, size: size)
-        FloatingSurface(opacity: opacity, frost: frost, compact: compact, transitioning: transitioning,
+        FloatingSurface(material: material, compact: compact, transitioning: transitioning,
             onRight: onRight, size: frame.size, reveal: reveal, color: color, base: base,
             frameInsets: surface.value)
             .offset(x: frame.minX, y: frame.minY)

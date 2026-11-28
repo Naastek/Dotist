@@ -54,7 +54,7 @@ final class BubbleLayoutTests: XCTestCase {
             .clipShape(shape)
             .background {
                 if surface {
-                    FloatingSurface(opacity: 73, frost: 22, compact: true, transitioning: false,
+                    FloatingSurface(material: .regular, compact: true, transitioning: false,
                         onRight: onRight, size: size, reveal: reveal, color: .orange)
                 }
             }

@@ -79,4 +79,39 @@ final class SideTabSettingsTests: XCTestCase {
         XCTAssertEqual(object["side_tab_opacity"] as? Int, 64)
         XCTAssertEqual(object.count, 1)
     }
+
+    func testPanelMaterialDefaultsPersistsAndInfersFromLegacySettings() throws {
+        try withSettings { path in
+            let fresh = try SettingsStore(path: path)
+            XCTAssertEqual(fresh.current().resolvedPanelMaterial, .regular)
+
+            var patch = DotistSettingsPatch()
+            patch.panelMaterial = DotistPanelMaterial.clear.rawValue
+            let updated = try fresh.update(patch)
+            XCTAssertEqual(updated.resolvedPanelMaterial, .clear)
+            XCTAssertEqual(try SettingsStore(path: path).current().resolvedPanelMaterial, .clear)
+
+            // Legacy clear/ultra presets infer `.clear` without rewriting the file.
+            for legacyJSON in [#"{"opacity":38,"frost":22}"#, #"{"opacity":8,"frost":4}"#] {
+                let data = Data(legacyJSON.utf8)
+                try data.write(to: path)
+                let store = try SettingsStore(path: path)
+                XCTAssertEqual(store.current().resolvedPanelMaterial, .clear)
+                XCTAssertEqual(try Data(contentsOf: path), data)
+            }
+
+            // Legacy standard/default values infer `.regular` without rewriting the file.
+            for legacyJSON in [#"{"opacity":60,"frost":40}"#, #"{"opacity":56,"frost":35}"#, #"{"opacity":80,"frost":10}"#] {
+                let data = Data(legacyJSON.utf8)
+                try data.write(to: path)
+                let store = try SettingsStore(path: path)
+                XCTAssertEqual(store.current().resolvedPanelMaterial, .regular)
+                XCTAssertEqual(try Data(contentsOf: path), data)
+            }
+
+            // Unknown panel_material falls back safely to `.regular`.
+            try Data(#"{"panel_material":"unknown-style"}"#.utf8).write(to: path)
+            XCTAssertEqual(try SettingsStore(path: path).current().resolvedPanelMaterial, .regular)
+        }
+    }
 }

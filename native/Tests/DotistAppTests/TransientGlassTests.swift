@@ -19,12 +19,12 @@ final class TransientGlassTests: XCTestCase {
             for (outerWidth, reveal): (CGFloat, CGFloat) in [(48, 0), (240, 0), (240, 0.5), (240, 1)] {
                 let size = CGSize(width: outerWidth, height: 48)
                 let visibleWidth = 48 + (outerWidth - 48) * reveal
-                let actual = try bitmap(FloatingSurface(opacity: 60, frost: 40, compact: true,
+                let actual = try bitmap(FloatingSurface(material: .regular, compact: true,
                     transitioning: false, onRight: onRight, size: size, reveal: reveal, color: .none)
                     .frame(width: outerWidth, height: 48), scheme: .dark)
                 // Build the reference at explicit material dimensions, positioned
                 // within the unchanged outer frame, independently of padding.
-                let expected = try bitmap(FloatingPanelMaterial(opacity: 60, frost: 40, compact: true, color: .none)
+                let expected = try bitmap(FloatingPanelMaterial(material: .regular, compact: true, color: .none)
                     .frame(width: visibleWidth - 4, height: 44)
                     .frame(width: visibleWidth, height: 48)
                     .frame(width: outerWidth, height: 48, alignment: onRight ? .trailing : .leading), scheme: .dark)
@@ -40,7 +40,7 @@ final class TransientGlassTests: XCTestCase {
                 }
                 // Native optics may extend into padding. Compare the same
                 // boundary pixel to an uninset material under identical conditions.
-                let uninset = try bitmap(FloatingPanelMaterial(opacity: 60, frost: 40, compact: true, color: .none)
+                let uninset = try bitmap(FloatingPanelMaterial(material: .regular, compact: true, color: .none)
                     .frame(width: visibleWidth, height: 48)
                     .frame(width: outerWidth, height: 48, alignment: onRight ? .trailing : .leading), scheme: .dark)
                 let left = onRight ? outerWidth - visibleWidth : 0
@@ -59,12 +59,12 @@ final class TransientGlassTests: XCTestCase {
         for compact in [false, true] {
             for protection in 0...2 where !compact || protection != 0 {
                 let size = CGSize(width: compact ? 48 : 240, height: compact ? 48 : 120)
-                let actual = try bitmap(FloatingSurface(opacity: 60, frost: 40, compact: compact,
+                let actual = try bitmap(FloatingSurface(material: .regular, compact: compact,
                     transitioning: false, onRight: true, size: size, reveal: 1, color: .none)
                     .frame(width: size.width, height: size.height)
                     .environment(\._accessibilityReduceTransparency, protection == 1)
                     .environment(\._colorSchemeContrast, protection == 2 ? .increased : .standard), scheme: .dark)
-                let expected = try bitmap(FloatingPanelMaterial(opacity: 60, frost: 40, compact: compact, color: .none)
+                let expected = try bitmap(FloatingPanelMaterial(material: .regular, compact: compact, color: .none)
                     .frame(width: size.width, height: size.height)
                     .clipShape(FloatingPanelShape(compact: compact, transitioning: false, onRight: true, reveal: 1))
                     .environment(\._accessibilityReduceTransparency, protection == 1)
@@ -82,9 +82,9 @@ final class TransientGlassTests: XCTestCase {
     func testCompactGlassInteriorRespondsToPresetsWithoutChangingWithFocus() throws {
         for scheme in [ColorScheme.light, .dark] {
             for width in [48, 240] {
-                for (opacity, frost): (UInt8, UInt8) in [(8, 4), (60, 40), (100, 100)] {
+                for material in DotistPanelMaterial.allCases {
                     let centers = try [false, true].map { active in
-                        let image = try bitmap(FloatingPanelSurface(opacity: opacity, frost: frost, compact: true,
+                        let image = try bitmap(FloatingPanelSurface(material: material, compact: true,
                             color: .none, solid: false, scheme: scheme)
                             .environment(\.appearsActive, active)
                             .frame(width: CGFloat(width), height: 48), scheme: scheme)
@@ -92,7 +92,7 @@ final class TransientGlassTests: XCTestCase {
                     }
                     XCTAssertEqual(centers[0], centers[1], accuracy: 1.0 / 255)
                     // Compact clear Liquid Glass keeps full native WindowServer optical presence
-                    // across presets without diluting refraction with expanded opacity/frost.
+                    // across panel material modes.
                     XCTAssertGreaterThan(centers[0], 0.95)
                 }
             }
@@ -102,7 +102,7 @@ final class TransientGlassTests: XCTestCase {
     func testCompactAccessibilitySurfaceIsOpaqueAndThemeCorrectAtBothWidths() throws {
         for scheme in [ColorScheme.light, .dark] {
             for width in [48, 240] {
-                let image = try bitmap(FloatingPanelSurface(opacity: 8, frost: 4, compact: true,
+                let image = try bitmap(FloatingPanelSurface(material: .clear, compact: true,
                     color: .none, solid: true, scheme: scheme).frame(width: CGFloat(width), height: 48), scheme: scheme)
                 let center = try XCTUnwrap(image.colorAt(x: width, y: 48)?.usingColorSpace(.sRGB))
                 XCTAssertEqual(center.alphaComponent, 1, accuracy: 0.01)
@@ -191,7 +191,7 @@ final class TransientGlassTests: XCTestCase {
                 for onRight in [false, true] {
                     motion.bubbleOnRight = onRight
                     for reveal in [CGFloat(0), 0.4, 1] {
-                        let surface = FloatingSurface(opacity: 60, frost: 40, compact: true,
+                        let surface = FloatingSurface(material: .regular, compact: true,
                             transitioning: false, onRight: onRight, size: CGSize(width: 260, height: 48), reveal: reveal, color: .none)
                             .frame(width: 260, height: 48)
                             .environment(\.colorScheme, scheme)
@@ -203,7 +203,7 @@ final class TransientGlassTests: XCTestCase {
                         let image = try await fixture.capture(scale: 2)
                         fixture.close()
                         let reference = NativeRenderingFixture(
-                            FloatingPanelSurface(opacity: 60, frost: 40, compact: true, color: .none,
+                            FloatingPanelSurface(material: .regular, compact: true, color: .none,
                                 solid: false, scheme: scheme)
                                 .frame(width: 48, height: 48).environment(\.colorScheme, scheme),
                             size: CGSize(width: 48, height: 48))

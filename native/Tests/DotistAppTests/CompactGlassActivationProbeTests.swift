@@ -148,7 +148,7 @@ final class CompactGlassActivationProbeTests: XCTestCase {
                             let visibility = ProbeVisibility()
                             let foregroundView: NSView
                             if variant == "production" {
-                                let surface = FloatingSurface(opacity: 60, frost: 40, compact: true, transitioning: false, onRight: true, size: rect.size, reveal: 1, color: .none)
+                                let surface = FloatingSurface(material: .regular, compact: true, transitioning: false, onRight: true, size: rect.size, reveal: 1, color: .none)
                                 let host = DotistHostingView(rootView: ProductionProbe(visibility: visibility, bubble: bubble, surface: surface).environment(\.colorScheme, scheme))
                                 host.sizingOptions = []; host.frame = container.bounds; host.autoresizingMask = [.width, .height]
                                 container.addSubview(host); foregroundView = host

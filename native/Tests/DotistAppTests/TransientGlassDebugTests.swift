@@ -81,7 +81,7 @@ final class TransientGlassDebugTests: XCTestCase {
         for scheme in [ColorScheme.light, .dark] {
             for protection in 0...2 {
                 for compact in [false, true] where protection > 0 || !compact {
-                    let surface = FloatingSurface(opacity: 60, frost: 40, compact: compact,
+                    let surface = FloatingSurface(material: .regular, compact: compact,
                         transitioning: false, onRight: true, size: CGSize(width: 160, height: 48),
                         reveal: 0.4, color: .orange)
                         .frame(width: 160, height: 48)
@@ -112,7 +112,7 @@ final class TransientGlassDebugTests: XCTestCase {
         func render(_ color: DotistGroupColor, _ layer: GlassDebugParameters.TintLayer) throws -> NSBitmapImageRep {
             var options = parameters
             options.tintLayer = layer
-            return try bitmap(FloatingPanelSurface(opacity: 8, frost: 4, compact: true,
+            return try bitmap(FloatingPanelSurface(material: .clear, compact: true,
                 color: color, solid: false, scheme: .light)
                 .frame(width: 160, height: 48).environment(\.glassDebugParameters, options))
         }
@@ -121,7 +121,7 @@ final class TransientGlassDebugTests: XCTestCase {
         }
         var defaultOptions = GlassDebugParameters()
         defaultOptions.tintLayer = .none
-        let zero = try center(bitmap(FloatingPanelSurface(opacity: 8, frost: 4, compact: true,
+        let zero = try center(bitmap(FloatingPanelSurface(material: .clear, compact: true,
             color: .orange, solid: false, scheme: .light).frame(width: 160, height: 48)
             .environment(\.glassDebugParameters, defaultOptions)))
         // The debug default remains the historical regular-glass experiment;

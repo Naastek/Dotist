@@ -185,7 +185,11 @@
     "仅演示便签依次出现，不影响任务或设置。": "Shows tabs appearing in sequence. Tasks and settings are unchanged.",
     "播放便签动画": "Play tab animation",
     "正在播放": "Playing",
-    "预览就绪": "Preview ready"
+    "预览就绪": "Preview ready",
+    "玻璃材质": "Glass material",
+    "清透水滴": "Clear",
+    "柔和自适应": "Soft Adaptive",
+    "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度；仅影响展开的主面板，不影响悬浮球或悬浮横条。": "Soft Adaptive lets macOS adjust blur and contrast to what is behind the window. Only affects the expanded main panel, not the floating bubble or bar."
   },
   "zh-TW": {
     "计划": "計畫",
@@ -373,7 +377,11 @@
     "仅演示便签依次出现，不影响任务或设置。": "僅示範便籤依序出現，不影響任務或設定。",
     "播放便签动画": "播放便籤動畫",
     "正在播放": "正在播放",
-    "预览就绪": "預覽就緒"
+    "预览就绪": "預覽就緒",
+    "玻璃材质": "玻璃材質",
+    "清透水滴": "清透水滴",
+    "柔和自适应": "柔和自適應",
+    "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度；仅影响展开的主面板，不影响悬浮球或悬浮横条。": "柔和自適應由系統依視窗背後明暗自動調節模糊與對比度；僅影響展開的主面板，不影響懸浮球或懸浮橫條。"
   },
   "fr": {
     "计划": "Planifier",
@@ -561,7 +569,11 @@
     "仅演示便签依次出现，不影响任务或设置。": "Montre l’apparition successive des onglets, sans modifier les tâches ni les réglages.",
     "播放便签动画": "Lire l’animation des onglets",
     "正在播放": "Lecture en cours",
-    "预览就绪": "Aperçu prêt"
+    "预览就绪": "Aperçu prêt",
+    "玻璃材质": "Matériau du verre",
+    "清透水滴": "Clair",
+    "柔和自适应": "Doux adaptatif",
+    "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度；仅影响展开的主面板，不影响悬浮球或悬浮横条。": "Doux adaptatif laisse macOS ajuster le flou et le contraste selon l’arrière-plan. S’applique uniquement au panneau principal déployé, pas à la bulle ni à la barre flottante."
   },
   "de": {
     "计划": "Planen",
@@ -749,6 +761,10 @@
     "仅演示便签依次出现，不影响任务或设置。": "Zeigt das nacheinander Einblenden der Reiter, ohne Aufgaben oder Einstellungen zu ändern.",
     "播放便签动画": "Reiteranimation abspielen",
     "正在播放": "Wiedergabe läuft",
-    "预览就绪": "Vorschau bereit"
+    "预览就绪": "Vorschau bereit",
+    "玻璃材质": "Glasmaterial",
+    "清透水滴": "Klar",
+    "柔和自适应": "Sanft adaptiv",
+    "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度；仅影响展开的主面板，不影响悬浮球或悬浮横条。": "Sanft adaptiv lässt macOS Unschärfe und Kontrast an den Hintergrund anpassen. Gilt nur für das aufgeklappte Hauptfenster, nicht für die schwebende Blase oder Leiste."
   }
 }

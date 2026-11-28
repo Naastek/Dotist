@@ -45,7 +45,7 @@ final class PanelColorTests: XCTestCase {
         for scheme in [ColorScheme.light, .dark] {
             for compact in [false, true] {
                 func pixel(_ color: DotistGroupColor) throws -> NSColor {
-                    let content = FloatingPanelSurface(opacity: 73, frost: 22, compact: compact, color: color, solid: true, scheme: scheme)
+                    let content = FloatingPanelSurface(material: .regular, compact: compact, color: color, solid: true, scheme: scheme)
                         .frame(width: 48, height: 48)
                         .environment(\.colorScheme, scheme)
                     let renderer = ImageRenderer(content: content)

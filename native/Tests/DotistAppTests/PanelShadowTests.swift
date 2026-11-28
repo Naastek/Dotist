@@ -25,7 +25,7 @@ final class PanelShadowTests: XCTestCase {
                         let size = CGSize(width: 280, height: 48)
                         let surfaceWidth = 48 + (size.width - 48) * reveal
                         let x = onRight ? size.width - surfaceWidth : 0
-                        let content = FloatingSurface(opacity: 73, frost: 22, compact: true,
+                        let content = FloatingSurface(material: .regular, compact: true,
                             transitioning: false, onRight: onRight, size: size, reveal: reveal, color: .orange)
                             .frame(width: size.width, height: size.height).padding(12)
                             .environment(\.colorScheme, scheme)
@@ -61,7 +61,7 @@ final class PanelShadowTests: XCTestCase {
                             "Second surface outside capsule: reveal=\(reveal), side=\(onRight), scale=\(scale), point=\(exteriorPoint)")
                         // Compare the interior with a single isolated production
                         // material. A second filled layer would change its alpha/tint.
-                        let reference = ImageRenderer(content: FloatingPanelMaterial(opacity: 73, frost: 22, compact: true, color: .orange)
+                        let reference = ImageRenderer(content: FloatingPanelMaterial(material: .regular, compact: true, color: .orange)
                             .frame(width: surfaceWidth, height: 48)
                             .environment(\.colorScheme, scheme)
                             .environment(\.displayScale, scale)
@@ -97,7 +97,7 @@ final class PanelShadowTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".cache/integration-install/pixel-evidence/panel-shadow")
         try FileManager.default.createDirectory(at: evidence, withIntermediateDirectories: true)
         var pixelEvidence = ["onRight,width,reveal,scale,x,y,red,green,blue,alpha,maskAlpha,neighborMaskMax"]
-        let host = DotistHostingView(rootView: FloatingSurface(opacity: 73, frost: 22,
+        let host = DotistHostingView(rootView: FloatingSurface(material: .regular,
             compact: true, transitioning: false, onRight: true, size: CGSize(width: 280, height: 48), reveal: 0, color: .orange)
             .environment(\._accessibilityReduceTransparency, true))
         host.sizingOptions = []
@@ -115,7 +115,7 @@ final class PanelShadowTests: XCTestCase {
                 let size = CGSize(width: width, height: 48)
                 panel.setFrame(NSRect(origin: .zero, size: size), display: false)
                 host.frame = CGRect(origin: .zero, size: size)
-                host.rootView = FloatingSurface(opacity: 73, frost: 22, compact: true,
+                host.rootView = FloatingSurface(material: .regular, compact: true,
                     transitioning: false, onRight: onRight, size: size, reveal: reveal, color: .orange)
                     .environment(\._accessibilityReduceTransparency, true)
                 host.layoutSubtreeIfNeeded()

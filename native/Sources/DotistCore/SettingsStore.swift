@@ -56,6 +56,10 @@ final class SettingsStore: @unchecked Sendable {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         value = try decoder.decode(DotistSettings.self, from: JSONSerialization.data(withJSONObject: defaults.merging(stored) { _, new in new }))
+        let hasStoredPanelMaterial = (stored["panel_material"] as? String).map { !$0.isEmpty } ?? false
+        if !hasStoredPanelMaterial && (stored["opacity"] != nil || stored["frost"] != nil) {
+            value.panelMaterial = DotistPanelMaterial.inferredFromLegacy(opacity: value.opacity, frost: value.frost).rawValue
+        }
         // Loading must not turn previously accepted explicit aliases into a
         // startup failure, or silently change an explicitly stored binding.
         value = try Self.normalized(value, validateShortcuts: false)
@@ -73,6 +77,7 @@ final class SettingsStore: @unchecked Sendable {
         if let value = patch.fontSansLatin { next.fontSansLatin = value }
         if let value = patch.fontSerifCjk { next.fontSerifCjk = value }
         if let value = patch.fontSansCjk { next.fontSansCjk = value }
+        if let value = patch.panelMaterial { next.panelMaterial = value }
         if let value = patch.opacity { next.opacity = value }
         if let value = patch.sideTabOpacity { next.sideTabOpacity = value }
         if let value = patch.frost { next.frost = value }
@@ -159,6 +164,7 @@ final class SettingsStore: @unchecked Sendable {
         next.fontSerifCjk = fonts.serifCjk
         next.fontSansCjk = fonts.sansCjk
         next.allColor = DotistGroupColor(rawValue: next.allColor).rawValue
+        next.panelMaterial = DotistPanelMaterial(rawValue: next.panelMaterial).rawValue
         var seenTags: Set<String> = []
         next.tagOrder = next.tagOrder.filter { !$0.isEmpty && seenTags.insert($0).inserted }
         guard ["system", "light", "dark"].contains(next.theme) else { throw TaskStoreError("无效的主题") }

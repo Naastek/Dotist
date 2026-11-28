@@ -1000,49 +1000,29 @@ final class FloatingGlassFocusAcceptanceTests: XCTestCase {
             panel.orderFrontRegardless()
             spin(0.25)
 
-            func apply(opacity: UInt8, frost: UInt8) {
+            func apply(material: DotistPanelMaterial) {
                 var patch = DotistSettingsPatch()
                 patch.theme = setup.themeName
-                patch.opacity = opacity
-                patch.frost = frost
+                patch.panelMaterial = material.rawValue
                 patch.alwaysOnTop = true
                 model.updateSettings(patch)
             }
 
-            // 1. Three locked presets
-            let presets: [(String, UInt8, UInt8)] = [
-                ("标准 (透明40% / 磨砂40%)", 60, 40),
-                ("透明玻璃 (透明62% / 磨砂22%)", 38, 22),
-                ("极致通透 (透明92% / 磨砂4%)", 8, 4)
+            let modes: [(String, DotistPanelMaterial)] = [
+                ("清透水滴 (.clear)", .clear),
+                ("柔和自适应 (.regular)", .regular)
             ]
             var presetRow: [(String, NSBitmapImageRep)] = []
-            for (label, op, fr) in presets {
-                apply(opacity: op, frost: fr)
-                let rep = try captureCard(name: "\(setup.id)-preset-\(op)-\(fr)")
+            for (label, material) in modes {
+                apply(material: material)
+                let rep = try captureCard(name: "\(setup.id)-material-\(material.rawValue)")
                 presetRow.append((label, rep))
-                let cal = ExpandedGlassCalibration.resolve(opacity: Double(op) / 100, frost: Double(fr) / 100, dark: setup.scheme == .dark, hasGroupColor: false)
-                metricsLines.append(String(format: "%@ | %@ | wash=%.3f frost=%.3f inset=%.2f feather=%.2f",
-                    setup.id, label, cal.washAlpha, cal.frostAlpha, cal.maskInsetPt, cal.maskFeatherPt))
+                let profile = ExpandedGlassProfile.resolve(material: material, dark: setup.scheme == .dark, hasGroupColor: false)
+                metricsLines.append(String(format: "%@ | %@ | tint=%.3f inset=%.2f feather=%.2f",
+                    setup.id, label, profile.tintAlpha, profile.maskInsetPt, profile.maskFeatherPt))
             }
-            try renderGrid(cells: [presetRow], title: "三档预设实拍对照 — \(setup.title)",
-                to: outDir.appendingPathComponent("presets-\(setup.id).png"))
-
-            // 2. 4x3 orthogonal matrix: transparency [0%, 50%, 95%, 100%] x frost [0%, 50%, 100%]
-            let transparencies: [Int] = [0, 50, 95, 100]
-            let frosts: [UInt8] = [0, 50, 100]
-            var grid: [[(String, NSBitmapImageRep)]] = []
-            for tr in transparencies {
-                let op = UInt8(100 - tr)
-                var row: [(String, NSBitmapImageRep)] = []
-                for fr in frosts {
-                    apply(opacity: op, frost: fr)
-                    let rep = try captureCard(name: "\(setup.id)-t\(tr)-f\(fr)")
-                    row.append(("透明 \(tr)% · 磨砂 \(fr)%", rep))
-                }
-                grid.append(row)
-            }
-            try renderGrid(cells: grid, title: "透明度 × 磨砂 正交全量程实拍矩阵 — \(setup.title)",
-                to: outDir.appendingPathComponent("matrix-\(setup.id).png"))
+            try renderGrid(cells: [presetRow], title: "两档原生玻璃材质实拍对照 — \(setup.title)",
+                to: outDir.appendingPathComponent("materials-\(setup.id).png"))
         }
 
         try (metricsLines.joined(separator: "\n") + "\n").write(

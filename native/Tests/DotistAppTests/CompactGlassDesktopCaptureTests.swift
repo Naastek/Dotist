@@ -110,7 +110,7 @@ final class CompactGlassDesktopCaptureTests: XCTestCase {
                             panel.hasShadow = true
                             defer { panel.close(); background.close() }
                             panel.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
-                            let surface = FloatingSurface(opacity: 60, frost: 40, compact: true, transitioning: false,
+                            let surface = FloatingSurface(material: .regular, compact: true, transitioning: false,
                                 onRight: true, size: CGSize(width: width, height: 48), reveal: 1, color: color)
                                 .environment(\.glassDebugParameters, version == "old" ? GlassDebugParameters() : nil)
                             let content = ZStack {

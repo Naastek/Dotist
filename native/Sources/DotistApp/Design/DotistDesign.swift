@@ -157,17 +157,15 @@ enum DotistDesign {
 }
 
 struct WindowMaterial: View {
-    let opacity: UInt8
-    let frost: UInt8
+    var material: DotistPanelMaterial = .regular
     var body: some View {
-        FloatingMaterial(opacity: opacity, frost: frost, compact: false)
+        FloatingMaterial(material: material, compact: false)
     }
 }
 
 /// The floating window has one continuous glass surface; task rows remain plain.
 struct FloatingMaterial: View {
-    let opacity: UInt8
-    let frost: UInt8
+    var material: DotistPanelMaterial = .regular
     let compact: Bool
     var color: DotistGroupColor = .none
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -176,7 +174,7 @@ struct FloatingMaterial: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        FloatingPanelSurface(opacity: opacity, frost: frost, compact: compact, color: color,
+        FloatingPanelSurface(material: material, compact: compact, color: color,
                              solid: reduceTransparency || contrast == .increased, scheme: scheme)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: color)
     }

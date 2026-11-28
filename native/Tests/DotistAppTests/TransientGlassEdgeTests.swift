@@ -23,7 +23,7 @@ final class TransientGlassEdgeTests: XCTestCase {
                             let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
                             let size = CGSize(width: width, height: 48)
                             let tint: Color? = color == .none ? nil : DotistTheme.tint(color, scheme)
-                            let surface = FloatingSurface(opacity: 60, frost: 40, compact: true,
+                            let surface = FloatingSurface(material: .regular, compact: true,
                                 transitioning: false, onRight: true, size: size, reveal: 1, color: color)
                             let material: AnyView
                             switch variant {

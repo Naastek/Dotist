@@ -22,63 +22,47 @@ final class ExpandedOpacityContractTests: XCTestCase {
         return NSBitmapImageRep(cgImage: try XCTUnwrap(context.makeImage()))
     }
 
-    func testCompleteBackgroundHonorsOpacityBudgetIncludingFrostAndGroupTint() async throws {
+    func testCompleteBackgroundUsesNativeGlassStylesWithoutFrostSlab() async throws {
         _ = NSApplication.shared
         for scheme in [ColorScheme.light, .dark] {
             for color in [DotistGroupColor.none, .orange, .pink] {
-                for opacity: UInt8 in [0, 4, 38, 80, 95, 100] {
-                    for frost: UInt8 in [0, 40, 100] {
-                        let fixture = NativeRenderingFixture(FloatingPanelSurface(opacity: opacity, frost: frost, compact: false,
-                            color: color, solid: false, scheme: scheme).frame(width: 300, height: 120)
-                            .environment(\.colorScheme, scheme), size: size)
-                        fixture.window.isOpaque = false; fixture.window.backgroundColor = .clear
-                        let image = try await fixture.capture(scale: 1)
-                        defer { fixture.close() }
-                        // Verify the actual mounted reading layers & behind-window frost/glass views
-                        // inside NativeFloatingGlass's HostView match the orthogonal calibration,
-                        // and that pigmentView strictly sits above frostView in sibling z-order.
-                        let glass = try XCTUnwrap(fixture.descendants(NSGlassEffectView.self).first)
-                        let host = try XCTUnwrap(glass.superview)
-                        let frostView = try XCTUnwrap(host.subviews.compactMap { $0 as? NSVisualEffectView }.first)
-                        let pigmentView = try XCTUnwrap(host.subviews.last)
-                        let frostIndex = try XCTUnwrap(host.subviews.firstIndex(of: frostView))
-                        let pigmentIndex = try XCTUnwrap(host.subviews.firstIndex(of: pigmentView))
-                        XCTAssertGreaterThan(pigmentIndex, frostIndex, "Pigment wash/tint must sit above behind-window frostView")
-                        let sublayers = try XCTUnwrap(pigmentView.layer?.sublayers)
-                        let washLayer = try XCTUnwrap(sublayers.first { $0.name == "dotist.wash" })
-                        let tintLayer = try XCTUnwrap(sublayers.first { $0.name == "dotist.tint" })
-                        let washColor = try XCTUnwrap(washLayer.backgroundColor)
-                        let tintColor = try XCTUnwrap(tintLayer.backgroundColor)
-                        let density = DotistDesign.materialOpacity(opacity, dark: scheme == .dark, highContrast: false)
-                        let expected = ExpandedGlassCalibration.resolve(
-                            opacity: density,
-                            frost: Double(frost) / 100.0,
-                            dark: scheme == .dark,
-                            hasGroupColor: color != .none
-                        )
-                        XCTAssertEqual(Double(glass.alphaValue), expected.glassAlpha, accuracy: 0.001)
-                        XCTAssertEqual(frostView.isHidden, !expected.showsFrost)
-                        XCTAssertEqual(Double(frostView.alphaValue), expected.frostAlpha, accuracy: 0.001)
-                        XCTAssertEqual(Double(washColor.alpha), expected.washAlpha, accuracy: 0.001)
-                        XCTAssertEqual(Double(tintColor.alpha), expected.tintAlpha, accuracy: 0.001)
-                        for (x, y) in [(60, 25), (150, 60), (240, 95)] {
-                            let alpha = try XCTUnwrap(image.colorAt(x: x, y: y)).alphaComponent
-                            if opacity == 100, alpha > 0 {
-                                XCTAssertGreaterThan(alpha, 0.98)
-                            }
-                        }
-                    }
+                for material in DotistPanelMaterial.allCases {
+                    let fixture = NativeRenderingFixture(FloatingPanelSurface(material: material, compact: false,
+                        color: color, solid: false, scheme: scheme).frame(width: 300, height: 120)
+                        .environment(\.colorScheme, scheme), size: size)
+                    fixture.window.isOpaque = false; fixture.window.backgroundColor = .clear
+                    _ = try await fixture.capture(scale: 1)
+                    defer { fixture.close() }
+                    let glass = try XCTUnwrap(fixture.descendants(NSGlassEffectView.self).first)
+                    let host = try XCTUnwrap(glass.superview)
+                    XCTAssertTrue(host.subviews.compactMap { $0 as? NSVisualEffectView }.isEmpty,
+                        "Expanded native glass must not stack a separate NSVisualEffectView")
+                    let pigmentView = try XCTUnwrap(host.subviews.last)
+                    let sublayers = try XCTUnwrap(pigmentView.layer?.sublayers)
+                    let washLayer = try XCTUnwrap(sublayers.first { $0.name == "dotist.wash" })
+                    let tintLayer = try XCTUnwrap(sublayers.first { $0.name == "dotist.tint" })
+                    let washColor = try XCTUnwrap(washLayer.backgroundColor)
+                    let tintColor = try XCTUnwrap(tintLayer.backgroundColor)
+                    let expected = ExpandedGlassProfile.resolve(
+                        material: material,
+                        dark: scheme == .dark,
+                        hasGroupColor: color != .none
+                    )
+                    XCTAssertEqual(glass.style, expected.glassStyle)
+                    XCTAssertEqual(Double(glass.alphaValue), 1.0, accuracy: 0.001)
+                    XCTAssertEqual(Double(washColor.alpha), 0.0, accuracy: 0.001)
+                    XCTAssertEqual(Double(tintColor.alpha), expected.tintAlpha, accuracy: 0.001)
                 }
             }
         }
     }
 
-    /// Exercise the center composition at intermediate opacity with independent foreground ink.
-    func testNativeWindowCompositionHonorsCenterOpacityAndKeepsTextOpaque() async throws {
+    /// Exercise the center composition across both native glass styles with independent foreground ink.
+    func testNativeWindowCompositionKeepsTextOpaqueAcrossMaterialModes() async throws {
         _ = NSApplication.shared
         for scheme in [ColorScheme.light, .dark] {
-            for opacity: UInt8 in [0, 4, 38, 80, 95, 100] {
-                let background = FloatingPanelSurface(opacity: opacity, frost: 40, compact: false,
+            for material in DotistPanelMaterial.allCases {
+                let background = FloatingPanelSurface(material: material, compact: false,
                     color: .pink, solid: false, scheme: scheme)
                 let control = background.frame(width: 300, height: 120)
                     .environment(\.colorScheme, scheme)
@@ -97,27 +81,29 @@ final class ExpandedOpacityContractTests: XCTestCase {
                 for (x, y) in [(60, 25), (150, 25), (240, 95)] {
                     let a = try XCTUnwrap(actual.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
                     let b = try XCTUnwrap(expected.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
-                    XCTAssertEqual(a.alphaComponent, b.alphaComponent, accuracy: 0.015, "Center alpha at \(scheme), opacity=\(opacity)")
+                    XCTAssertEqual(a.alphaComponent, b.alphaComponent, accuracy: 0.015, "Center alpha at \(scheme), material=\(material)")
                     for (aa, bb) in [(a.redComponent, b.redComponent), (a.greenComponent, b.greenComponent), (a.blueComponent, b.blueComponent)] {
                         XCTAssertEqual(aa * a.alphaComponent, bb * b.alphaComponent, accuracy: 0.015,
-                            "Center pigment at \(scheme), opacity=\(opacity)")
+                            "Center pigment at \(scheme), material=\(material)")
                     }
                 }
                 var maxInk: CGFloat = 0
                 for y in 45..<75 { for x in 60..<240 { maxInk = max(maxInk, actual.colorAt(x: x, y: y)?.alphaComponent ?? 0) } }
-                XCTAssertGreaterThan(maxInk, 0.9, "Background opacity must not fade foreground text")
+                XCTAssertGreaterThan(maxInk, 0.9, "Background material must not fade foreground text")
             }
         }
     }
 
-    func testAccessibilityKeepsWholeBackgroundOpaqueAtZeroOpacity() throws {
+    func testAccessibilityKeepsWholeBackgroundOpaqueInBothMaterialModes() throws {
         for scheme in [ColorScheme.light, .dark] {
-            for protection in 1...2 {
-                let image = try fixedBitmap(FloatingPanelMaterial(opacity: 0, frost: 100, compact: false, color: .pink)
-                    .environment(\.colorScheme, scheme)
-                    .environment(\._accessibilityReduceTransparency, protection == 1)
-                    .environment(\._colorSchemeContrast, protection == 2 ? .increased : .standard))
-                XCTAssertEqual(try XCTUnwrap(image.colorAt(x: 300, y: 120)).alphaComponent, 1, accuracy: 0.01)
+            for material in DotistPanelMaterial.allCases {
+                for protection in 1...2 {
+                    let image = try fixedBitmap(FloatingPanelMaterial(material: material, compact: false, color: .pink)
+                        .environment(\.colorScheme, scheme)
+                        .environment(\._accessibilityReduceTransparency, protection == 1)
+                        .environment(\._colorSchemeContrast, protection == 2 ? .increased : .standard))
+                    XCTAssertEqual(try XCTUnwrap(image.colorAt(x: 300, y: 120)).alphaComponent, 1, accuracy: 0.01)
+                }
             }
         }
     }

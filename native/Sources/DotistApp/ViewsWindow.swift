@@ -61,7 +61,7 @@ struct ViewsWindow: View {
         }
         .foregroundColor(DotistDesign.ink)
         .modifier(DotistControlTint())
-        .background(WindowMaterial(opacity: 78, frost: model.settings.frost))
+        .background(WindowMaterial(material: .regular))
         .modifier(DotistTheme(theme: model.settings.theme))
         }
     }

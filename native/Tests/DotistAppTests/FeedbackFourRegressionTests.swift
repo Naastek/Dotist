@@ -43,7 +43,7 @@ final class FeedbackFourRegressionTests: XCTestCase {
         MainWindow(model: model, state: state, showViews: {}, showSearch: {}, showSettings: {}, showGroupPanel: { _ in }, collapse: {}, primary: false)
             .background {
                 if material {
-                    FloatingPanelSurface(opacity: model.settings.opacity, frost: model.settings.frost, compact: false,
+                    FloatingPanelSurface(material: model.settings.resolvedPanelMaterial, compact: false,
                                          color: .orange, solid: false, scheme: .light)
                         .background(Color(red: 0.95, green: 0.9, blue: 0.85))
                 } else { Color.white }
@@ -597,15 +597,15 @@ final class FeedbackFourRegressionTests: XCTestCase {
         }
     }
     func testNativeSurfaceCompositesFullBackgroundAndPreservesText() async throws {
-        var rows = ["scheme,opacity,frost,reduceTransparency,increasedContrast,backgroundAlpha,maxTextAlpha"]
+        var rows = ["scheme,material,reduceTransparency,increasedContrast,backgroundAlpha,maxTextAlpha"]
         for scheme in [ColorScheme.light, .dark] {
-            for opacity: UInt8 in [0, 4, 38, 95, 100] {
+            for material in DotistPanelMaterial.allCases {
                 // accessibility env properties are read-only: exercise the
                 // same resolved solid input as FloatingPanelMaterial's OR.
                 for protection in [0, 1, 2] {
                     let content = Text("Readable 常态文字").font(.system(size: 16)).foregroundStyle(DotistDesign.ink)
                         .frame(width: 300, height: 120)
-                        .background(FloatingPanelSurface(opacity: opacity, frost: 0, compact: false, color: .orange, solid: protection != 0, scheme: scheme))
+                        .background(FloatingPanelSurface(material: material, compact: false, color: .orange, solid: protection != 0, scheme: scheme))
                         .environment(\.colorScheme, scheme)
                     let fixture = NativeRenderingFixture(content, size: CGSize(width: 300, height: 120))
                     fixture.window.isOpaque = false; fixture.window.backgroundColor = .clear
@@ -614,25 +614,22 @@ final class FeedbackFourRegressionTests: XCTestCase {
                     let background = try XCTUnwrap(bitmap.colorAt(x: 60, y: 25))
                     var maxText: CGFloat = 0
                     for y in 45..<75 { for x in 60..<240 { maxText = max(maxText, bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) } }
-                    rows.append("\(scheme),\(opacity),0,\(protection == 1),\(protection == 2),\(background.alphaComponent),\(maxText)")
+                    rows.append("\(scheme),\(material.rawValue),\(protection == 1),\(protection == 2),\(background.alphaComponent),\(maxText)")
                     if protection == 0 {
                         let glass = try XCTUnwrap(fixture.descendants(NSGlassEffectView.self).first)
                         let host = try XCTUnwrap(glass.superview)
                         let pigmentView = try XCTUnwrap(host.subviews.last)
                         let washLayer = try XCTUnwrap(pigmentView.layer?.sublayers?.first { $0.name == "dotist.wash" })
                         let washAlpha = try XCTUnwrap(washLayer.backgroundColor).alpha
-                        let expected = ExpandedGlassCalibration.resolve(
-                            opacity: Double(opacity) / 100.0, frost: 0,
+                        let expected = ExpandedGlassProfile.resolve(
+                            material: material,
                             dark: scheme == .dark, hasGroupColor: true
                         )
-                        XCTAssertEqual(Double(washAlpha), expected.washAlpha, accuracy: 0.001)
-                        XCTAssertLessThanOrEqual(washAlpha, CGFloat(opacity) / 100 + 0.001)
-                        if opacity >= 95, background.alphaComponent > 0 {
-                            XCTAssertGreaterThan(background.alphaComponent, 0.85)
-                        }
+                        XCTAssertEqual(glass.style, expected.glassStyle)
+                        XCTAssertEqual(Double(washAlpha), 0.0, accuracy: 0.001)
                     } else { XCTAssertEqual(background.alphaComponent, 1, accuracy: 0.01) }
-                    XCTAssertGreaterThan(maxText, 0.9, "Surface opacity must never fade normal text")
-                    try save(bitmap, "surface-\(scheme)-\(opacity)-protection\(protection)")
+                    XCTAssertGreaterThan(maxText, 0.9, "Surface material must never fade normal text")
+                    try save(bitmap, "surface-\(scheme)-\(material.rawValue)-protection\(protection)")
                 }
             }
         }

@@ -27,6 +27,9 @@ final class SettingsSearchTests: XCTestCase {
         for query in ["分组便签背景透明度", "Group tab background transparency", "群組便籤背景透明度"] {
             XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.target == "appearance.分组便签背景透明度" }, query)
         }
+        for query in ["玻璃材质", "Glass material", "清透水滴", "柔和自适应", "Soft Adaptive", "磨砂"] {
+            XCTAssertTrue(SettingsSearchIndex.matches(query).contains { $0.target == "appearance.玻璃材质" }, query)
+        }
     }
     func testTokensCanMatchAcrossModuleAndSettingTitle() {
         let matches = SettingsSearchIndex.matches("  GENERAL   LANGUAGE ")

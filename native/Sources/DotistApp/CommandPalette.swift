@@ -116,7 +116,7 @@ struct CommandPalette: View {
         }
         .accessibilityIdentifier("search-drag-handle")
         .foregroundColor(DotistDesign.ink)
-        .background(WindowMaterial(opacity: 98, frost: model.settings.frost))
+        .background(WindowMaterial(material: .regular))
         .containerShape(.rect(cornerRadius: DotistDesign.windowCornerRadius))
         .clipShape(.rect(cornerRadius: DotistDesign.windowCornerRadius))
         .modifier(DotistTheme(theme: model.settings.theme))

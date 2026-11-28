@@ -486,7 +486,7 @@ final class ExpandedGlassDesktopCaptureTests: XCTestCase {
             case .productionCandidate, .productionLowOpacity, .productionLowFrost, .productionHighFrost, .productionNeutral, .productionTransparent, .productionOpaque:
                 let inputs = try XCTUnwrap(variant.productionInputs)
                 trace.mark("variant.production-inputs", facts: ["opacity": String(inputs.opacity), "frost": String(inputs.frost), "color": inputs.color.rawValue])
-                surface = AnyView(FloatingSurface(opacity: inputs.opacity, frost: inputs.frost, compact: false, transitioning: false,
+                surface = AnyView(FloatingSurface(material: DotistPanelMaterial.inferredFromLegacy(opacity: inputs.opacity, frost: inputs.frost), compact: false, transitioning: false,
                     onRight: true, size: surfaceSize, reveal: 1, color: inputs.color))
             default: surface = AnyView(Experiment(variant: variant, scheme: scheme))
             }

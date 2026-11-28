@@ -117,6 +117,31 @@ public struct DotistFontPreferences: Equatable, Sendable {
     public var cacheKey: String { [serifLatin, sansLatin, serifCjk, sansCjk].joined(separator: "|") }
 }
 
+/// Native glass material style for the expanded floating main panel.
+public enum DotistPanelMaterial: String, Codable, CaseIterable, Sendable {
+    /// Crystal-clear Liquid Glass (`NSGlassEffectView.Style.clear`).
+    case clear
+    /// System native adaptive frosted glass (`NSGlassEffectView.Style.regular`).
+    case regular
+
+    public static let defaultValue: DotistPanelMaterial = .regular
+
+    public init(rawValue: String) {
+        self = Self.allCases.first { $0.rawValue == rawValue } ?? Self.defaultValue
+    }
+
+    public init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+
+    /// Infer a default material when loading a legacy settings file that only
+    /// persisted `opacity`/`frost`. Legacy clear/ultra presets (38/22, 8/4) map
+    /// to `.clear`; standard/default (56/35, 60/40) and higher values map to `.regular`.
+    public static func inferredFromLegacy(opacity: UInt8, frost: UInt8) -> DotistPanelMaterial {
+        (opacity <= 40 && frost <= 25) ? .clear : .regular
+    }
+}
+
 /// UI values always increase toward transparency. Persisted *_opacity keys
 /// keep their historical meaning; loading an old file never inverts its values.
 public enum DotistTransparency {
@@ -136,6 +161,11 @@ public struct DotistSettings: Codable, Equatable, Sendable {
     public var fontSansCjk: String? = nil
     public var fontPreferences: DotistFontPreferences {
         DotistFontPreferences(serifLatin: fontSerifLatin, sansLatin: fontSansLatin, serifCjk: fontSerifCjk, sansCjk: fontSansCjk)
+    }
+    /// Native glass material for the expanded main panel ("clear" or "regular").
+    public var panelMaterial: String = DotistPanelMaterial.defaultValue.rawValue
+    public var resolvedPanelMaterial: DotistPanelMaterial {
+        DotistPanelMaterial(rawValue: panelMaterial)
     }
     public var opacity: UInt8
     /// Background opacity of side tabs, independent of panel opacity (0...100).
@@ -184,7 +214,7 @@ public struct DotistSettings: Codable, Equatable, Sendable {
 extension DotistSettings {
     private enum CodingKeys: String, CodingKey {
         case theme, language, fontSerifLatin, fontSansLatin, fontSerifCjk, fontSansCjk
-        case opacity, sideTabOpacity, frost, toggleShortcut, quickAddShortcut, settingsShortcut, viewsShortcut, searchShortcut, shortcutScopes
+        case panelMaterial, opacity, sideTabOpacity, frost, toggleShortcut, quickAddShortcut, settingsShortcut, viewsShortcut, searchShortcut, shortcutScopes
         case trayMode, trayRotateSecs, trayLeftClick, trayRightClick
         case alwaysOnTop, hoverExpand, showDock, showMenubar, idleFade, locked
         case hoverPreviewTaskId
@@ -205,6 +235,7 @@ extension DotistSettings {
         opacity = try values.decode(UInt8.self, forKey: .opacity)
         sideTabOpacity = try values.decodeIfPresent(UInt8.self, forKey: .sideTabOpacity) ?? 85
         frost = try values.decode(UInt8.self, forKey: .frost)
+        panelMaterial = try values.decodeIfPresent(String.self, forKey: .panelMaterial) ?? DotistPanelMaterial.defaultValue.rawValue
         toggleShortcut = try values.decode(String.self, forKey: .toggleShortcut)
         quickAddShortcut = try values.decode(String.self, forKey: .quickAddShortcut)
         settingsShortcut = try values.decode(String.self, forKey: .settingsShortcut)
@@ -251,6 +282,7 @@ public struct DotistSettingsPatch: Encodable, Sendable {
     public var fontSansLatin: String?
     public var fontSerifCjk: String?
     public var fontSansCjk: String?
+    public var panelMaterial: String?
     public var opacity: UInt8?
     public var sideTabOpacity: UInt8?
     public var frost: UInt8?

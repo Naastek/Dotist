@@ -177,19 +177,21 @@ struct SettingsWindow: View {
                                           label: model.text("主题"), language: model.language).frame(width: 244)
                 }
             }
-            settingsGroup("主面板材质", footer: "仅影响展开的主面板，不影响悬浮球或悬浮横条。") {
-                settingRow("玻璃预设") {
-                    SettingsSegmentedPicker(selection: Binding(get: { glassPreset }, set: { value in
-                        let preset = value == "clear" ? (UInt8(38), UInt8(22)) : value == "ultra" ? (UInt8(8), UInt8(4)) : (UInt8(60), UInt8(40))
-                        update { $0.opacity = preset.0; $0.frost = preset.1 }
-                    }), options: [("standard", model.text("标准")), ("clear", model.text("透明玻璃")), ("ultra", model.text("极致通透"))],
-                        label: model.text("玻璃预设"), language: model.language).frame(width: 244)
+            settingsGroup("主面板材质", footer: "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度；仅影响展开的主面板，不影响悬浮球或悬浮横条。") {
+                settingRow("玻璃材质") {
+                    SettingsSegmentedPicker(
+                        selection: Binding(
+                            get: { model.settings.resolvedPanelMaterial.rawValue },
+                            set: { value in update { $0.panelMaterial = value } }
+                        ),
+                        options: [
+                            (DotistPanelMaterial.clear.rawValue, model.text("清透水滴")),
+                            (DotistPanelMaterial.regular.rawValue, model.text("柔和自适应"))
+                        ],
+                        label: model.text("玻璃材质"),
+                        language: model.language
+                    ).frame(width: 244)
                 }
-                settingRow("主表面透明度") {
-                    Slider(value: Binding(get: { transparency }, set: { value in update { $0.opacity = DotistTransparency.opacity(value: value) } }), in: 0...100).frame(width: 110).modifier(DotistFocusRing())
-                    numericValue("\(Int(transparency.rounded()))%")
-                }
-                numberRow("磨砂程度", value: Double(model.settings.frost), range: 0...100, unit: "%") { $0.frost = UInt8($1.rounded()) }
             }
             settingsGroup("分组便签") {
                 numberRow("分组便签背景透明度", value: DotistTransparency.value(opacity: model.settings.sideTabOpacity), range: 0...100, unit: "%") { $0.sideTabOpacity = DotistTransparency.opacity(value: $1) }
@@ -459,15 +461,6 @@ struct SettingsWindow: View {
             }
         }
     }
-    private var glassPreset: String {
-        switch (model.settings.opacity, model.settings.frost) {
-        case (60, 40): return "standard"
-        case (38, 22): return "clear"
-        case (8, 4): return "ultra"
-        default: return ""
-        }
-    }
-    private var transparency: Double { DotistTransparency.value(opacity: model.settings.opacity) }
     private func rowID(_ title: String) -> String { SettingsSearchEntry.rowID(active, title) }
     private func settingsGroup<Content: View>(_ title: String, footer: String = "", @ViewBuilder content: @escaping () -> Content) -> some View {
         SettingsGroup(model.text(title), footer: footer.isEmpty ? "" : model.text(footer), language: model.language, emphasized: emphasized == rowID(title), content: content)
