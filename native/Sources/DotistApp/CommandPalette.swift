@@ -117,8 +117,8 @@ struct CommandPalette: View {
         .accessibilityIdentifier("search-drag-handle")
         .foregroundColor(DotistDesign.ink)
         .background(WindowMaterial(material: .regular))
-        .containerShape(.rect(cornerRadius: DotistDesign.windowCornerRadius))
-        .clipShape(.rect(cornerRadius: DotistDesign.windowCornerRadius))
+        .containerShape(.rect(cornerRadius: DotistDesign.windowCornerRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius, style: .continuous))
         .modifier(DotistTheme(theme: model.settings.theme))
         .onAppear {
             selectedID = results.first?.id

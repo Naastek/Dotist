@@ -34,10 +34,11 @@ final class NativeFloatingGlassTests: XCTestCase {
         let ball = CGSize(width: 48, height: 48)
         let strip = CGSize(width: 182, height: 48)
         let forms: [(CGSize, DotistPanelMaterial, Bool, CGFloat, Bool, NSGlassEffectView.Style)] = [
-            (middle, .regular, true, 0, true, .clear),
-            (ball, .regular, true, 0, false, .clear),
-            (strip, .regular, true, 1, false, .clear),
-            (ball, .regular, true, 0, false, .clear),
+            (middle, .regular, true, 0, true, .regular),
+            (ball, .regular, true, 0, false, .regular),
+            (strip, .regular, true, 1, false, .regular),
+            (ball, .clear, true, 0, false, .clear),
+            (strip, .clear, true, 1, false, .clear),
             (middle, .regular, false, 0, true, .regular),
             (size, .regular, false, 0, false, .regular),
             (size, .clear, false, 0, false, .clear),

@@ -177,7 +177,7 @@ struct SettingsWindow: View {
                                           label: model.text("主题"), language: model.language).frame(width: 244)
                 }
             }
-            settingsGroup("主面板材质", footer: "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度；仅影响展开的主面板，不影响悬浮球或悬浮横条。") {
+            settingsGroup("主面板材质", footer: "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度，同步应用于主面板、悬浮球与悬浮横条。") {
                 settingRow("玻璃材质") {
                     SettingsSegmentedPicker(
                         selection: Binding(

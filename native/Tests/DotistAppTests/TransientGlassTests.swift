@@ -27,7 +27,8 @@ final class TransientGlassTests: XCTestCase {
                 let expected = try bitmap(FloatingPanelMaterial(material: .regular, compact: true, color: .none)
                     .frame(width: visibleWidth - 4, height: 44)
                     .frame(width: visibleWidth, height: 48)
-                    .frame(width: outerWidth, height: 48, alignment: onRight ? .trailing : .leading), scheme: .dark)
+                    .frame(width: outerWidth, height: 48, alignment: onRight ? .trailing : .leading)
+                    .clipShape(FloatingPanelShape(compact: true, transitioning: false, onRight: onRight, reveal: reveal)), scheme: .dark)
                 XCTAssertEqual(actual.pixelsWide, Int(outerWidth * 2))
                 XCTAssertEqual(actual.pixelsHigh, 96)
                 for y in stride(from: 0, to: 96, by: 2) {

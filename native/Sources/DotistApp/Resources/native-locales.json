@@ -158,7 +158,6 @@
     "秒": "s",
     "数据库路径": "Database path",
     "主面板材质": "Main panel material",
-    "仅影响展开的主面板，不影响悬浮球或悬浮横条。": "Only affects the expanded main panel. The floating bubble and bar keep their own material.",
     "分组便签": "Group tabs",
     "便签入场预览": "Tab entrance preview",
     "已降低动态效果，显示静态终态。": "Reduce Motion is on. The final state is shown.",
@@ -169,7 +168,7 @@
     "玻璃材质": "Glass material",
     "清透水滴": "Clear",
     "柔和自适应": "Soft Adaptive",
-    "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度；仅影响展开的主面板，不影响悬浮球或悬浮横条。": "Soft Adaptive lets macOS adjust blur and contrast to what is behind the window. Only affects the expanded main panel, not the floating bubble or bar."
+    "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度，同步应用于主面板、悬浮球与悬浮横条。": "Soft Adaptive lets macOS adjust blur and contrast to what is behind the window. Applies to the main panel, floating bubble, and hover bar."
   },
   "zh-TW": {
     "计划": "計畫",
@@ -330,7 +329,6 @@
     "秒": "秒",
     "数据库路径": "資料庫路徑",
     "主面板材质": "主面板材質",
-    "仅影响展开的主面板，不影响悬浮球或悬浮横条。": "僅影響展開的主面板，不影響懸浮球或懸浮橫條。",
     "分组便签": "群組便籤",
     "便签入场预览": "便籤進場預覽",
     "已降低动态效果，显示静态终态。": "已減少動態效果，顯示靜態終態。",
@@ -341,7 +339,7 @@
     "玻璃材质": "玻璃材質",
     "清透水滴": "清透水滴",
     "柔和自适应": "柔和自適應",
-    "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度；仅影响展开的主面板，不影响悬浮球或悬浮横条。": "柔和自適應由系統依視窗背後明暗自動調節模糊與對比度；僅影響展開的主面板，不影響懸浮球或懸浮橫條。"
+    "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度，同步应用于主面板、悬浮球与悬浮横条。": "柔和自適應由系統依視窗背後明暗自動調節模糊與對比度，同步套用於主面板、懸浮球與懸浮橫條。"
   },
   "fr": {
     "计划": "Planifier",
@@ -502,7 +500,6 @@
     "秒": "s",
     "数据库路径": "Chemin de la base de données",
     "主面板材质": "Matériau du panneau principal",
-    "仅影响展开的主面板，不影响悬浮球或悬浮横条。": "S’applique uniquement au panneau principal déployé. La bulle et la barre flottantes conservent leur propre matériau.",
     "分组便签": "Onglets de groupes",
     "便签入场预览": "Aperçu de l’apparition des onglets",
     "已降低动态效果，显示静态终态。": "Les animations sont réduites. L’état final est affiché.",
@@ -513,7 +510,7 @@
     "玻璃材质": "Matériau du verre",
     "清透水滴": "Clair",
     "柔和自适应": "Doux adaptatif",
-    "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度；仅影响展开的主面板，不影响悬浮球或悬浮横条。": "Doux adaptatif laisse macOS ajuster le flou et le contraste selon l’arrière-plan. S’applique uniquement au panneau principal déployé, pas à la bulle ni à la barre flottante."
+    "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度，同步应用于主面板、悬浮球与悬浮横条。": "Doux adaptatif laisse macOS ajuster le flou et le contraste selon l’arrière-plan. S’applique au panneau principal, à la bulle et à la barre flottantes."
   },
   "de": {
     "计划": "Planen",
@@ -674,7 +671,6 @@
     "秒": "s",
     "数据库路径": "Datenbankpfad",
     "主面板材质": "Material des Hauptfensters",
-    "仅影响展开的主面板，不影响悬浮球或悬浮横条。": "Gilt nur für das ausgeklappte Hauptfenster. Schwebende Kugel und Leiste behalten ihr eigenes Material.",
     "分组便签": "Gruppenreiter",
     "便签入场预览": "Vorschau der Reitereinblendung",
     "已降低动态效果，显示静态终态。": "Bewegung ist reduziert. Der Endzustand wird angezeigt.",
@@ -685,6 +681,6 @@
     "玻璃材质": "Glasmaterial",
     "清透水滴": "Klar",
     "柔和自适应": "Sanft adaptiv",
-    "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度；仅影响展开的主面板，不影响悬浮球或悬浮横条。": "Sanft adaptiv lässt macOS Unschärfe und Kontrast an den Hintergrund anpassen. Gilt nur für das aufgeklappte Hauptfenster, nicht für die schwebende Blase oder Leiste."
+    "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度，同步应用于主面板、悬浮球与悬浮横条。": "Sanft adaptiv lässt macOS Unschärfe und Kontrast an den Hintergrund anpassen. Gilt für Hauptfenster, schwebende Blase und Leiste."
   }
 }

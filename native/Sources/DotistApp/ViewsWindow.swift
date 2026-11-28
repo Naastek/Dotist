@@ -62,6 +62,8 @@ struct ViewsWindow: View {
         .foregroundColor(DotistDesign.ink)
         .modifier(DotistControlTint())
         .background(WindowMaterial(material: .regular))
+        .containerShape(.rect(cornerRadius: DotistDesign.windowCornerRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius, style: .continuous))
         .modifier(DotistTheme(theme: model.settings.theme))
         }
     }

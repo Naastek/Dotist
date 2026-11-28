@@ -50,12 +50,18 @@ struct FloatingSurface: View, Animatable {
     }
 
     static func glassCornerRadius(for size: CGSize, compact: Bool, transitioning: Bool, solid: Bool) -> CGFloat {
+        let compactRadius: CGFloat = solid ? 24 : 24 - compactOpticalInset
         let expandedRadius = solid ? DotistDesign.windowCornerRadius : DotistDesign.windowCornerRadius - expandedOpticalClearance
+        let raw: CGFloat
         if transitioning {
             let t = min(1, max(0, (min(size.width, size.height) - 48) / 80))
-            return 24 + (expandedRadius - 24) * t
+            raw = compactRadius + (expandedRadius - compactRadius) * t
+        } else {
+            raw = compact ? compactRadius : expandedRadius
         }
-        return compact ? 24 : expandedRadius
+        let inset = solid ? 0 : (compact ? compactOpticalInset : expandedOpticalClearance)
+        let innerMinSide = max(0, min(size.width, size.height) - inset * 2)
+        return min(raw, innerMinSide * 0.5)
     }
 
     var body: some View {
@@ -72,7 +78,7 @@ struct FloatingSurface: View, Animatable {
         surfaceMaterial.modifier(FloatingSurfaceClipping(
             shape: FloatingPanelShape(compact: compact, transitioning: transitioning,
                 onRight: onRight, reveal: reveal, base: base),
-            clipsSilhouette: !(compact && !transitioning && !solid)))
+            clipsSilhouette: true))
     }
 }
 
@@ -141,7 +147,7 @@ struct FloatingPanelSurface: View {
             GlassDebugOpticalSurface(parameters: glassDebug, color: color, scheme: scheme)
         } else {
             let inset: CGFloat = compact ? 0 : FloatingSurface.expandedOpticalClearance
-            let radius = cornerRadius ?? (compact ? 24 : DotistDesign.windowCornerRadius - inset)
+            let radius = cornerRadius ?? (compact ? 24 - FloatingSurface.compactOpticalInset : DotistDesign.windowCornerRadius - inset)
             NativeFloatingGlass(cornerRadius: radius, compact: compact, material: material, color: color, scheme: scheme)
                 .overlay {
                     PhysicalLiquidGlassRim(cornerRadius: radius, compact: compact, scheme: scheme,
@@ -185,9 +191,9 @@ struct ExpandedGlassProfile: Equatable {
 }
 
 /// One system `NSGlassEffectView` persists through the panel's three geometries.
-/// Compact forms always render with `.clear` crystal Liquid Glass, while the
-/// expanded panel switches directly between `.clear` and `.regular` native glass
-/// without stacking a separate `NSVisualEffectView` or manual wash plane.
+/// All three forms (compact bubble, hover strip, and expanded panel) follow the
+/// selected native glass material (`.clear` or `.regular`) without stacking a
+/// separate `NSVisualEffectView` or manual wash plane.
 private struct NativeFloatingGlass: NSViewRepresentable {
     let cornerRadius: CGFloat
     let compact: Bool
@@ -275,10 +281,25 @@ private struct NativeFloatingGlass: NSViewRepresentable {
         private var lastMaskCompact: Bool = false
         private var lastMaskInset: CGFloat = -1
         private var lastMaskFeather: CGFloat = -1
+        private var lastMaskScale: CGFloat = -1
+
+        private var effectiveRadius: CGFloat {
+            guard bounds.width > 0, bounds.height > 0 else { return max(0, radius) }
+            return min(max(0, radius), min(bounds.width, bounds.height) * 0.5)
+        }
+
+        private var currentBackingScale: CGFloat {
+            LiquidGlassOpticsRenderer.effectiveScale(
+                for: window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+            )
+        }
 
         override init(frame: NSRect) {
             super.init(frame: frame)
             wantsLayer = true
+            layer?.masksToBounds = false
+            pigmentView.layer?.masksToBounds = true
+            pigmentView.layer?.cornerCurve = .continuous
             addSubview(glassView)
             addSubview(pigmentView)
         }
@@ -287,26 +308,58 @@ private struct NativeFloatingGlass: NSViewRepresentable {
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+        override func viewDidChangeBackingProperties() {
+            super.viewDidChangeBackingProperties()
+            lastMaskScale = -1
+            updateAppearance()
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            lastMaskScale = -1
+            needsLayout = true
+        }
+
+        private func syncCornerContainment() {
+            let r = effectiveRadius
+            if glassView.cornerRadius != r { glassView.cornerRadius = r }
+            // Leave HostView unclipped so WindowServer can render NSGlassEffectView's
+            // native 3D refractive rim inside the outer 2pt optical clearance, while
+            // pigmentView stays strictly clipped to the inner continuous silhouette.
+            if layer?.masksToBounds != false { layer?.masksToBounds = false }
+            if pigmentView.layer?.cornerRadius != r { pigmentView.layer?.cornerRadius = r }
+            if pigmentView.layer?.cornerCurve != .continuous { pigmentView.layer?.cornerCurve = .continuous }
+            if pigmentView.layer?.masksToBounds != true { pigmentView.layer?.masksToBounds = true }
+        }
+
         private func updateInteriorMask(insetPt: CGFloat, featherPt: CGFloat) {
             let size = bounds.size
             guard size.width > 1, size.height > 1 else { return }
+            let scale = currentBackingScale
+            let r = effectiveRadius
             let sizeChanged = abs(size.width - lastMaskSize.width) > 0.5 || abs(size.height - lastMaskSize.height) > 0.5
             let geometryChanged = sizeChanged
-                || abs(radius - lastMaskRadius) > 0.5
+                || abs(r - lastMaskRadius) > 0.5
                 || compact != lastMaskCompact
                 || abs(insetPt - lastMaskInset) > 0.01
                 || abs(featherPt - lastMaskFeather) > 0.01
+                || abs(scale - lastMaskScale) > 0.01
             guard geometryChanged else { return }
             let mask = LiquidGlassOpticsRenderer.featheredInteriorMask(
-                size: size, cornerRadius: radius, insetPt: insetPt, featherPt: featherPt, scale: 1.0
+                size: size, cornerRadius: r, insetPt: insetPt, featherPt: featherPt, scale: scale
             )
+            pigmentView.washLayer.contentsScale = scale
+            pigmentView.tintLayer.contentsScale = scale
+            pigmentView.washMaskLayer.contentsScale = scale
+            pigmentView.tintMaskLayer.contentsScale = scale
             pigmentView.washMaskLayer.contents = mask
             pigmentView.tintMaskLayer.contents = mask
             lastMaskSize = size
-            lastMaskRadius = radius
+            lastMaskRadius = r
             lastMaskCompact = compact
             lastMaskInset = insetPt
             lastMaskFeather = featherPt
+            lastMaskScale = scale
         }
 
         override func layout() {
@@ -318,46 +371,31 @@ private struct NativeFloatingGlass: NSViewRepresentable {
             CATransaction.setDisableActions(true)
             glassView.frame = bounds
             pigmentView.frame = bounds
+            syncCornerContainment()
             CATransaction.commit()
             updateAppearance()
         }
 
         func updateAppearance() {
-            let isBubble = compact && bounds.width <= 60
-            let isStrip = compact && bounds.width > 60
-
             CATransaction.begin()
             CATransaction.setDisableActions(true)
+            syncCornerContainment()
 
-            if isBubble {
-                // 100% pure crystal .clear Liquid Glass droplet: zero milky wash.
-                glassView.alphaValue = 1.0
-                pigmentView.washLayer.backgroundColor = NSColor.clear.cgColor
-                pigmentView.tintLayer.backgroundColor = NSColor.clear.cgColor
-            } else if isStrip {
-                // Hover capsule: independent of expanded panel material; full .clear glass + airy text veil.
-                updateInteriorMask(insetPt: 2.5, featherPt: 6.0)
-                glassView.alphaValue = 1.0
-                let stripWashAlpha: Double = isDark ? 0.22 : 0.14
-                let neutral = NSColor(GlassTintMaterial.neutral(isDark ? .dark : .light)).withAlphaComponent(stripWashAlpha)
-                pigmentView.washLayer.backgroundColor = neutral.cgColor
-                let stripTintAlpha: Double = groupColor == .none ? 0.0 : (isDark ? 0.05 : 0.04)
-                pigmentView.tintLayer.backgroundColor = NSColor(DotistTheme.swatch(groupColor)).withAlphaComponent(stripTintAlpha).cgColor
+            // Unified native `.clear` or `.regular` Liquid Glass across bubble,
+            // hover strip, and expanded panel without any manual wash veil.
+            let profile = ExpandedGlassProfile.resolve(
+                material: material,
+                dark: isDark,
+                hasGroupColor: groupColor != .none
+            )
+            glassView.alphaValue = 1.0
+            pigmentView.washLayer.backgroundColor = NSColor.clear.cgColor
+            if profile.tintAlpha > 0 {
+                let featherPt: CGFloat = compact ? min(profile.maskFeatherPt, 6.0) : profile.maskFeatherPt
+                updateInteriorMask(insetPt: profile.maskInsetPt, featherPt: featherPt)
+                pigmentView.tintLayer.backgroundColor = NSColor(DotistTheme.swatch(groupColor)).withAlphaComponent(profile.tintAlpha).cgColor
             } else {
-                // Expanded panel: native `.clear` or `.regular` Liquid Glass without manual wash or NSVisualEffectView.
-                let profile = ExpandedGlassProfile.resolve(
-                    material: material,
-                    dark: isDark,
-                    hasGroupColor: groupColor != .none
-                )
-                glassView.alphaValue = 1.0
-                pigmentView.washLayer.backgroundColor = NSColor.clear.cgColor
-                if profile.tintAlpha > 0 {
-                    updateInteriorMask(insetPt: profile.maskInsetPt, featherPt: profile.maskFeatherPt)
-                    pigmentView.tintLayer.backgroundColor = NSColor(DotistTheme.swatch(groupColor)).withAlphaComponent(profile.tintAlpha).cgColor
-                } else {
-                    pigmentView.tintLayer.backgroundColor = NSColor.clear.cgColor
-                }
+                pigmentView.tintLayer.backgroundColor = NSColor.clear.cgColor
             }
 
             CATransaction.commit()
@@ -371,11 +409,10 @@ private struct NativeFloatingGlass: NSViewRepresentable {
     }
 
     func updateNSView(_ view: HostView, context: Context) {
-        let targetStyle: NSGlassEffectView.Style = (compact || material == .clear) ? .clear : .regular
+        let targetStyle: NSGlassEffectView.Style = material == .clear ? .clear : .regular
         if view.glassView.cornerRadius != cornerRadius { view.glassView.cornerRadius = cornerRadius }
         if view.glassView.style != targetStyle { view.glassView.style = targetStyle }
-        let tintScale: Double = compact ? GlassTintMaterial.compactTintScale : 1.0
-        let materialTint = color == .none ? nil : NSColor(DotistTheme.tint(color, scheme).opacity(tintScale))
+        let materialTint = color == .none ? nil : NSColor(DotistTheme.tint(color, scheme))
         if view.glassView.tintColor != materialTint { view.glassView.tintColor = materialTint }
 
         view.radius = cornerRadius

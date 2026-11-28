@@ -101,6 +101,7 @@ extension VerticalAlignment {
 /// The visual correction stays inside the original layout and hit-test box.
 struct OpticalText: View {
     @ObservedObject private var typography = DotistTypography.shared
+    @Environment(\.displayScale) private var displayScale
     let title: String
     var size: CGFloat = 13
     var weight: NSFont.Weight = .regular
@@ -110,9 +111,10 @@ struct OpticalText: View {
         let font = DotistDesign.nativeFont(size, weight: weight, serif: serif, language: language)
         let sample = title.isEmpty ? " " : title
         let baseline = OpticalMetrics.attributedBaseline(font, sample: sample)
-        // Keep the residual on the 2x pixel grid; fractional pixel transforms
-        // otherwise move faint text's thresholded ink edge by another pixel.
-        let residual = (OpticalMetrics.baselineText(font, sample: sample, baseline: baseline).correction * 2).rounded(.down) / 2
+        // Snap the residual to the active display's physical pixel grid (1x -> 1pt,
+        // 2x -> 0.5pt, etc.) so 1x monitors never receive a half-pixel vertical shift.
+        let grid = max(1, displayScale)
+        let residual = (OpticalMetrics.baselineText(font, sample: sample, baseline: baseline).correction * grid).rounded(.down) / grid
         Text(title).font(Font(font))
             // Native Menu extracts an attributed title and discards view offsets.
             // A baseline attribute survives both that bridge and SwiftUI rendering.
@@ -510,6 +512,10 @@ private final class NativeSearchIconView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        raster = nil; needsDisplay = true
+    }
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
         raster = nil; needsDisplay = true
     }
     override func draw(_ dirtyRect: NSRect) {

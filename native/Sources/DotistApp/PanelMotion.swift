@@ -54,10 +54,10 @@ final class PanelMotion: ObservableObject {
     @Published private(set) var animationInProgress = false
     var expandedSize: NSSize
     private(set) var transitionSize: NSSize
-    private(set) var transitionHost: TransitionHost?
+    @Published private(set) var transitionHost: TransitionHost?
     private(set) var preparingExpansion = false
 
-    struct TransitionHost {
+    struct TransitionHost: Equatable {
         let expanded: NSRect
         let compact: NSRect
         let frame: NSRect
@@ -156,8 +156,10 @@ final class PanelMotion: ObservableObject {
 
     func cancelExpansionOnPress() {
         guard preparingExpansion, let host = transitionHost else { return }
+        transitionHost = nil
+        surface.transitionFrame = nil
         panel.setFrame(host.compact, display: false)
-        clearSurfaceTransition()
+        preparingExpansion = false
     }
 
     func toggleBubble() {
@@ -220,16 +222,16 @@ final class PanelMotion: ObservableObject {
         // withhold their frame updates/completions even inside NSApplication.run.
         // A controlled test driver explicitly bypasses visibility/display checks.
         if !animated || (environment.animateFrame == nil && (!panel.isVisible || panel.screen == nil)) {
-            panel.setFrame(target, display: true)
             clearSurfaceTransition()
+            panel.setFrame(target, display: true)
             finishBubbleTransition()
             return
         }
         let duration = environment.frameAnimationDuration(bubble)
         let complete: @MainActor () -> Void = { [weak self] in
             guard let self, !self.stopped else { return }
-            if self.panel.frame != target { self.panel.setFrame(target, display: false) }
             self.clearSurfaceTransition()
+            if self.panel.frame != target { self.panel.setFrame(target, display: false) }
             self.finishBubbleTransition()
         }
         if let animate = environment.animateFrame {
@@ -238,7 +240,7 @@ final class PanelMotion: ObservableObject {
         }
         guard duration > 0 else { complete(); return }
         let host = TransitionHost(expanded: bubble ? old : target, compact: bubble ? target : old)
-        transitionHost = host
+        if transitionHost != host { transitionHost = host }
         surface.transitionFrame = host.local(old)
         if panel.frame != host.frame { panel.setFrame(host.frame, display: false) }
         let refreshPeriod = 1 / Double(max(60, panel.screen?.maximumFramesPerSecond ?? 60))
@@ -263,8 +265,8 @@ final class PanelMotion: ObservableObject {
             settleBeforeResize: bubble && panel.frame != endpoint, applyFrame: { [weak self] frame in self?.surface.transitionFrame = frame }) { [weak self] in
             guard let self, !self.stopped else { return }
             self.frameAnimation = nil
-            if self.panel.frame != endpoint { self.panel.setFrame(endpoint, display: false) }
             self.clearSurfaceTransition()
+            if self.panel.frame != endpoint { self.panel.setFrame(endpoint, display: false) }
             self.finishBubbleTransition()
         }
         frameAnimation = animation
@@ -273,8 +275,8 @@ final class PanelMotion: ObservableObject {
 
     private func clearSurfaceTransition() {
         preparingExpansion = false
-        transitionHost = nil
-        surface.transitionFrame = nil
+        if transitionHost != nil { transitionHost = nil }
+        if surface.transitionFrame != nil { surface.transitionFrame = nil }
     }
 
     private func prepareSurfaceTransition(compact: Bool) {

@@ -11,6 +11,7 @@ final class ViewsWindowShadow {
     private let shadow = CALayer()
     private let cutout = CAShapeLayer()
     private var observations: [NSObjectProtocol] = []
+    private var workspaceObservations: [NSObjectProtocol] = []
     private var appearanceObservation: NSKeyValueObservation?
     private var enteringFullScreen = false
 
@@ -56,6 +57,19 @@ final class ViewsWindowShadow {
         appearanceObservation = parent.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
             DispatchQueue.main.async { self?.synchronize() }
         }
+        workspaceObservations.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.synchronize() }
+        })
+    }
+
+    static func shadowProfile(frameSize: CGSize, reduceTransparency: Bool, increasedContrast: Bool) -> (rect: CGRect, cornerRadius: CGFloat) {
+        let solid = reduceTransparency || increasedContrast
+        let glassInset: CGFloat = solid ? 0 : FloatingSurface.expandedOpticalClearance
+        let cornerRadius = solid ? DotistDesign.windowCornerRadius : DotistDesign.windowCornerRadius - glassInset
+        let rect = CGRect(origin: .zero, size: frameSize).insetBy(dx: Self.margin + glassInset, dy: Self.margin + glassInset)
+        return (rect, cornerRadius)
     }
 
     func synchronize() {
@@ -68,8 +82,13 @@ final class ViewsWindowShadow {
         if panel.frame != frame { panel.setFrame(frame, display: false) }
         panel.level = parent.level
         let bounds = CGRect(origin: .zero, size: frame.size)
-        let outline = RoundedRectangle(cornerRadius: DotistDesign.windowCornerRadius, style: .continuous)
-            .path(in: bounds.insetBy(dx: Self.margin, dy: Self.margin)).cgPath
+        let profile = Self.shadowProfile(
+            frameSize: frame.size,
+            reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency,
+            increasedContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        )
+        let outline = RoundedRectangle(cornerRadius: profile.cornerRadius, style: .continuous)
+            .path(in: profile.rect).cgPath
         let mask = CGMutablePath()
         mask.addRect(bounds)
         mask.addPath(outline)
@@ -96,6 +115,7 @@ final class ViewsWindowShadow {
 
     deinit {
         observations.forEach(NotificationCenter.default.removeObserver)
+        workspaceObservations.forEach(NSWorkspace.shared.notificationCenter.removeObserver)
         MainActor.assumeIsolated { detach() }
     }
 

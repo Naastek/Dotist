@@ -111,6 +111,8 @@ final class LocalizationPunctuationTests: XCTestCase {
             "先放进 Inbox，稍后再整理",
             "Inbox 是固定的收集箱",
             "需要 direction: up 或 down",
+            "仅影响展开的主面板，不影响悬浮球或悬浮横条。",
+            "柔和自适应由系统按窗口背后明暗自动调节模糊与对比度；仅影响展开的主面板，不影响悬浮球或悬浮横条。",
         ]
         for source in try swiftSources() {
             for key in retired { XCTAssertFalse(source.contains("\"" + key + "\""), key) }
